@@ -94,6 +94,7 @@ class MwlGenerateRequest(BaseModel):
     reason: str | None = None
     study_description: str | None = Field(default=None, alias="studyDescription")
     department: str | None = None
+    num_instances: int | None = Field(default=None, alias="numInstances")
 
 
 class MwlStatusResponse(BaseModel):
@@ -116,6 +117,7 @@ class MwlEntrySummary(BaseModel):
     accession: str
     modality: str
     study_uid: str
+    num_instances: int | None = None
     created_at: str
     json_entry: dict
 

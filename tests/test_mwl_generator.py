@@ -44,30 +44,23 @@ def test_mwl_generator_template_file_loading(tmp_path):
 
 
 def test_mwl_generator_dicom_template_scanning(tmp_path):
+    import shutil
     from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
-    from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, MRImageStorage, generate_uid
+    from pydicom.uid import ExplicitVRLittleEndian, MRImageStorage, generate_uid
 
-    # Create Part-10 DICOM file (.dcm)
-    file_meta_ct = FileMetaDataset()
-    file_meta_ct.MediaStorageSOPClassUID = CTImageStorage
-    file_meta_ct.MediaStorageSOPInstanceUID = generate_uid()
-    file_meta_ct.TransferSyntaxUID = ExplicitVRLittleEndian
-    ds_ct = FileDataset(str(tmp_path / "sample_ct.dcm"), {}, file_meta=file_meta_ct, preamble=b"\x00" * 128)
-    ds_ct.Modality = "CT"
-    ds_ct.SOPClassUID = CTImageStorage
-    ds_ct.SOPInstanceUID = file_meta_ct.MediaStorageSOPInstanceUID
-    ds_ct.is_little_endian = True
-    ds_ct.is_implicit_VR = False
-    ds_ct.save_as(tmp_path / "sample_ct.dcm", enforce_file_format=True)
+    # Use actual template file ./templates/CT_small.dcm
+    shutil.copy("templates/CT_small.dcm", tmp_path / "CT_small.dcm")
 
-    # Create raw DICOM file without preamble (.dicom)
-    ds_mr = Dataset()
+    # Create second modality DICOM file (.dcm) for MR
+    file_meta_mr = FileMetaDataset()
+    file_meta_mr.MediaStorageSOPClassUID = MRImageStorage
+    file_meta_mr.MediaStorageSOPInstanceUID = generate_uid()
+    file_meta_mr.TransferSyntaxUID = ExplicitVRLittleEndian
+    ds_mr = FileDataset(str(tmp_path / "sample_mr.dcm"), {}, file_meta=file_meta_mr, preamble=b"\x00" * 128)
     ds_mr.Modality = "MR"
     ds_mr.SOPClassUID = MRImageStorage
-    ds_mr.SOPInstanceUID = generate_uid()
-    ds_mr.is_little_endian = True
-    ds_mr.is_implicit_VR = True
-    ds_mr.save_as(tmp_path / "sample_mr.dicom", enforce_file_format=False)
+    ds_mr.SOPInstanceUID = file_meta_mr.MediaStorageSOPInstanceUID
+    ds_mr.save_as(tmp_path / "sample_mr.dcm", enforce_file_format=True)
 
     cfg = AppConfig(templates_path=str(tmp_path))
     service = MwlGeneratorService(app_config=cfg)
@@ -81,19 +74,18 @@ def test_mwl_generator_dicom_template_scanning(tmp_path):
 
     assert len(ct_templates) == 1
     assert ct_templates[0].Modality == "CT"
+    assert ct_templates[0].Rows == 128
+    assert ct_templates[0].Columns == 128
+    assert getattr(ct_templates[0], "PatientName", "") == "CompressedSamples^CT1"
     assert len(mr_templates) == 1
     assert mr_templates[0].Modality == "MR"
 
 
 def test_mwl_generator_no_modality_fallback_when_template_present(tmp_path):
-    from pydicom.dataset import Dataset
+    import shutil
 
-    # Create ONLY a single CT DICOM template file
-    ds_ct = Dataset()
-    ds_ct.Modality = "CT"
-    ds_ct.is_little_endian = True
-    ds_ct.is_implicit_VR = True
-    ds_ct.save_as(tmp_path / "only_ct.dcm", enforce_file_format=False)
+    # Copy ONLY the CT_small.dcm template file
+    shutil.copy("templates/CT_small.dcm", tmp_path / "CT_small.dcm")
 
     cfg = AppConfig(templates_path=str(tmp_path))
     service = MwlGeneratorService(app_config=cfg)
@@ -105,6 +97,23 @@ def test_mwl_generator_no_modality_fallback_when_template_present(tmp_path):
     for _ in range(10):
         entry = service.generate_json()
         assert entry["00080060"]["Value"][0] == "CT"
+
+
+def test_mwl_generator_workspace_template_loading():
+    """Verify MwlGeneratorService loads the real workspace ./templates/CT_small.dcm."""
+    cfg = AppConfig(templates_path="./templates")
+    service = MwlGeneratorService(app_config=cfg)
+
+    modalities = service.get_template_modalities()
+    assert modalities == ["CT"]
+
+    ct_templates = service.get_dicom_templates_by_modality("CT")
+    assert len(ct_templates) == 1
+    ds = ct_templates[0]
+    assert ds.Modality == "CT"
+    assert ds.Rows == 128
+    assert ds.Columns == 128
+    assert getattr(ds, "PatientName", "") == "CompressedSamples^CT1"
 
 
 def test_mwl_generate_json_and_dataset():
@@ -206,3 +215,19 @@ def test_seed_initial_entries():
     assert status["active_entries_count"] == 5
     assert status["window_hr"] == 24
     assert status["base_rate_per_hr"] == 12.0
+
+
+def test_mwl_generator_randomized_instance_counts():
+    """Verify that generated MWL entries have randomized instance counts between min_slices and max_slices."""
+    cfg = AppConfig(min_slices=8, max_slices=24)
+    service = MwlGeneratorService(app_config=cfg)
+
+    counts = set()
+    for _ in range(30):
+        entry = service.add_entry()
+        count = entry["num_instances"]
+        assert 8 <= count <= 24
+        counts.add(count)
+
+    # Across 30 generated entries, we should observe multiple distinct instance counts
+    assert len(counts) > 1

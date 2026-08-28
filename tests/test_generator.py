@@ -97,3 +97,56 @@ def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
     ds_j2k = generator.create_raw_dicom_file(req_j2k)
     assert ds_j2k.file_meta.TransferSyntaxUID in (JPEG2000Lossless, ExplicitVRLittleEndian)
     assert ds_j2k.pixel_array.shape == (512, 512)
+
+
+def test_template_sop_synthesis():
+    """Test generating DICOM SOP instances using ./templates/CT_small.dcm as base template."""
+    template_ds = pydicom.dcmread("templates/CT_small.dcm")
+    assert template_ds.Modality == "CT"
+    assert template_ds.Rows == 128
+    assert template_ds.Columns == 128
+
+    generator = DicomGeneratorService()
+    request = MockDicomRequest(
+        patient=PatientModel(patient_id="TEMPLATE-PAT-001", patient_name="Template^Synthesized"),
+        study=StudyModel(study_description="Synthesized from CT_small template"),
+        series=SeriesModel(modality=str(template_ds.Modality)),
+        num_instances=2,
+        rows=int(template_ds.Rows),
+        columns=int(template_ds.Columns),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        res = generator.generate_and_save(request, target_dir=tmp_dir)
+        assert res.success is True
+        assert res.generated_instances == 2
+        assert len(res.file_paths) == 2
+
+        ds = pydicom.dcmread(res.file_paths[0])
+        assert ds.PatientID == "TEMPLATE-PAT-001"
+        assert ds.PatientName == "Template^Synthesized"
+        assert ds.Modality == "CT"
+        assert ds.Rows == 128
+        assert ds.Columns == 128
+
+
+def test_template_sop_mwl():
+    """Test instance synthesis matching MWL record created with CT_small.dcm template."""
+    from dicom_py_mock_server.config import AppConfig
+    from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
+
+    mwl_service = MwlGeneratorService(AppConfig(templates_path="./templates"))
+    assert mwl_service.get_template_modalities() == ["CT"]
+
+    record = mwl_service.add_entry()
+    assert record["modality"] == "CT"
+
+    datasets = DicomGeneratorService.create_instances_from_mwl(record, num_instances=3)
+    assert len(datasets) == 3
+    for i, ds in enumerate(datasets, 1):
+        assert ds.Modality == "CT"
+        assert ds.PatientID == record["patient_id"]
+        assert ds.PatientName == record["patient_name"]
+        assert ds.StudyInstanceUID == record["study_uid"]
+        assert ds.InstanceNumber == i
+

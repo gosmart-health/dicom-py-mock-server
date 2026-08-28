@@ -132,7 +132,9 @@ def test_full_mwl_cfind_cmove_workflow():
         time.sleep(0.5)
 
         # 6. Verify received datasets at viewer SCP
-        assert len(viewer_scp.received_datasets) == config.min_slices
+        expected_slices = mwl_entry.get("num_instances", config.min_slices)
+        assert len(viewer_scp.received_datasets) == expected_slices
+        assert config.min_slices <= len(viewer_scp.received_datasets) <= config.max_slices
         for ds in viewer_scp.received_datasets:
             assert str(ds.PatientID) == patient_id
             assert str(ds.PatientName) == patient_name
@@ -140,6 +142,94 @@ def test_full_mwl_cfind_cmove_workflow():
             assert ds.PixelData is not None
             assert len(ds.PixelData) > 0
 
+    finally:
+        viewer_scp.stop()
+        scp_service.stop()
+
+
+def test_cstore_incoming_storage(tmp_path):
+    """Test sending C-STORE to DICOM SCP saves the DICOM file to storage_dir."""
+    import pydicom
+    from pathlib import Path
+    from dicom_py_mock_server.services.generator import DicomGeneratorService
+    from dicom_py_mock_server.models.dicom import RawImageGeneratorRequest
+
+    config.storage_dir = str(tmp_path)
+    scp_port = 11118
+    mwl_service = MwlGeneratorService(config)
+    scp_service = DicomScpService(ae_title="STORE_MOCK_SCP", port=scp_port, mwl_service=mwl_service)
+    scp_service.start()
+
+    try:
+        # Create a sample DICOM file to send
+        gen = DicomGeneratorService()
+        ds_to_send = gen.create_raw_dicom_file(
+            RawImageGeneratorRequest(
+                patient_name="CSTORE^SEND^PATIENT",
+                patient_id="CSTORE-001",
+                study_date="20260828",
+                study_time="160000",
+                image_number=1,
+            )
+        )
+
+        ae = AE(ae_title="SCU_SENDER")
+        for cx in StoragePresentationContexts:
+            ae.add_requested_context(cx.abstract_syntax)
+        assoc = ae.associate("127.0.0.1", scp_port)
+        assert assoc.is_established
+
+        status = assoc.send_c_store(ds_to_send)
+        assert status and status.Status == 0x0000
+        assoc.release()
+
+        # Verify file saved in storage_dir
+        saved_files = list(Path(tmp_path).glob("*.dcm"))
+        assert len(saved_files) >= 1
+        saved_ds = pydicom.dcmread(saved_files[0])
+        assert str(saved_ds.PatientID) == "CSTORE-001"
+        assert str(saved_ds.PatientName) == "CSTORE^SEND^PATIENT"
+    finally:
+        scp_service.stop()
+
+
+def test_cmove_on_demand_synthesis():
+    """Test that C-MOVE requests for unseen study UIDs synthesize mock instances on demand."""
+    scp_port = 11119
+    viewer_port = 11120
+
+    mwl_service = MwlGeneratorService(config)
+    scp_service = DicomScpService(ae_title="ONDEMAND_SCP", port=scp_port, mwl_service=mwl_service)
+    scp_service.start()
+
+    viewer_scp = MockStorageScp(ae_title="VIEWER_ONDEMAND", port=viewer_port)
+    viewer_scp.start()
+
+    config.move_destinations["VIEWER_ONDEMAND"] = {"host": "127.0.0.1", "port": viewer_port}
+
+    try:
+        unseen_study_uid = "1.2.826.0.1.3680043.9.7133.99999"
+        ae_move = AE(ae_title="CLIENT_SCU")
+        ae_move.add_requested_context(StudyRootQueryRetrieveInformationModelMove)
+        assoc_move = ae_move.associate("127.0.0.1", scp_port)
+        assert assoc_move.is_established
+
+        move_query = Dataset()
+        move_query.QueryRetrieveLevel = "STUDY"
+        move_query.StudyInstanceUID = unseen_study_uid
+        move_query.PatientID = "ONDEMAND-PAT-777"
+
+        move_responses = list(
+            assoc_move.send_c_move(move_query, "VIEWER_ONDEMAND", StudyRootQueryRetrieveInformationModelMove)
+        )
+        assoc_move.release()
+
+        time.sleep(0.5)
+
+        assert config.min_slices <= len(viewer_scp.received_datasets) <= config.max_slices
+        for ds in viewer_scp.received_datasets:
+            assert str(ds.StudyInstanceUID) == unseen_study_uid
+            assert str(ds.PatientID) == "ONDEMAND-PAT-777"
     finally:
         viewer_scp.stop()
         scp_service.stop()

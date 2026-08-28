@@ -244,8 +244,15 @@ class DicomGeneratorService:
         return cls.create_dicom_file(mock_req, instance_number=raw_req.image_number)
 
     @classmethod
-    def create_instances_from_mwl(cls, mwl_record: dict[str, Any], num_instances: int = 8) -> list[FileDataset]:
+    def create_instances_from_mwl(
+        cls, mwl_record: dict[str, Any], num_instances: int | None = None
+    ) -> list[FileDataset]:
         """Synthesize DICOM image FileDatasets on the fly matching an MWL record."""
+        import random
+        if num_instances is None:
+            num_instances = mwl_record.get("num_instances")
+        if num_instances is None:
+            num_instances = random.randint(getattr(config, "min_slices", 8), getattr(config, "max_slices", 24))
         json_e = mwl_record.get("json_entry", {})
         patient_id = mwl_record.get("patient_id", "MOCK_PATIENT_ID")
         patient_name = mwl_record.get("patient_name", "MOCK^PATIENT")

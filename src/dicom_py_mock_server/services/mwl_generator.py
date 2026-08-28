@@ -398,6 +398,13 @@ class MwlGeneratorService:
         json_entry = self.generate_json(custom=custom, scheduled_at=scheduled_at)
         dataset = self.json_to_dataset(json_entry)
 
+        # Determine randomized instance count between min_slices and max_slices
+        custom_instances = custom.get("num_instances") or custom.get("numInstances") if custom else None
+        if custom_instances is not None:
+            num_instances = int(custom_instances)
+        else:
+            num_instances = random.randint(self.config.min_slices, self.config.max_slices)
+
         entry_record = {
             "json_entry": json_entry,
             "dataset": dataset,
@@ -407,6 +414,7 @@ class MwlGeneratorService:
             "accession": json_entry["00080050"]["Value"][0],
             "modality": json_entry["00080060"]["Value"][0],
             "study_uid": json_entry["0020000D"]["Value"][0],
+            "num_instances": num_instances,
         }
 
         self._entries.append(entry_record)
@@ -416,6 +424,7 @@ class MwlGeneratorService:
             patient_id=entry_record["patient_id"],
             accession=entry_record["accession"],
             modality=entry_record["modality"],
+            num_instances=entry_record["num_instances"],
         )
         return entry_record
 
@@ -445,6 +454,7 @@ class MwlGeneratorService:
                 "accession": e["accession"],
                 "modality": e["modality"],
                 "study_uid": e["study_uid"],
+                "num_instances": e.get("num_instances", self.config.min_slices),
                 "created_at": e["created_at"].isoformat(),
                 "json_entry": e["json_entry"],
             }
@@ -502,7 +512,7 @@ class MwlGeneratorService:
 
         ds.ModalitiesInStudy = entry.get("modality", "")
         ds.NumberOfStudyRelatedSeries = 1
-        ds.NumberOfStudyRelatedInstances = 8
+        ds.NumberOfStudyRelatedInstances = int(entry.get("num_instances") or 8)
         return ds
 
     def get_status(self) -> dict[str, Any]:

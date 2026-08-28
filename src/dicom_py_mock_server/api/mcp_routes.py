@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
+from dicom_py_mock_server.api.routes import generator_service, mwl_service, scp_service
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.logging_config import get_logger
 from dicom_py_mock_server.services.mcp import McpService
@@ -14,7 +15,12 @@ from dicom_py_mock_server.services.mcp import McpService
 logger = get_logger(__name__)
 
 mcp_router = APIRouter()
-mcp_service = McpService(app_config=config)
+mcp_service = McpService(
+    app_config=config,
+    generator_service=generator_service,
+    mwl_service=mwl_service,
+    scp_service=scp_service,
+)
 
 
 async def sse_event_generator(request: Request, session_id: str) -> AsyncGenerator[str, None]:

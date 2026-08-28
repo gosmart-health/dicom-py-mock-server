@@ -1,6 +1,8 @@
 """Service for managing DICOM SCP server using pynetdicom."""
 
+from pathlib import Path
 import structlog
+from pydicom.uid import generate_uid
 from pynetdicom import AE, StoragePresentationContexts, evt
 from pynetdicom.sop_class import (
     ModalityWorklistInformationFind,
@@ -168,6 +170,16 @@ class DicomScpService:
             if not matched_entries and not study_uid and not patient_id and not accession:
                 self.mwl_service.purge_expired_entries()
                 matched_entries = self.mwl_service._entries
+            elif not matched_entries and (study_uid or patient_id or accession):
+                # Dynamically synthesize a mock study matching the requested query parameters
+                new_entry = self.mwl_service.add_entry(
+                    custom={
+                        "studyUid": study_uid,
+                        "patientId": patient_id,
+                        "accession": accession,
+                    }
+                )
+                matched_entries = [new_entry]
 
         if not matched_entries:
             logger.warning("dicom_c_move_no_matching_studies", study_uid=study_uid, patient_id=patient_id)
@@ -176,7 +188,7 @@ class DicomScpService:
 
         all_datasets = []
         for entry in matched_entries:
-            datasets = DicomGeneratorService.create_instances_from_mwl(entry, num_instances=config.min_slices)
+            datasets = DicomGeneratorService.create_instances_from_mwl(entry)
             all_datasets.extend(datasets)
 
         total_instances = len(all_datasets)
@@ -213,9 +225,24 @@ class DicomScpService:
             yield (0xFF00, ds)
 
     def _handle_store(self, event: evt.Event) -> int:
-        """Handle C-STORE request."""
+        """Handle incoming C-STORE request and save DICOM file to storage_dir."""
         requestor_ae = getattr(event.assoc.requestor, "ae_title", "UNKNOWN") if event.assoc else "UNKNOWN"
         logger.info("dicom_c_store_received", requestor_ae=requestor_ae)
+        try:
+            ds = event.dataset
+            ds.file_meta = event.file_meta
+            out_dir = Path(config.storage_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            sop_uid = (
+                getattr(ds, "SOPInstanceUID", None)
+                or getattr(event.file_meta, "MediaStorageSOPInstanceUID", None)
+                or generate_uid()
+            )
+            file_path = out_dir / f"stored_{sop_uid}.dcm"
+            ds.save_as(file_path, enforce_file_format=True)
+            logger.info("dicom_c_store_saved", path=str(file_path), sop_instance_uid=str(sop_uid))
+        except Exception as exc:
+            logger.warning("dicom_c_store_save_failed", error=str(exc))
         return 0x0000  # Success
 
     def start(self, host: str = "0.0.0.0") -> ScpStatusResponse:
@@ -232,8 +259,9 @@ class DicomScpService:
         self.ae.add_supported_context(PatientRootQueryRetrieveInformationModelMove)
         self.ae.add_supported_context(StudyRootQueryRetrieveInformationModelMove)
         self.ae.add_supported_context(ModalityWorklistInformationFind)
-        self.ae.supported_contexts.extend(StoragePresentationContexts)
-        self.ae.requested_contexts.extend(StoragePresentationContexts)
+        for cx in StoragePresentationContexts:
+            self.ae.add_supported_context(cx.abstract_syntax)
+            self.ae.add_requested_context(cx.abstract_syntax)
 
         handlers = [
             (evt.EVT_C_ECHO, self._handle_echo),
