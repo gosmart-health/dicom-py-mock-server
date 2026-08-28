@@ -1,0 +1,267 @@
+"""Service for managing DICOM SCP server using pynetdicom."""
+
+import structlog
+from pynetdicom import AE, StoragePresentationContexts, evt
+from pynetdicom.sop_class import (
+    ModalityWorklistInformationFind,
+    PatientRootQueryRetrieveInformationModelFind,
+    PatientRootQueryRetrieveInformationModelMove,
+    StudyRootQueryRetrieveInformationModelFind,
+    StudyRootQueryRetrieveInformationModelMove,
+    Verification,
+)
+
+from dicom_py_mock_server.config import config
+from dicom_py_mock_server.models.dicom import ScpStatusResponse
+from dicom_py_mock_server.services.generator import DicomGeneratorService
+
+logger = structlog.get_logger(__name__)
+
+
+class DicomScpService:
+    """Manager for pynetdicom Application Entity (AE) DICOM SCP service."""
+
+    def __init__(
+        self,
+        ae_title: str = "MOCK_SCP",
+        port: int = 11112,
+        mwl_service=None,
+    ) -> None:
+        self.ae_title = ae_title
+        self.port = port
+        self.mwl_service = mwl_service
+        self.ae: AE | None = None
+        self.server = None
+        self.is_running = False
+
+    def _handle_echo(self, event: evt.Event) -> int:
+        """Handle C-ECHO request."""
+        requestor_ae = getattr(event.assoc.requestor, "ae_title", "UNKNOWN") if event.assoc else "UNKNOWN"
+        logger.info("dicom_c_echo_received", requestor_ae=requestor_ae)
+        return 0x0000  # Success
+
+    def _handle_find(self, event: evt.Event):
+        """Handle C-FIND request for MWL and Study Root models."""
+        requestor_ae = getattr(event.assoc.requestor, "ae_title", "UNKNOWN") if event.assoc else "UNKNOWN"
+        sop_class = str(getattr(event.request, "AffectedSOPClassUID", ""))
+        logger.info("dicom_c_find_received", requestor_ae=requestor_ae, sop_class=sop_class)
+
+        if not self.mwl_service:
+            yield (0x0000, None)
+            return
+
+        identifier = getattr(event, "identifier", None)
+
+        if sop_class == str(ModalityWorklistInformationFind) or "4.31" in sop_class:
+            # Modality Worklist C-FIND
+            study_uid = (
+                str(identifier.get("StudyInstanceUID", ""))
+                if identifier and "StudyInstanceUID" in identifier and identifier.StudyInstanceUID
+                else None
+            )
+            patient_id = (
+                str(identifier.get("PatientID", ""))
+                if identifier and "PatientID" in identifier and identifier.PatientID
+                else None
+            )
+            accession = (
+                str(identifier.get("AccessionNumber", ""))
+                if identifier and "AccessionNumber" in identifier and identifier.AccessionNumber
+                else None
+            )
+
+            if study_uid or patient_id or accession:
+                matched_entries = self.mwl_service.find_entries(
+                    study_uid=study_uid, patient_id=patient_id, accession=accession
+                )
+                for entry in matched_entries:
+                    yield (0xFF00, entry["dataset"])
+            else:
+                for ds in self.mwl_service.get_datasets():
+                    yield (0xFF00, ds)
+
+            yield (0x0000, None)
+        else:
+            # Study Root / Patient Root C-FIND
+            study_uid = (
+                str(identifier.get("StudyInstanceUID", ""))
+                if identifier and "StudyInstanceUID" in identifier and identifier.StudyInstanceUID
+                else None
+            )
+            patient_id = (
+                str(identifier.get("PatientID", ""))
+                if identifier and "PatientID" in identifier and identifier.PatientID
+                else None
+            )
+            accession = (
+                str(identifier.get("AccessionNumber", ""))
+                if identifier and "AccessionNumber" in identifier and identifier.AccessionNumber
+                else None
+            )
+
+            matched_entries = self.mwl_service.find_entries(
+                study_uid=study_uid, patient_id=patient_id, accession=accession
+            )
+            if not matched_entries and not study_uid and not patient_id and not accession:
+                # If no specific key passed, return all active MWL entries converted to Study C-FIND responses
+                self.mwl_service.purge_expired_entries()
+                matched_entries = self.mwl_service._entries
+
+            for entry in matched_entries:
+                cfind_ds = self.mwl_service.to_study_cfind_dataset(entry)
+                yield (0xFF00, cfind_ds)
+
+            yield (0x0000, None)
+
+    def _handle_move(self, event: evt.Event):
+        """Handle C-MOVE request and push DICOM image instances to move destination."""
+        move_destination = event.move_destination
+        requestor_ae = getattr(event.assoc.requestor, "ae_title", "UNKNOWN") if event.assoc else "UNKNOWN"
+        requestor_address = getattr(event.assoc.requestor, "address", "127.0.0.1") if event.assoc else "127.0.0.1"
+
+        logger.info(
+            "dicom_c_move_received",
+            requestor_ae=requestor_ae,
+            move_destination=move_destination,
+            requestor_address=requestor_address,
+        )
+
+        # Resolve destination IP and port
+        dest_info = config.move_destinations.get(move_destination)
+        if dest_info:
+            addr = dest_info.get("host", requestor_address)
+            port = int(dest_info.get("port", 11113))
+        else:
+            addr = requestor_address
+            port = 11113
+
+        if not addr or not port:
+            logger.error("dicom_c_move_destination_unknown", move_destination=move_destination)
+            yield (None, None)
+            return
+
+        # 1st yield: (addr, port, kwargs) including Storage presentation contexts for outgoing C-STORE association
+        yield (addr, port, {"contexts": StoragePresentationContexts})
+
+        identifier = getattr(event, "identifier", None)
+        study_uid = (
+            str(identifier.get("StudyInstanceUID", ""))
+            if identifier and "StudyInstanceUID" in identifier and identifier.StudyInstanceUID
+            else None
+        )
+        patient_id = (
+            str(identifier.get("PatientID", ""))
+            if identifier and "PatientID" in identifier and identifier.PatientID
+            else None
+        )
+        accession = (
+            str(identifier.get("AccessionNumber", ""))
+            if identifier and "AccessionNumber" in identifier and identifier.AccessionNumber
+            else None
+        )
+
+        matched_entries = []
+        if self.mwl_service:
+            matched_entries = self.mwl_service.find_entries(
+                study_uid=study_uid, patient_id=patient_id, accession=accession
+            )
+            if not matched_entries and not study_uid and not patient_id and not accession:
+                self.mwl_service.purge_expired_entries()
+                matched_entries = self.mwl_service._entries
+
+        if not matched_entries:
+            logger.warning("dicom_c_move_no_matching_studies", study_uid=study_uid, patient_id=patient_id)
+            yield 0
+            return
+
+        all_datasets = []
+        for entry in matched_entries:
+            datasets = DicomGeneratorService.create_instances_from_mwl(entry, num_instances=config.min_slices)
+            all_datasets.extend(datasets)
+
+        total_instances = len(all_datasets)
+        # 2nd yield: total sub-operations count
+        yield total_instances
+
+        # 3rd+ yields: (status, dataset) pairs
+        for idx, ds in enumerate(all_datasets, 1):
+            if event.is_cancelled:
+                logger.warning("dicom_c_move_cancelled")
+                yield (0xFE00, None)
+                return
+
+            patient_name = str(getattr(ds, "PatientName", ""))
+            patient_id_val = str(getattr(ds, "PatientID", ""))
+            study_inst_uid = str(getattr(ds, "StudyInstanceUID", ""))
+            series_inst_uid = str(getattr(ds, "SeriesInstanceUID", ""))
+            sop_inst_uid = str(getattr(ds, "SOPInstanceUID", ""))
+            instance_num = int(getattr(ds, "InstanceNumber", idx))
+
+            logger.info(
+                "dicom_c_store_instance_pushed",
+                patient_name=patient_name,
+                patient_id=patient_id_val,
+                study_instance_uid=study_inst_uid,
+                series_instance_uid=series_inst_uid,
+                sop_instance_uid=sop_inst_uid,
+                instance_number=f"{instance_num}/{total_instances}",
+                move_destination=move_destination,
+                dest_host=addr,
+                dest_port=port,
+            )
+
+            yield (0xFF00, ds)
+
+    def _handle_store(self, event: evt.Event) -> int:
+        """Handle C-STORE request."""
+        requestor_ae = getattr(event.assoc.requestor, "ae_title", "UNKNOWN") if event.assoc else "UNKNOWN"
+        logger.info("dicom_c_store_received", requestor_ae=requestor_ae)
+        return 0x0000  # Success
+
+    def start(self, host: str = "0.0.0.0") -> ScpStatusResponse:
+        """Start the DICOM SCP server in non-blocking mode."""
+        if self.is_running and self.server:
+            return self.get_status()
+
+        self.ae = AE(ae_title=self.ae_title)
+
+        # Supported Presentation Contexts
+        self.ae.add_supported_context(Verification)
+        self.ae.add_supported_context(PatientRootQueryRetrieveInformationModelFind)
+        self.ae.add_supported_context(StudyRootQueryRetrieveInformationModelFind)
+        self.ae.add_supported_context(PatientRootQueryRetrieveInformationModelMove)
+        self.ae.add_supported_context(StudyRootQueryRetrieveInformationModelMove)
+        self.ae.add_supported_context(ModalityWorklistInformationFind)
+        self.ae.supported_contexts.extend(StoragePresentationContexts)
+        self.ae.requested_contexts.extend(StoragePresentationContexts)
+
+        handlers = [
+            (evt.EVT_C_ECHO, self._handle_echo),
+            (evt.EVT_C_FIND, self._handle_find),
+            (evt.EVT_C_MOVE, self._handle_move),
+            (evt.EVT_C_STORE, self._handle_store),
+        ]
+
+        self.server = self.ae.start_server((host, self.port), block=False, evt_handlers=handlers)
+        self.is_running = True
+        logger.info("dicom_scp_server_started", host=host, port=self.port, ae_title=self.ae_title)
+        return self.get_status()
+
+    def stop(self) -> ScpStatusResponse:
+        """Stop the DICOM SCP server."""
+        if self.server:
+            self.server.shutdown()
+            self.server = None
+        self.is_running = False
+        logger.info("dicom_scp_server_stopped", ae_title=self.ae_title)
+        return self.get_status()
+
+    def get_status(self) -> ScpStatusResponse:
+        """Get current status of DICOM SCP server."""
+        return ScpStatusResponse(
+            ae_title=self.ae_title,
+            port=self.port,
+            is_running=self.is_running,
+            supported_services=["C-ECHO", "C-FIND", "C-MOVE", "C-STORE", "MWL-FIND"],
+        )
+
