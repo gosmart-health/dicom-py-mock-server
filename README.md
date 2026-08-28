@@ -52,7 +52,25 @@ The MCP SSE server transport provides two endpoints:
 
 ## AI Agent Integration (AGY, Claude Desktop, Cursor)
 
-To connect an MCP-compatible AI agent (such as Antigravity / AGY, Claude Desktop, or Cursor) to the server via SSE, add the following entry to your MCP configuration file (`mcp_config.json` / `claude_desktop_config.json`):
+To connect an MCP-compatible AI agent to the server via SSE, add the following entry to your MCP configuration:
+
+### AntiGravity / AGY (`~/.gemini/config/mcp_config.json` or `mcp_config.json`)
+
+AntiGravity uses the `serverUrl` field for remote SSE MCP servers:
+
+```json
+{
+  "mcpServers": {
+    "dicom-py-mock-server": {
+      "serverUrl": "http://127.0.0.1:8000/sse"
+    }
+  }
+}
+```
+
+### Claude Desktop / Cursor (`claude_desktop_config.json`)
+
+Other clients such as Claude Desktop or Cursor use the `url` field:
 
 ```json
 {
