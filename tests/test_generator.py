@@ -150,3 +150,37 @@ def test_template_sop_mwl():
         assert ds.StudyInstanceUID == record["study_uid"]
         assert ds.InstanceNumber == i
 
+
+def test_modality_study_descriptions_completeness_and_selection():
+    """Verify each key modality has at least 12 unique, aligned study descriptions."""
+    from dicom_py_mock_server.services.generator import (
+        MODALITY_STUDY_DESCRIPTIONS,
+        get_modality_study_descriptions,
+        get_random_study_description,
+    )
+
+    key_modalities = ["CT", "MR", "DX", "CR", "US", "MG", "NM", "PT", "PET", "XA", "RF", "OT"]
+    for modality in key_modalities:
+        descriptions = get_modality_study_descriptions(modality)
+        assert len(descriptions) >= 12, f"Modality {modality} should have at least 12 descriptions"
+        assert len(set(descriptions)) == len(descriptions), f"Descriptions for {modality} should be unique"
+
+        selected = get_random_study_description(modality)
+        assert selected in descriptions
+
+
+def test_generator_auto_modality_aligned_study_description():
+    """Verify create_dicom_file generates modality-appropriate StudyDescription when omitted."""
+    from dicom_py_mock_server.services.generator import MODALITY_STUDY_DESCRIPTIONS
+
+    generator = DicomGeneratorService()
+    for mod in ["CT", "MR", "US", "MG", "DX"]:
+        req = MockDicomRequest(
+            patient=PatientModel(patient_id=f"PAT-{mod}-1"),
+            study=StudyModel(),
+            series=SeriesModel(modality=mod),
+            num_instances=1,
+        )
+        ds = generator.create_dicom_file(req, instance_number=1)
+        assert ds.StudyDescription in MODALITY_STUDY_DESCRIPTIONS[mod]
+

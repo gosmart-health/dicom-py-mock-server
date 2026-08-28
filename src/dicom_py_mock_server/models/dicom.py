@@ -20,7 +20,7 @@ class StudyModel(BaseModel):
     study_date: str | None = Field(default="20260828", description="Study Date (YYYYMMDD)")
     study_time: str | None = Field(default="120000", description="Study Time (HHMMSS)")
     accession_number: str | None = Field(default="ACC-001", description="Accession Number")
-    study_description: str | None = Field(default="Mock Chest CT", description="Study Description")
+    study_description: str | None = Field(default=None, description="Study Description (generated based on modality if omitted)")
 
 
 class SeriesModel(BaseModel):

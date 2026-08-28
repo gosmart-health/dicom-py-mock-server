@@ -28,6 +28,8 @@ from dicom_py_mock_server.models.dicom import MockDicomRequest, MockDicomRespons
 logger = structlog.get_logger(__name__)
 
 
+import random
+
 TRANSFER_SYNTAX_MAP = {
     "RAW": ExplicitVRLittleEndian,
     "EXPLICIT_RAW": ExplicitVRLittleEndian,
@@ -49,6 +51,204 @@ TRANSFER_SYNTAX_MAP = {
     "RLE_LOSSLESS": RLELossless,
     "1.2.840.10008.1.2.5": RLELossless,
 }
+
+MODALITY_STUDY_DESCRIPTIONS: dict[str, list[str]] = {
+    "CT": [
+        "CT Chest without Contrast",
+        "CT Chest with Contrast",
+        "CT Abdomen and Pelvis with Contrast",
+        "CT Abdomen and Pelvis without Contrast",
+        "CT Head / Brain without Contrast",
+        "CT Head / Brain with Contrast",
+        "CT Angiography Chest (PE Protocol)",
+        "CT Cervical Spine without Contrast",
+        "CT Lumbar Spine without Contrast",
+        "CT Sinus / Maxillofacial Complete",
+        "CT Soft Tissue Neck with Contrast",
+        "CT Extremity Lower Right without Contrast",
+    ],
+    "MR": [
+        "MRI Brain without Contrast",
+        "MRI Brain with and without Contrast",
+        "MRI Lumbar Spine without Contrast",
+        "MRI Cervical Spine without Contrast",
+        "MRI Knee Joint Right without Contrast",
+        "MRI Knee Joint Left without Contrast",
+        "MRI Shoulder Joint Right without Contrast",
+        "MRI Shoulder Joint Left without Contrast",
+        "MRI Abdomen with and without Contrast",
+        "MRI Pelvis Female with and without Contrast",
+        "MRI MRCP (Abdomen)",
+        "MRA Head and Neck without Contrast",
+    ],
+    "DX": [
+        "XR Chest 1 View AP",
+        "XR Chest 2 Views PA and Lateral",
+        "XR Abdomen 1 View (KUB)",
+        "XR Pelvis 1 View AP",
+        "XR Right Knee 2 Views",
+        "XR Left Knee 2 Views",
+        "XR Right Shoulder 2 Views",
+        "XR Left Shoulder 2 Views",
+        "XR Lumbar Spine 2 or 3 Views",
+        "XR Cervical Spine 2 or 3 Views",
+        "XR Right Hand 3 Views",
+        "XR Left Hand 3 Views",
+    ],
+    "CR": [
+        "CR Chest 1 View AP Portable",
+        "CR Chest 2 Views PA and Lateral",
+        "CR Abdomen 1 View (KUB)",
+        "CR Pelvis 1 View AP",
+        "CR Right Knee 2 Views",
+        "CR Left Knee 2 Views",
+        "CR Right Shoulder 2 Views",
+        "CR Left Shoulder 2 Views",
+        "CR Lumbar Spine 2 or 3 Views",
+        "CR Cervical Spine 2 or 3 Views",
+        "CR Right Foot 3 Views",
+        "CR Left Foot 3 Views",
+    ],
+    "US": [
+        "US Abdomen Complete",
+        "US Right Upper Quadrant (Gallbladder/Liver)",
+        "US Renal and Bladder Retroperitoneal",
+        "US Pelvic Complete (Transabdominal)",
+        "US Thyroid and Soft Tissue Neck",
+        "US Scrotum and Testicles with Doppler",
+        "US Carotid Duplex Bilateral",
+        "US Lower Extremity Venous Duplex Right",
+        "US Lower Extremity Venous Duplex Left",
+        "US Echocardiography Transthoracic Complete",
+        "US Breast Bilateral Diagnostic",
+        "US Soft Tissue Mass or Structure",
+    ],
+    "MG": [
+        "MG Screening Mammogram Bilateral",
+        "MG Diagnostic Mammogram Bilateral",
+        "MG Diagnostic Mammogram Right",
+        "MG Diagnostic Mammogram Left",
+        "MG Digital Breast Tomosynthesis (3D) Bilateral",
+        "MG Digital Breast Tomosynthesis (3D) Right",
+        "MG Digital Breast Tomosynthesis (3D) Left",
+        "MG Spot Compression Right Breast",
+        "MG Spot Compression Left Breast",
+        "MG Magnification Views Right Breast",
+        "MG Magnification Views Left Breast",
+        "MG Post-Biopsy Clip Placement Check",
+    ],
+    "NM": [
+        "NM Whole Body Bone Scan",
+        "NM Thyroid Uptake and Scan",
+        "NM Myocardial Perfusion Rest and Stress",
+        "NM Hepatobiliary Scan (HIDA)",
+        "NM Renal Function Scan (MAG3)",
+        "NM Gastric Emptying Study",
+        "NM Parathyroid Scan SPECT",
+        "NM Lung Ventilation and Perfusion (V/Q)",
+        "NM Gastrointestinal Bleeding Study",
+        "NM Lymphoscintigraphy Sentinel Node",
+        "NM Brain SPECT Perfusion",
+        "NM White Blood Cell Scan (WBC)",
+    ],
+    "PT": [
+        "PET/CT Whole Body (Skull Base to Mid-Thigh)",
+        "PET/CT Total Body (Vertex to Toes)",
+        "PET/CT Brain (Metabolic / Dementia)",
+        "PET/CT Myocardial Viability FDG",
+        "PET/CT Melanoma Whole Body Protocol",
+        "PET/CT Lymphoma Staging and Restaging",
+        "PET/CT Lung Cancer Staging",
+        "PET/CT Head and Neck Diagnostic",
+        "PET/CT Colorectal Cancer Restaging",
+        "PET/CT PSMA Prostate Cancer Scan",
+        "PET/CT Dotatate Neuroendocrine Tumor Scan",
+        "PET/CT Bone Marrow / Musculoskeletal Evaluation",
+    ],
+    "PET": [
+        "PET/CT Whole Body (Skull Base to Mid-Thigh)",
+        "PET/CT Total Body (Vertex to Toes)",
+        "PET/CT Brain (Metabolic / Dementia)",
+        "PET/CT Myocardial Viability FDG",
+        "PET/CT Melanoma Whole Body Protocol",
+        "PET/CT Lymphoma Staging and Restaging",
+        "PET/CT Lung Cancer Staging",
+        "PET/CT Head and Neck Diagnostic",
+        "PET/CT Colorectal Cancer Restaging",
+        "PET/CT PSMA Prostate Cancer Scan",
+        "PET/CT Dotatate Neuroendocrine Tumor Scan",
+        "PET/CT Bone Marrow / Musculoskeletal Evaluation",
+    ],
+    "XA": [
+        "XA Coronary Angiography Diagnostic",
+        "XA Left Heart Catheterization",
+        "XA Peripheral Angiogram Lower Extremity Right",
+        "XA Peripheral Angiogram Lower Extremity Left",
+        "XA Cerebral Angiography 4 Vessels",
+        "XA Renal Arteriography Bilateral",
+        "XA Hepatic Arteriogram with Embolization",
+        "XA Abdominal Aortogram with Runoff",
+        "XA Pulmonary Angiography",
+        "XA Upper Extremity Arteriogram Right",
+        "XA Upper Extremity Arteriogram Left",
+        "XA Dialysis Fistula / Graft Evaluation",
+    ],
+    "RF": [
+        "RF Barium Swallow / Esophagram",
+        "RF Upper GI Series with Small Bowel Follow-Through",
+        "RF Modified Barium Swallow (Speech Pathology)",
+        "RF Voiding Cystourethrogram (VCUG)",
+        "RF Lumbar Puncture under Fluoroscopy",
+        "RF Joint Injection Right Hip under Fluoroscopy",
+        "RF Joint Injection Left Hip under Fluoroscopy",
+        "RF Joint Injection Right Shoulder under Fluoroscopy",
+        "RF Joint Injection Left Shoulder under Fluoroscopy",
+        "RF Hysterosalpingogram (HSG)",
+        "RF Small Bowel Enteroclysis",
+        "RF T-Tube Cholangiogram",
+    ],
+    "OT": [
+        "Endoscopy Upper GI Diagnostic",
+        "Colonoscopy Diagnostic Complete",
+        "Dermatology Lesion Digital Photography",
+        "Ophthalmology Fundus Photography",
+        "12-Lead Electrocardiogram Rest",
+        "Secondary Capture Clinical Document",
+        "Laparoscopy Diagnostic Procedure",
+        "Bronchoscopy Flexible Diagnostic",
+        "Colposcopy with Biopsy Imaging",
+        "Intraoperative Imaging Capture",
+        "Pathology Gross Specimen Photography",
+        "Clinical General Examination Capture",
+    ],
+}
+
+DEFAULT_STUDY_DESCRIPTIONS: list[str] = [
+    "Diagnostic Imaging Examination",
+    "Routine Diagnostic Study",
+    "Follow-up Imaging Evaluation",
+    "Pre-Operative Assessment Study",
+    "Post-Operative Evaluation Study",
+    "Screening Examination",
+    "Consultation Imaging Study",
+    "Emergency Diagnostic Evaluation",
+    "Comprehensive Organ Study",
+    "Baseline Imaging Survey",
+    "Clinical Protocol Study",
+    "Focused Area Diagnostic Scan",
+]
+
+
+def get_modality_study_descriptions(modality: str) -> list[str]:
+    """Return the list of modality-aligned study descriptions."""
+    mod = modality.upper().strip() if modality else ""
+    return MODALITY_STUDY_DESCRIPTIONS.get(mod, DEFAULT_STUDY_DESCRIPTIONS)
+
+
+def get_random_study_description(modality: str) -> str:
+    """Return a randomly selected, modality-appropriate Study Description."""
+    descriptions = get_modality_study_descriptions(modality)
+    return random.choice(descriptions)
 
 
 class DicomGeneratorService:
@@ -180,7 +380,7 @@ class DicomGeneratorService:
         ds.StudyDate = study_date
         ds.StudyTime = study_time
         ds.AccessionNumber = request.study.accession_number or ""
-        ds.StudyDescription = request.study.study_description or ""
+        ds.StudyDescription = request.study.study_description or get_random_study_description(request.series.modality)
 
         # General Series Module
         ds.SeriesInstanceUID = series_uid
@@ -263,7 +463,7 @@ class DicomGeneratorService:
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
         study_date = sps_seq.get("00400002", {}).get("Value", [time.strftime("%Y%m%d")])[0]
         study_time = sps_seq.get("00400003", {}).get("Value", [time.strftime("%H%M%S")])[0]
-        study_desc = json_e.get("00081030", {}).get("Value", ["Synthetic Study"])[0]
+        study_desc = json_e.get("00081030", {}).get("Value", [None])[0] or get_random_study_description(modality)
         patient_sex = json_e.get("00100040", {}).get("Value", ["U"])[0]
         patient_dob = json_e.get("00100030", {}).get("Value", [""])[0]
 

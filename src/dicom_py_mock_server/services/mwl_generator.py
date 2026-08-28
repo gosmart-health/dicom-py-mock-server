@@ -16,9 +16,25 @@ from pynetdicom.sop_class import ModalityWorklistInformationFind
 
 
 from dicom_py_mock_server.config import AppConfig, config as global_config
+from dicom_py_mock_server.services.generator import get_random_study_description
 from dicom_py_mock_server.services.person_generator import PersonGenerator
 
 logger = structlog.get_logger(__name__)
+
+MODALITY_TO_DEPARTMENT: dict[str, str] = {
+    "CT": "RAD",
+    "MR": "RAD",
+    "DX": "RAD",
+    "CR": "RAD",
+    "US": "RAD",
+    "MG": "RAD",
+    "NM": "RAD",
+    "PT": "RAD",
+    "PET": "RAD",
+    "XA": "CARD",
+    "RF": "RAD",
+    "OT": "RAD",
+}
 
 
 DEFAULT_DEPARTMENTS: list[dict[str, Any]] = [
@@ -199,17 +215,20 @@ class MwlGeneratorService:
         """Generate a single MWL DICOM Web JSON entry matching mwlEntryGenerator.ts format."""
         now = scheduled_at or datetime.now()
 
-        # Select department randomly
-        dept_info = random.choice(self.departments)
-        department_name = dept_info["department"]
-        description = random.choice(dept_info["reasons"])
-
-        # Pick modality randomly from loaded template modalities if available
-        available_modalities = self.get_template_modalities()
-        if available_modalities:
-            modality = random.choice(available_modalities)
+        # Determine modality
+        if custom and "modality" in custom:
+            modality = str(custom["modality"]).strip().upper()
         else:
-            modality = random.choice(dept_info["modalities"])
+            available_modalities = self.get_template_modalities()
+            if available_modalities:
+                modality = random.choice(available_modalities)
+            else:
+                dept_info = random.choice(self.departments)
+                modality = random.choice(dept_info["modalities"])
+
+        # Modality-aligned description and department
+        description = get_random_study_description(modality)
+        department_name = MODALITY_TO_DEPARTMENT.get(modality.upper(), "RAD")
 
         # Patient demographics
         patient = self.patient_generator.generate()
@@ -249,7 +268,7 @@ class MwlGeneratorService:
             modality = custom.get("modality", modality)
             accession = custom.get("accession", accession)
             study_uid = custom.get("studyUid", study_uid)
-            description = custom.get("reason", custom.get("studyDescription", description))
+            description = custom.get("studyDescription", custom.get("reason", description))
             department_name = custom.get("department", department_name)
             if "studyDate" in custom:
                 if isinstance(custom["studyDate"], datetime):

@@ -231,3 +231,15 @@ def test_mwl_generator_randomized_instance_counts():
 
     # Across 30 generated entries, we should observe multiple distinct instance counts
     assert len(counts) > 1
+
+
+def test_mwl_generator_modality_aligned_study_descriptions():
+    """Verify MWL entries generate modality-appropriate study descriptions."""
+    from dicom_py_mock_server.services.generator import MODALITY_STUDY_DESCRIPTIONS
+
+    service = MwlGeneratorService()
+    for modality in ["CT", "MR", "US", "DX", "CR", "MG", "NM", "PT", "XA", "RF", "OT"]:
+        entry = service.generate_json(custom={"modality": modality})
+        desc = entry["00081030"]["Value"][0]
+        assert desc in MODALITY_STUDY_DESCRIPTIONS[modality]
+
