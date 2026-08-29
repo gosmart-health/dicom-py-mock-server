@@ -8,31 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
----
-
-## [Unreleased]
-
-### Added
-- _Placeholder for upcoming features and additions._
-
-### Changed
-- _Placeholder for changes to existing functionality._
-
-### Deprecated
-- _Placeholder for features that will be removed in future releases._
-
-### Removed
-- _Placeholder for removed features._
-
-### Fixed
-- _Placeholder for bug fixes and corrective actions._
-
-### Security
-- _Placeholder for vulnerability patches and security enhancements._
-
----
-
-## [0.1.0] - 2026-08-28
+## [0.0.1] - 2026-08-28
 
 ### Added
 - **Synthetic DICOM P10 Generator**: Generates realistic, fully customizable DICOM Part 10 files with configurable Patient, Study, Series, and SOP Instance attributes.
