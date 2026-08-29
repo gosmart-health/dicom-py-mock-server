@@ -1,0 +1,51 @@
+[project]
+name = "dicom-py-mock-server"
+version = "0.1.0"
+description = "Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "fastapi>=0.110.0",
+    "numpy>=2.2.6",
+    "pillow>=12.3.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.15.0",
+    "pydicom>=2.4.0",
+    "pylibjpeg>=2.1.0",
+    "pylibjpeg-libjpeg>=2.4.0",
+    "pylibjpeg-openjpeg>=2.5.0",
+    "pynetdicom>=2.0.0",
+    "structlog>=26.1.0",
+    "uvicorn[standard]>=0.28.0",
+]
+
+[project.scripts]
+dicom-py-mock-server = "dicom_py_mock_server.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "cyclonedx-bom>=5.1.0",
+    "httpx>=0.27.0",
+    "pip-audit>=2.7.0",
+    "pytest>=8.0.0",
+    "ruff>=0.3.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "W",
+]
+
+
