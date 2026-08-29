@@ -1,20 +1,40 @@
 """Unit tests for PersonGenerator and MwlGeneratorService."""
 
 import json
-from datetime import datetime, timedelta, date
+from datetime import date, datetime, timedelta
 
 from dicom_py_mock_server.config import AppConfig
-from dicom_py_mock_server.services.person_generator import PersonGenerator
 from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
+from dicom_py_mock_server.services.person_generator import PersonGenerator
 
 
 def test_person_generator():
     gen = PersonGenerator()
     person = gen.generate()
     assert "^" in person.name
-    assert len(person.mrn) == 8
+    assert person.name.split("^")[0].endswith("_GSH")
+    assert person.mrn.startswith("GSH-")
+    assert len(person.mrn) == 12
     assert person.gender in ("M", "F")
     assert isinstance(person.dob, date)
+
+    # Physician generator (is_patient=False) should not have patient suffix
+    physician = gen.generate("MD", is_patient=False)
+    assert not physician.name.split("^")[0].endswith("_GSH")
+    assert not physician.mrn.startswith("GSH-")
+
+    # PersonGenerator with custom suffix/prefix
+    custom_gen = PersonGenerator(patient_suffix="_CUST", id_prefix="CUST-")
+    custom_patient = custom_gen.generate()
+    assert custom_patient.name.split("^")[0].endswith("_CUST")
+    assert custom_patient.mrn.startswith("CUST-")
+
+    # PersonGenerator with empty suffix/prefix
+    plain_gen = PersonGenerator(patient_suffix="", id_prefix="")
+    plain_patient = plain_gen.generate()
+    assert not plain_patient.name.split("^")[0].endswith("_GSH")
+    assert not plain_patient.mrn.startswith("GSH-")
+    assert len(plain_patient.mrn) == 8
 
 
 def test_mwl_generator_default_templates(tmp_path):
@@ -45,7 +65,8 @@ def test_mwl_generator_template_file_loading(tmp_path):
 
 def test_mwl_generator_dicom_template_scanning(tmp_path):
     import shutil
-    from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
+
+    from pydicom.dataset import FileDataset, FileMetaDataset
     from pydicom.uid import ExplicitVRLittleEndian, MRImageStorage, generate_uid
 
     # Use actual template file ./templates/CT_small.dcm
@@ -121,16 +142,40 @@ def test_mwl_generate_json_and_dataset():
     json_entry = service.generate_json()
 
     assert "00080050" in json_entry  # Accession
+    assert json_entry["00080050"]["Value"][0].startswith("GSH-")
     assert "00080060" in json_entry  # Modality
     assert "00100010" in json_entry  # PatientName
+    assert json_entry["00100010"]["Value"][0]["Alphabetic"].split("^")[0].endswith("_GSH")
     assert "00100020" in json_entry  # PatientID
+    assert json_entry["00100020"]["Value"][0].startswith("GSH-")
     assert "00400100" in json_entry  # ScheduledProcedureStepSequence
 
     dataset = service.generate_dataset()
-    assert dataset.PatientID is not None
-    assert dataset.AccessionNumber is not None
+    assert dataset.PatientID.startswith("GSH-")
+    assert str(dataset.PatientName).split("^")[0].endswith("_GSH")
+    assert dataset.AccessionNumber.startswith("GSH-")
     assert dataset.Modality is not None
     assert len(dataset.ScheduledProcedureStepSequence) > 0
+
+
+def test_mwl_generator_prefix_suffix_config_and_empty_overrides():
+    # Test custom prefix and suffix config
+    custom_cfg = AppConfig(patient_suffix="_CUSTOM", id_prefix="CUSTOM-")
+    custom_service = MwlGeneratorService(app_config=custom_cfg)
+    custom_entry = custom_service.generate_json()
+    assert custom_entry["00100010"]["Value"][0]["Alphabetic"].split("^")[0].endswith("_CUSTOM")
+    assert custom_entry["00100020"]["Value"][0].startswith("CUSTOM-")
+    assert custom_entry["00080050"]["Value"][0].startswith("CUSTOM-")
+
+    # Test empty string config overrides
+    empty_cfg = AppConfig(patient_suffix="", id_prefix="")
+    empty_service = MwlGeneratorService(app_config=empty_cfg)
+    empty_entry = empty_service.generate_json()
+    assert not empty_entry["00100010"]["Value"][0]["Alphabetic"].split("^")[0].endswith("_GSH")
+    assert not empty_entry["00100020"]["Value"][0].startswith("GSH-")
+    assert not empty_entry["00080050"]["Value"][0].startswith("GSH-")
+    assert len(empty_entry["00100020"]["Value"][0]) == 8
+    assert len(empty_entry["00080050"]["Value"][0]) == 8
 
 
 def test_mwl_custom_overrides():
@@ -170,29 +215,33 @@ def test_window_retention_purging():
     # Manually append entries created at different times
     rec_recent = service.generate_json(scheduled_at=now - timedelta(hours=5))
     ds_recent = service.json_to_dataset(rec_recent)
-    service._entries.append({
-        "json_entry": rec_recent,
-        "dataset": ds_recent,
-        "created_at": now - timedelta(hours=5),
-        "patient_id": rec_recent["00100020"]["Value"][0],
-        "patient_name": "RECENT^PATIENT",
-        "accession": rec_recent["00080050"]["Value"][0],
-        "modality": "CT",
-        "study_uid": rec_recent["0020000D"]["Value"][0],
-    })
+    service._entries.append(
+        {
+            "json_entry": rec_recent,
+            "dataset": ds_recent,
+            "created_at": now - timedelta(hours=5),
+            "patient_id": rec_recent["00100020"]["Value"][0],
+            "patient_name": "RECENT^PATIENT",
+            "accession": rec_recent["00080050"]["Value"][0],
+            "modality": "CT",
+            "study_uid": rec_recent["0020000D"]["Value"][0],
+        }
+    )
 
     rec_old = service.generate_json(scheduled_at=now - timedelta(hours=30))
     ds_old = service.json_to_dataset(rec_old)
-    service._entries.append({
-        "json_entry": rec_old,
-        "dataset": ds_old,
-        "created_at": now - timedelta(hours=30),
-        "patient_id": rec_old["00100020"]["Value"][0],
-        "patient_name": "OLD^PATIENT",
-        "accession": rec_old["00080050"]["Value"][0],
-        "modality": "CT",
-        "study_uid": rec_old["0020000D"]["Value"][0],
-    })
+    service._entries.append(
+        {
+            "json_entry": rec_old,
+            "dataset": ds_old,
+            "created_at": now - timedelta(hours=30),
+            "patient_id": rec_old["00100020"]["Value"][0],
+            "patient_name": "OLD^PATIENT",
+            "accession": rec_old["00080050"]["Value"][0],
+            "modality": "CT",
+            "study_uid": rec_old["0020000D"]["Value"][0],
+        }
+    )
 
     assert len(service._entries) == 2
 
@@ -201,7 +250,6 @@ def test_window_retention_purging():
     assert purged_count == 1
     assert len(service._entries) == 1
     assert service._entries[0]["patient_name"] == "RECENT^PATIENT"
-
 
 
 def test_seed_initial_entries():
@@ -242,4 +290,3 @@ def test_mwl_generator_modality_aligned_study_descriptions():
         entry = service.generate_json(custom={"modality": modality})
         desc = entry["00081030"]["Value"][0]
         assert desc in MODALITY_STUDY_DESCRIPTIONS[modality]
-

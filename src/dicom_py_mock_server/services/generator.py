@@ -1,34 +1,36 @@
 """Service for generating synthetic DICOM objects using pydicom."""
 
+import functools
 import io
+import random
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
-
-from PIL import Image, ImageDraw, ImageFont
 import structlog
-import pydicom
+from PIL import Image, ImageDraw, ImageFont
 from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.encaps import encapsulate
 from pydicom.uid import (
+    JPEG2000,
     CTImageStorage,
     ExplicitVRLittleEndian,
     ImplicitVRLittleEndian,
-    JPEGBaseline8Bit,
-    JPEG2000,
     JPEG2000Lossless,
+    JPEGBaseline8Bit,
     RLELossless,
     generate_uid,
 )
 
 from dicom_py_mock_server.config import config
-from dicom_py_mock_server.models.dicom import MockDicomRequest, MockDicomResponse, RawImageGeneratorRequest
+from dicom_py_mock_server.models.dicom import (
+    MockDicomRequest,
+    MockDicomResponse,
+    RawImageGeneratorRequest,
+)
 
 logger = structlog.get_logger(__name__)
-
-
-import random
 
 TRANSFER_SYNTAX_MAP = {
     "RAW": ExplicitVRLittleEndian,
@@ -255,7 +257,51 @@ class DicomGeneratorService:
     """Service to create pydicom Datasets from Pydantic request models."""
 
     @staticmethod
+    @functools.lru_cache(maxsize=32)
+    def create_precomputed_background(rows: int, cols: int, is_8bit: bool = False) -> np.ndarray:
+        """Create and cache pre-computed DICOM background matrix with W/L test patterns.
+
+        Top half contains subtle background texture.
+        Bottom half is divided into 4 gradient squares spanning the dynamic range:
+          - 12-bit (0..4095): [0..1023], [1024..2047], [2048..3071], [3072..4095]
+          - 8-bit (0..255): [0..63], [64..127], [128..191], [192..255]
+        Each square contains vertical lines where all pixels in each column have the identical value,
+        progressing from left to right.
+        """
+        dtype = np.uint8 if is_8bit else np.uint16
+        max_val = 256 if is_8bit else 4096
+        arr = np.zeros((rows, cols), dtype=dtype)
+
+        half_rows = rows // 2
+
+        # Top half: subtle texture
+        for r in range(half_rows):
+            for c in range(cols):
+                arr[r, c] = (r // 2 + c // 2 + (50 if is_8bit else 500)) % (max_val // 8)
+
+        # Bottom half: 4 gradient squares with horizontal progression
+        num_squares = 4
+        seg_size = max_val // num_squares
+
+        for k in range(num_squares):
+            c_start = k * cols // num_squares
+            c_end = (k + 1) * cols // num_squares if k < num_squares - 1 else cols
+            sq_width = c_end - c_start
+            v_start = k * seg_size
+            v_end = ((k + 1) * seg_size) - 1
+
+            if sq_width > 1:
+                for x in range(sq_width):
+                    val = int(round(v_start + x * (v_end - v_start) / (sq_width - 1)))
+                    arr[half_rows:rows, c_start + x] = val
+            elif sq_width == 1:
+                arr[half_rows:rows, c_start] = v_start
+
+        return arr
+
+    @classmethod
     def burn_metadata_text(
+        cls,
         rows: int,
         cols: int,
         patient_name: str,
@@ -263,21 +309,18 @@ class DicomGeneratorService:
         study_date: str,
         study_time: str,
         image_number: int,
-        background_val: int = 500,
-        text_val: int = 60000,
+        is_8bit: bool = False,
+        background_val: int | None = None,
+        text_val: int | None = None,
     ) -> np.ndarray:
-        """Burn metadata strings into a 16-bit uint16 image matrix from top-left with ~24px height."""
-        # Create base array with subtle pattern or background
-        base_arr = np.zeros((rows, cols), dtype=np.uint16)
-        for r in range(rows):
-            for c in range(cols):
-                base_arr[r, c] = (r // 2 + c // 2 + background_val) % 4096
+        """Burn metadata strings into image matrix from top-left on top of precomputed background."""
+        base_arr = cls.create_precomputed_background(rows, cols, is_8bit=is_8bit).copy()
 
         img = Image.fromarray(base_arr)
         draw = ImageDraw.Draw(img)
 
         try:
-            font = ImageFont.load_default(size=24)
+            font = ImageFont.load_default(size=18)
         except Exception:
             font = ImageFont.load_default()
 
@@ -288,18 +331,21 @@ class DicomGeneratorService:
             f"Image: {image_number}",
         ]
 
+        if text_val is None:
+            text_val = 255 if is_8bit else 4095
+
         x = 16
         y = 16
         for line in labels:
             draw.text((x, y), line, fill=text_val, font=font)
             if hasattr(font, "getbbox"):
                 bbox = font.getbbox(line)
-                line_height = bbox[3] - bbox[1] if bbox else 24
+                line_height = bbox[3] - bbox[1] if bbox else 18
             else:
-                line_height = 24
-            y += max(line_height, 24) + 6
+                line_height = 18
+            y += max(line_height, 18) + 6
 
-        return np.array(img, dtype=np.uint16)
+        return np.array(img, dtype=np.uint8 if is_8bit else np.uint16)
 
     @classmethod
     def apply_transfer_syntax(cls, ds: FileDataset, syntax_name: str | None = None) -> FileDataset:
@@ -316,8 +362,19 @@ class DicomGeneratorService:
 
         if target_uid == JPEGBaseline8Bit:
             # JPEG Process 1 is 8-bit baseline
-            arr16 = np.frombuffer(ds.PixelData, dtype=np.uint16).reshape((ds.Rows, ds.Columns))
-            arr8 = (arr16 >> 8).astype(np.uint8) if arr16.max() > 255 else arr16.astype(np.uint8)
+            if isinstance(ds.PixelData, bytes):
+                if getattr(ds, "BitsAllocated", 16) == 8:
+                    arr8 = np.frombuffer(ds.PixelData, dtype=np.uint8).reshape((ds.Rows, ds.Columns))
+                else:
+                    arr16 = np.frombuffer(ds.PixelData, dtype=np.uint16).reshape((ds.Rows, ds.Columns))
+                    arr8 = (arr16 >> 4).astype(np.uint8) if arr16.max() > 255 else arr16.astype(np.uint8)
+            else:
+                arr = ds.pixel_array
+                if arr.dtype == np.uint8 or arr.max() <= 255:
+                    arr8 = arr.astype(np.uint8)
+                else:
+                    arr8 = (arr >> 4).astype(np.uint8)
+
             img = Image.fromarray(arr8)
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=95)
@@ -327,6 +384,8 @@ class DicomGeneratorService:
             ds.BitsAllocated = 8
             ds.BitsStored = 8
             ds.HighBit = 7
+            ds.WindowCenter = 128
+            ds.WindowWidth = 256
             ds.PixelData = encapsulate([jpeg_bytes])
             return ds
 
@@ -393,17 +452,35 @@ class DicomGeneratorService:
         ds.SOPInstanceUID = sop_instance_uid
         ds.InstanceNumber = instance_number
 
+        # Check target transfer syntax for JPEG 8-bit mode
+        syntax_to_apply = request.transfer_syntax or getattr(config, "transfer_syntax", "RAW")
+        target_name = syntax_to_apply.upper().strip()
+        target_uid = TRANSFER_SYNTAX_MAP.get(target_name, ExplicitVRLittleEndian)
+        is_jpeg_8bit = target_uid == JPEGBaseline8Bit
+
         # Image Pixel Module
         rows = request.rows
         cols = request.columns
         ds.Rows = rows
         ds.Columns = cols
-        ds.BitsAllocated = 16
-        ds.BitsStored = 16
-        ds.HighBit = 15
         ds.PixelRepresentation = 0
         ds.SamplesPerPixel = 1
         ds.PhotometricInterpretation = "MONOCHROME2"
+        ds.RescaleIntercept = "0"
+        ds.RescaleSlope = "1"
+
+        if is_jpeg_8bit:
+            ds.BitsAllocated = 8
+            ds.BitsStored = 8
+            ds.HighBit = 7
+            ds.WindowCenter = 128
+            ds.WindowWidth = 256
+        else:
+            ds.BitsAllocated = 16
+            ds.BitsStored = 12
+            ds.HighBit = 11
+            ds.WindowCenter = 2048
+            ds.WindowWidth = 4096
 
         if request.burn_in_text:
             pixel_matrix = cls.burn_metadata_text(
@@ -414,17 +491,14 @@ class DicomGeneratorService:
                 study_date=study_date,
                 study_time=study_time,
                 image_number=instance_number,
+                is_8bit=is_jpeg_8bit,
             )
         else:
-            pixel_matrix = np.zeros((rows, cols), dtype=np.uint16)
-            for r in range(rows):
-                for c in range(cols):
-                    pixel_matrix[r, c] = (r + c + instance_number * 10) % 65536
+            pixel_matrix = cls.create_precomputed_background(rows, cols, is_8bit=is_jpeg_8bit).copy()
 
         ds.PixelData = pixel_matrix.tobytes()
 
         # Swap transfer syntax if specified or configured
-        syntax_to_apply = request.transfer_syntax or getattr(config, "transfer_syntax", "RAW")
         ds = cls.apply_transfer_syntax(ds, syntax_to_apply)
 
         return ds
@@ -449,15 +523,16 @@ class DicomGeneratorService:
     ) -> list[FileDataset]:
         """Synthesize DICOM image FileDatasets on the fly matching an MWL record."""
         import random
+
         if num_instances is None:
             num_instances = mwl_record.get("num_instances")
         if num_instances is None:
             num_instances = random.randint(getattr(config, "min_slices", 8), getattr(config, "max_slices", 24))
         json_e = mwl_record.get("json_entry", {})
-        patient_id = mwl_record.get("patient_id", "MOCK_PATIENT_ID")
-        patient_name = mwl_record.get("patient_name", "MOCK^PATIENT")
+        patient_id = mwl_record.get("patient_id") or f"{getattr(config, 'id_prefix', 'GSH-')}MOCK_PATIENT_ID"
+        patient_name = mwl_record.get("patient_name") or f"MOCK{getattr(config, 'patient_suffix', '_GSH')}^PATIENT"
         study_uid = mwl_record.get("study_uid") or generate_uid()
-        accession = mwl_record.get("accession", "")
+        accession = mwl_record.get("accession") or f"{getattr(config, 'id_prefix', 'GSH-')}ACC-001"
         modality = mwl_record.get("modality", "CT")
 
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]

@@ -17,6 +17,8 @@ def test_default_config_values():
     assert cfg.mwl_rate_per_hr == 12.0
     assert cfg.min_slices == 8
     assert cfg.max_slices == 24
+    assert cfg.patient_suffix == "_GSH"
+    assert cfg.id_prefix == "GSH-"
 
 
 def test_env_variables_override(monkeypatch):
@@ -30,6 +32,8 @@ def test_env_variables_override(monkeypatch):
     monkeypatch.setenv("GOSMART_MS_MWL_RATE_PER_HR", "20")
     monkeypatch.setenv("GOSMART_MS_MIN_SLICES", "16")
     monkeypatch.setenv("GOSMART_MS_MAX_SLICES", "32")
+    monkeypatch.setenv("GOSMART_MS_PATIENT_SUFFIX", "_TEST")
+    monkeypatch.setenv("GOSMART_MS_ID_PREFIX", "TEST-")
 
     cfg = AppConfig()
     assert cfg.scp_ae_title == "CUSTOM_AE"
@@ -42,6 +46,18 @@ def test_env_variables_override(monkeypatch):
     assert cfg.mwl_rate_per_hr == 20.0
     assert cfg.min_slices == 16
     assert cfg.max_slices == 32
+    assert cfg.patient_suffix == "_TEST"
+    assert cfg.id_prefix == "TEST-"
+
+
+def test_empty_string_env_variables_override(monkeypatch):
+    """Test that empty strings are permitted for patient_suffix and id_prefix in env."""
+    monkeypatch.setenv("GOSMART_MS_PATIENT_SUFFIX", "")
+    monkeypatch.setenv("GOSMART_MS_ID_PREFIX", "")
+
+    cfg = AppConfig()
+    assert cfg.patient_suffix == ""
+    assert cfg.id_prefix == ""
 
 
 def test_env_file_reading(tmp_path, monkeypatch):
@@ -56,7 +72,9 @@ def test_env_file_reading(tmp_path, monkeypatch):
         "GOSMART_MS_MWL_WINDOW_HR=12\n"
         "GOSMART_MS_MWL_RATE_PER_HR=6.5\n"
         "GOSMART_MS_MIN_SLICES=10\n"
-        "GOSMART_MS_MAX_SLICES=40\n",
+        "GOSMART_MS_MAX_SLICES=40\n"
+        "GOSMART_MS_PATIENT_SUFFIX=_DOTENV\n"
+        "GOSMART_MS_ID_PREFIX=DOTENV-\n",
         encoding="utf-8",
     )
 
@@ -72,6 +90,5 @@ def test_env_file_reading(tmp_path, monkeypatch):
     assert cfg.mwl_rate_per_hr == 6.5
     assert cfg.min_slices == 10
     assert cfg.max_slices == 40
-
-
-
+    assert cfg.patient_suffix == "_DOTENV"
+    assert cfg.id_prefix == "DOTENV-"

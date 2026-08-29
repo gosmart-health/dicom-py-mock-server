@@ -65,9 +65,7 @@ def setup_logging(cfg: AppConfig | None = None) -> None:
 
     # File Handler Formatter (JSON or Console depending on config)
     file_processor: Processor = (
-        structlog.processors.JSONRenderer()
-        if cfg.log_json_format
-        else structlog.dev.ConsoleRenderer(colors=False)
+        structlog.processors.JSONRenderer() if cfg.log_json_format else structlog.dev.ConsoleRenderer(colors=False)
     )
 
     file_formatter = structlog.stdlib.ProcessorFormatter(
@@ -118,4 +116,3 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
         structlog BoundLogger instance.
     """
     return structlog.get_logger(name)
-

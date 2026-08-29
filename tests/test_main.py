@@ -3,11 +3,18 @@ from pynetdicom import AE
 from pynetdicom.sop_class import Verification
 
 from dicom_py_mock_server.config import config
-from dicom_py_mock_server.main import app
+from dicom_py_mock_server.main import STARTUP_NOTICE, app
 
 
 def test_app_title():
     assert app.title == "DICOM Mock Server"
+
+
+def test_startup_notice():
+    assert (
+        STARTUP_NOTICE
+        == "Created by Gosmart.Health (info@gosmart.healt) 2026, Apache 2.0 License, Not for clinical use."
+    )
 
 
 def test_app_lifespan_starts_scp_and_seeds_mock_studies():

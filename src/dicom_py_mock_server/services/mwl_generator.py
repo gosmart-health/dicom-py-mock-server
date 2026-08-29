@@ -3,19 +3,18 @@
 import asyncio
 import json
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import structlog
 import pydicom
-from pydicom.dataset import Dataset, FileMetaDataset
+import structlog
+from pydicom.dataset import Dataset
 from pydicom.sequence import Sequence
-from pydicom.uid import ExplicitVRLittleEndian, generate_uid
-from pynetdicom.sop_class import ModalityWorklistInformationFind
+from pydicom.uid import generate_uid
 
-
-from dicom_py_mock_server.config import AppConfig, config as global_config
+from dicom_py_mock_server.config import AppConfig
+from dicom_py_mock_server.config import config as global_config
 from dicom_py_mock_server.services.generator import get_random_study_description
 from dicom_py_mock_server.services.person_generator import PersonGenerator
 
@@ -99,7 +98,10 @@ class MwlGeneratorService:
         patient_generator: PersonGenerator | None = None,
     ) -> None:
         self.config = app_config or global_config
-        self.patient_generator = patient_generator or PersonGenerator()
+        self.patient_generator = patient_generator or PersonGenerator(
+            patient_suffix=self.config.patient_suffix,
+            id_prefix=self.config.id_prefix,
+        )
         self.template_modalities: dict[str, dict[str, Any]] = {}
         self.dicom_templates: dict[str, list[Dataset]] = {}
         self.departments: list[dict[str, Any]] = []
@@ -190,7 +192,7 @@ class MwlGeneratorService:
 
     def get_template_modalities(self) -> list[str]:
         """Get the list of currently loaded in-memory template modalities."""
-        return sorted(list(self.template_modalities.keys()))
+        return sorted(self.template_modalities.keys())
 
     def get_dicom_templates_by_modality(self, modality: str) -> list[Dataset]:
         """Get in-memory loaded DICOM template datasets for a specific modality."""
@@ -198,7 +200,7 @@ class MwlGeneratorService:
 
     def get_current_rate_per_hr(self, current_time: datetime | None = None) -> float:
         """Calculate current MWL entry creation rate based on local machine time.
-        
+
         Business hours: 9 am - 5 pm (09:00 <= hour < 17:00) local time -> 100% rate.
         After hours: Before 9 am or at/after 5 pm local time -> 5% rate.
         """
@@ -211,7 +213,11 @@ class MwlGeneratorService:
         else:
             return float(self.config.mwl_rate_per_hr) * 0.05
 
-    def generate_json(self, custom: dict[str, Any] | None = None, scheduled_at: datetime | None = None) -> dict[str, Any]:
+    def generate_json(
+        self,
+        custom: dict[str, Any] | None = None,
+        scheduled_at: datetime | None = None,
+    ) -> dict[str, Any]:
         """Generate a single MWL DICOM Web JSON entry matching mwlEntryGenerator.ts format."""
         now = scheduled_at or datetime.now()
 
@@ -231,12 +237,12 @@ class MwlGeneratorService:
         department_name = MODALITY_TO_DEPARTMENT.get(modality.upper(), "RAD")
 
         # Patient demographics
-        patient = self.patient_generator.generate()
-        attending = self.patient_generator.generate("MD")
-        referring = self.patient_generator.generate("MD")
+        patient = self.patient_generator.generate(is_patient=True)
+        attending = self.patient_generator.generate("MD", is_patient=False)
+        referring = self.patient_generator.generate("MD", is_patient=False)
 
         # IDs and UIDs
-        accession = PersonGenerator.generate_random_id(8)
+        accession = PersonGenerator.generate_random_id(8, prefix=self.config.id_prefix)
         study_uid = generate_uid()
         sop_instance_uid = generate_uid()
         sps_id = PersonGenerator.generate_random_id(5)
@@ -257,23 +263,22 @@ class MwlGeneratorService:
 
         # Apply overrides if custom dictionary provided
         if custom:
-            patient_name = custom.get("patientName", patient_name)
-            patient_id = custom.get("patientId", custom.get("mrn", patient_id))
-            if "dob" in custom:
+            patient_name = custom.get("patientName") or patient_name
+            patient_id = custom.get("patientId") or custom.get("mrn") or patient_id
+            if custom.get("dob"):
                 if isinstance(custom["dob"], (datetime, datetime.date)):
                     dob_str = custom["dob"].strftime("%Y%m%d")
                 else:
                     dob_str = str(custom["dob"]).replace("-", "")
-            sex = custom.get("sex", custom.get("gender", sex))
-            modality = custom.get("modality", modality)
-            accession = custom.get("accession", accession)
-            study_uid = custom.get("studyUid", study_uid)
-            description = custom.get("studyDescription", custom.get("reason", description))
-            department_name = custom.get("department", department_name)
-            if "studyDate" in custom:
-                if isinstance(custom["studyDate"], datetime):
-                    start_date = custom["studyDate"].strftime("%Y%m%d")
-                    start_time = custom["studyDate"].strftime("%H%M%S")
+            sex = custom.get("sex") or custom.get("gender") or sex
+            modality = custom.get("modality") or modality
+            accession = custom.get("accession") or accession
+            study_uid = custom.get("studyUid") or study_uid
+            description = custom.get("studyDescription") or custom.get("reason") or description
+            department_name = custom.get("department") or department_name
+            if custom.get("studyDate") and isinstance(custom["studyDate"], datetime):
+                start_date = custom["studyDate"].strftime("%Y%m%d")
+                start_time = custom["studyDate"].strftime("%H%M%S")
 
         json_entry = {
             "00080005": {"vr": "CS", "Value": ["ISO_IR 192"]},
@@ -403,9 +408,7 @@ class MwlGeneratorService:
 
         cutoff = current_time - timedelta(hours=self.config.mwl_window_hr)
         initial_count = len(self._entries)
-        self._entries = [
-            e for e in self._entries if e.get("created_at", current_time) >= cutoff
-        ]
+        self._entries = [e for e in self._entries if e.get("created_at", current_time) >= cutoff]
         purged = initial_count - len(self._entries)
         if purged > 0:
             logger.info("purged_expired_mwl_entries", count=purged, remaining=len(self._entries))
@@ -485,6 +488,23 @@ class MwlGeneratorService:
         self.purge_expired_entries()
         return [e["dataset"] for e in self._entries]
 
+    @staticmethod
+    def _matches_filter(val: Any, query: str | None) -> bool:
+        """Helper to match DICOM attribute value against query with wildcard and case insensitivity."""
+        if not query or not str(query).strip() or str(query).strip() == "*":
+            return True
+        if val is None:
+            return False
+        v_str = str(val).strip()
+        q_str = str(query).strip()
+        if v_str == q_str:
+            return True
+        if "*" in q_str or "?" in q_str:
+            import fnmatch
+
+            return fnmatch.fnmatch(v_str.upper(), q_str.upper())
+        return v_str.upper() == q_str.upper()
+
     def find_entries(
         self,
         study_uid: str | None = None,
@@ -495,11 +515,11 @@ class MwlGeneratorService:
         self.purge_expired_entries()
         matched = []
         for e in self._entries:
-            if study_uid and e.get("study_uid") != study_uid:
+            if study_uid and not self._matches_filter(e.get("study_uid"), study_uid):
                 continue
-            if patient_id and e.get("patient_id") != patient_id:
+            if patient_id and not self._matches_filter(e.get("patient_id"), patient_id):
                 continue
-            if accession and e.get("accession") != accession:
+            if accession and not self._matches_filter(e.get("accession"), accession):
                 continue
             matched.append(e)
         return matched
@@ -540,7 +560,7 @@ class MwlGeneratorService:
         self.purge_expired_entries()
         now = datetime.now()
         current_rate = self.get_current_rate_per_hr(now)
-        is_biz_hrs = (9 <= now.hour < 17)
+        is_biz_hrs = 9 <= now.hour < 17
 
         return {
             "active_entries_count": len(self._entries),
@@ -561,7 +581,7 @@ class MwlGeneratorService:
                 rate_per_hr = self.get_current_rate_per_hr(now)
                 # Interval in seconds: 3600 / rate_per_hr
                 interval = 3600.0 / max(rate_per_hr, 0.01)
-                
+
                 # Sleep interval seconds or wait for stop
                 await asyncio.sleep(min(interval, 60.0))
                 if not self._is_auto_generating:
@@ -596,5 +616,3 @@ class MwlGeneratorService:
             self._auto_gen_task.cancel()
             self._auto_gen_task = None
         return self.get_status()
-
-

@@ -47,6 +47,7 @@ The MCP SSE server transport provides two endpoints:
 | `generate_mwl_entry` | Manually generate a new MWL entry with optional custom fields. |
 | `start_mwl_auto_generation` | Start background MWL automated entry generation loop. |
 | `stop_mwl_auto_generation` | Stop background MWL automated entry generation loop. |
+| `move_study` | Move/push DICOM study instances matching Patient ID, Accession Number, or Study UID to a destination DICOM SCP (AE Title, Host, Port). |
 
 ---
 
@@ -109,6 +110,8 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_MAX_SLICES` | `MAX_SLICES` | `24` | Maximum slice count for synthetic series volume generation. |
 | `GOSMART_MS_TRANSFER_SYNTAX` | `TRANSFER_SYNTAX` | `RAW` | Default DICOM Transfer Syntax (`RAW`, `JPEG`, `JPEG2000`, `RLE`). |
 | `GOSMART_MS_MOVE_DESTINATIONS` | `MOVE_DESTINATIONS` | `{}` | JSON string mapping C-MOVE destination AE Titles to target host/port objects. |
+| `GOSMART_MS_PATIENT_SUFFIX` | `PATIENT_SUFFIX` | `_GSH` | Suffix appended to synthetic patient last name to avoid PACS collisions (empty strings permitted). |
+| `GOSMART_MS_ID_PREFIX` | `ID_PREFIX` | `GSH-` | Prefix prepended to synthetic Patient ID and Accession number to avoid PACS collisions (empty strings permitted). |
 | `GOSMART_MS_APP_NAME` | `APP_NAME` | `DICOM Mock Server` | Application display name. |
 | `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.1.0` | Application version string. |
 
@@ -128,10 +131,33 @@ Or run via python module:
 python -m dicom_py_mock_server.main
 ```
 
-## Running Tests
+## Running Tests & Quality Checks
 
-Run unit and integration tests:
-
+### Run Unit Tests
 ```bash
 uv run pytest
 ```
+
+### Run Linting & Formatting Checks
+```bash
+uv run ruff check .
+uv run ruff format --check .
+```
+
+### Run Package Security Audit
+Scan dependencies against known vulnerability databases (PyPI Advisory Database / OSV):
+```bash
+uv run pip-audit
+```
+
+### Generate Software Bill of Materials (SBOM)
+Generate and validate a standard CycloneDX 1.6 SBOM JSON file:
+```bash
+uv run cyclonedx-py environment --pyproject pyproject.toml .venv -o sbom.json --validate
+```
+
+---
+
+## Release & Changelog
+
+Releases are distributed strictly as source-code releases. For details on version history, changes, and upgrades, see [CHANGELOG.md](./CHANGELOG.md).

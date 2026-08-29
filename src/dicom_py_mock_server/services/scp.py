@@ -1,6 +1,8 @@
 """Service for managing DICOM SCP server using pynetdicom."""
 
 from pathlib import Path
+from typing import Any
+
 import structlog
 from pydicom.uid import generate_uid
 from pynetdicom import AE, StoragePresentationContexts, evt
@@ -293,3 +295,96 @@ class DicomScpService:
             supported_services=["C-ECHO", "C-FIND", "C-MOVE", "C-STORE", "MWL-FIND"],
         )
 
+    def push_study_to_destination(
+        self,
+        target_ae_title: str,
+        target_host: str = "127.0.0.1",
+        target_port: int = 11113,
+        patient_id: str | None = None,
+        accession: str | None = None,
+        study_uid: str | None = None,
+    ) -> dict[str, Any]:
+        """Push a study (matching patient_id, accession, or study_uid) to a target DICOM Storage SCP."""
+        matched_entries = []
+        if self.mwl_service:
+            matched_entries = self.mwl_service.find_entries(
+                study_uid=study_uid, patient_id=patient_id, accession=accession
+            )
+            if not matched_entries and not study_uid and not patient_id and not accession:
+                self.mwl_service.purge_expired_entries()
+                matched_entries = self.mwl_service._entries
+            elif not matched_entries and (study_uid or patient_id or accession):
+                # Dynamically synthesize on demand
+                new_entry = self.mwl_service.add_entry(
+                    custom={
+                        "studyUid": study_uid,
+                        "patientId": patient_id,
+                        "accession": accession,
+                    }
+                )
+                matched_entries = [new_entry]
+
+        if not matched_entries:
+            return {
+                "success": False,
+                "message": "No studies found matching query criteria to move",
+                "instances_sent": 0,
+                "target_ae_title": target_ae_title,
+                "target_host": target_host,
+                "target_port": target_port,
+            }
+
+        all_datasets = []
+        for entry in matched_entries:
+            datasets = DicomGeneratorService.create_instances_from_mwl(entry)
+            all_datasets.extend(datasets)
+
+        # Connect as SCU to target
+        ae = AE(ae_title=self.ae_title)
+        for cx in StoragePresentationContexts:
+            ae.add_requested_context(cx.abstract_syntax)
+
+        assoc = ae.associate(target_host, target_port, ae_title=target_ae_title)
+        if not assoc.is_established:
+            err_msg = (
+                f"Failed to establish association with target AE '{target_ae_title}' at {target_host}:{target_port}"
+            )
+            logger.error(
+                "dicom_move_push_association_failed",
+                target_ae=target_ae_title,
+                host=target_host,
+                port=target_port,
+            )
+            return {
+                "success": False,
+                "message": err_msg,
+                "instances_sent": 0,
+                "target_ae_title": target_ae_title,
+                "target_host": target_host,
+                "target_port": target_port,
+            }
+
+        sent_count = 0
+        try:
+            for ds in all_datasets:
+                status = assoc.send_c_store(ds)
+                if status and status.Status in (0x0000, 0xB000, 0xB006, 0xB007):
+                    sent_count += 1
+                else:
+                    logger.warning("dicom_c_store_push_failed", status=hex(status.Status) if status else "None")
+        finally:
+            assoc.release()
+
+        first_entry = matched_entries[0]
+        return {
+            "success": True,
+            "message": f"Successfully moved {sent_count} instances to {target_ae_title} ({target_host}:{target_port})",
+            "instances_sent": sent_count,
+            "patient_id": first_entry.get("patient_id"),
+            "patient_name": first_entry.get("patient_name"),
+            "accession": first_entry.get("accession"),
+            "study_instance_uid": first_entry.get("study_uid"),
+            "target_ae_title": target_ae_title,
+            "target_host": target_host,
+            "target_port": target_port,
+        }

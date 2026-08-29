@@ -76,9 +76,13 @@ flowchart TD
 
 ### Phase 5: Software Release & Baseline (IEC 62304 Cl. 5.8)
 1. Pre-release checklist requires:
-   - Clean static analysis (`uv run ruff check .` with 0 issues).
+   - Lockfile synchronization verified (`uv lock --check`).
+   - Clean static analysis and formatting (`uv run ruff check .` and `uv run ruff format --check .` with 0 issues).
+   - Clean package security vulnerability audit (`uv run pip-audit` with 0 known vulnerabilities).
+   - Validated Software Bill of Materials generated (`uv run cyclonedx-py environment --pyproject pyproject.toml .venv -o sbom.json --validate`).
    - 100% passing test suite (`uv run pytest`).
    - Up-to-date Requirements Traceability Matrix (`gsms_040`).
+   - Maintained release documentation in `CHANGELOG.md` following Keep a Changelog standards.
    - Git tag aligned with Semantic Versioning (`vMAJOR.MINOR.PATCH`).
 
 ---

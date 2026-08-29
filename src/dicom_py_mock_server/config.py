@@ -104,8 +104,16 @@ class AppConfig(BaseSettings):
         validation_alias=AliasChoices("GOSMART_MS_MOVE_DESTINATIONS", "MOVE_DESTINATIONS"),
         description="Mapping of Move Destination AE Titles to target host and port dicts",
     )
-
-
+    patient_suffix: str = Field(
+        default="_GSH",
+        validation_alias=AliasChoices("GOSMART_MS_PATIENT_SUFFIX", "PATIENT_SUFFIX"),
+        description="Suffix appended to patient last name to avoid PACS collisions",
+    )
+    id_prefix: str = Field(
+        default="GSH-",
+        validation_alias=AliasChoices("GOSMART_MS_ID_PREFIX", "ID_PREFIX"),
+        description="Prefix prepended to patient ID and accession number to avoid PACS collisions",
+    )
 
     @property
     def ae_title(self) -> str:
@@ -120,6 +128,3 @@ class AppConfig(BaseSettings):
 
 
 config = AppConfig()
-
-
-

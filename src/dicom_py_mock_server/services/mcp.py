@@ -7,7 +7,11 @@ from typing import Any
 
 from dicom_py_mock_server.config import AppConfig, config
 from dicom_py_mock_server.logging_config import get_logger
-from dicom_py_mock_server.models.dicom import MockDicomRequest, MwlGenerateRequest, RawImageGeneratorRequest
+from dicom_py_mock_server.models.dicom import (
+    MockDicomRequest,
+    MwlGenerateRequest,
+    RawImageGeneratorRequest,
+)
 from dicom_py_mock_server.services.generator import DicomGeneratorService
 from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
 from dicom_py_mock_server.services.scp import DicomScpService
@@ -60,7 +64,6 @@ class McpService:
             queue.put_nowait(data)
             return True
         return False
-
 
     def list_tools(self) -> list[dict[str, Any]]:
         """Return MCP tools definitions representing REST API capabilities."""
@@ -118,7 +121,9 @@ class McpService:
             },
             {
                 "name": "generate_raw_dicom_image",
-                "description": "Generate a 16-bit 512x512 raw DICOM image with burned-in patient and study metadata strings.",
+                "description": (
+                    "Generate a 16-bit 512x512 raw DICOM image with burned-in patient and study metadata strings."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -209,6 +214,49 @@ class McpService:
                     "properties": {},
                 },
             },
+            {
+                "name": "move_study",
+                "description": (
+                    "Move or push DICOM study instances matching a Patient ID, Accession number, "
+                    "or Study Instance UID to a target DICOM Storage SCP (AE Title, Host, and Port). "
+                    "Use this tool whenever requested to 'move patient <id> to AE title, host, and port' "
+                    "or 'move accession <accession> to AE title, host, and port'."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "patient_id": {
+                            "type": "string",
+                            "description": "Patient ID of the study to move (e.g. 'PAT-12345')",
+                        },
+                        "accession": {
+                            "type": "string",
+                            "description": "Accession number of the study to move (e.g. 'ACC-98765')",
+                        },
+                        "study_uid": {
+                            "type": "string",
+                            "description": "Study Instance UID of the study to move",
+                        },
+                        "target_ae_title": {
+                            "type": "string",
+                            "description": (
+                                "Target DICOM Application Entity (AE) Title (e.g. 'VIEWER_SCP', 'ORTHANC', 'HOROS')"
+                            ),
+                        },
+                        "target_host": {
+                            "type": "string",
+                            "default": "127.0.0.1",
+                            "description": "Target host IP or hostname (default: 127.0.0.1)",
+                        },
+                        "target_port": {
+                            "type": "integer",
+                            "default": 11113,
+                            "description": "Target DICOM port (e.g. 11113, 104, 4242)",
+                        },
+                    },
+                    "required": ["target_ae_title"],
+                },
+            },
         ]
 
     async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -259,6 +307,33 @@ class McpService:
                 result = self.mwl_service.start_auto_generation().model_dump()
             elif name == "stop_mwl_auto_generation":
                 result = self.mwl_service.stop_auto_generation().model_dump()
+            elif name == "move_study":
+                patient_id = (arguments or {}).get("patient_id") or (arguments or {}).get("patientId")
+                accession = (
+                    (arguments or {}).get("accession")
+                    or (arguments or {}).get("accession_number")
+                    or (arguments or {}).get("accessionNumber")
+                )
+                study_uid = (
+                    (arguments or {}).get("study_uid")
+                    or (arguments or {}).get("studyUid")
+                    or (arguments or {}).get("study_instance_uid")
+                    or (arguments or {}).get("studyInstanceUid")
+                )
+                target_ae_title = (
+                    (arguments or {}).get("target_ae_title") or (arguments or {}).get("targetAeTitle") or "VIEWER_SCP"
+                )
+                target_host = (arguments or {}).get("target_host") or (arguments or {}).get("targetHost") or "127.0.0.1"
+                target_port = int((arguments or {}).get("target_port") or (arguments or {}).get("targetPort") or 11113)
+
+                result = self.scp_service.push_study_to_destination(
+                    target_ae_title=target_ae_title,
+                    target_host=target_host,
+                    target_port=target_port,
+                    patient_id=patient_id,
+                    accession=accession,
+                    study_uid=study_uid,
+                )
             else:
                 return {
                     "content": [{"type": "text", "text": f"Unknown tool: {name}"}],

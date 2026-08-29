@@ -14,10 +14,13 @@ from dicom_py_mock_server.logging_config import get_logger, setup_logging
 setup_logging(config)
 logger = get_logger(__name__)
 
+STARTUP_NOTICE = "Created by Gosmart.Health (info@gosmart.healt) 2026, Apache 2.0 License, Not for clinical use."
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event context manager for FastAPI application."""
+    logger.info(STARTUP_NOTICE)
     logger.info("app_starting", app_name=config.app_name, version=config.app_version)
 
     # 1. Seed initial active mock studies across the retention window
@@ -58,9 +61,9 @@ app.include_router(router)
 app.include_router(mcp_router)
 
 
-
 def main() -> None:
     """Run FastAPI server via Uvicorn."""
+    logger.info(STARTUP_NOTICE)
     logger.info("starting_uvicorn_server", host=config.host, port=config.port)
     uvicorn.run(
         "dicom_py_mock_server.main:app",
@@ -72,4 +75,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -4,6 +4,8 @@ from fastapi import APIRouter, HTTPException
 
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.models.dicom import (
+    DicomMoveRequest,
+    DicomMoveResponse,
     MockDicomRequest,
     MockDicomResponse,
     MwlEntrySummary,
@@ -114,3 +116,18 @@ def stop_mwl_auto_generation():
     return mwl_service.stop_auto_generation()
 
 
+@router.post("/api/v1/move", response_model=DicomMoveResponse)
+@router.post("/api/v1/scp/move", response_model=DicomMoveResponse)
+def move_study(request: DicomMoveRequest):
+    """Move/push a DICOM study (by patient_id, accession, or study_instance_uid) to a target DICOM Storage SCP."""
+    res = scp_service.push_study_to_destination(
+        target_ae_title=request.target_ae_title,
+        target_host=request.target_host,
+        target_port=request.target_port,
+        patient_id=request.patient_id,
+        accession=request.accession_number,
+        study_uid=request.study_instance_uid,
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res

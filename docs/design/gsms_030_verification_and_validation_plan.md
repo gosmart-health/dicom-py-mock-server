@@ -44,20 +44,22 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
 
 | Test Suite | Execution Command | Description |
 | :--- | :--- | :--- |
-| **Code Linting & Formatting** | `uv run ruff check .` | Enforces zero linting/formatting errors. |
-| **Unit & Integration Test Suite** | `uv run pytest` | Executes complete pytest suite across models, generator, API, scheduler, and main app. |
-| **Headless CI/CD Automation** | `uv run pytest tests/test_headless_scp.py` | Verifies headless Mock SCP interop protocols for CI/CD pipelines. |
-| **Stress & Ephemeral Storage Test** | `uv run pytest tests/test_stress.py` | Verifies high-throughput stress generation on the fly with low disk footprint. |
+| **Code Linting & Formatting** | `uv run ruff check .` / `uv run ruff format --check .` | Enforces zero linting/formatting errors. |
+| **Lockfile Synchronization** | `uv lock --check` | Verifies lockfile integrity and consistency with `pyproject.toml`. |
+| **Package Security Vulnerability Audit** | `uv run pip-audit` | Audits dependencies against known vulnerability advisories (PyPI / OSV). |
+| **Software Bill of Materials (SBOM)** | `uv run cyclonedx-py environment --pyproject pyproject.toml .venv -o sbom.json --validate` | Generates and validates standard CycloneDX 1.6 SBOM. |
+| **Unit & Integration Test Suite** | `uv run pytest` | Executes complete pytest suite across models, generator, API, scheduler, MCP SSE, and SCP. |
 | **CLI Application Verification** | `uv run dicom-py-mock-server` | Verifies installed CLI entry point and Uvicorn server startup. |
 
 ---
 
 ## 4. Acceptance Criteria
 
-1. All automated test suites (`uv run ruff check .`, `uv run pytest`) pass with **0 failures**.
+1. All automated test suites (`uv run ruff check .`, `uv run ruff format --check .`, `uv run pip-audit`, `uv run pytest`) pass with **0 failures**.
 2. Generated `.dcm` files parse cleanly using `pydicom.dcmread` with correct Patient, Study, Series, and PixelData elements containing OCR-readable burned-in text.
 3. Gender-aligned patient names accurately match template SOP `PatientSex` inputs.
 4. Ephemeral on-the-fly generation completes stress tests with modest memory usage and zero persistent disk overload.
 5. No thread locking or server port leakage occurs during DICOM SCP lifecycle start/stop or background 9-5 auto-push calls.
+6. Machine-readable `sbom.json` passes schema validation against CycloneDX 1.6 specification.
 
 

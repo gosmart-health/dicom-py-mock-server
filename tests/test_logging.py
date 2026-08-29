@@ -94,4 +94,3 @@ def test_stdlib_logging_interception(tmp_path):
     assert log_entry["event"] == "Standard library log message from third-party package"
     assert log_entry["logger"] == "stdlib.test"
     assert log_entry["level"] == "info"
-

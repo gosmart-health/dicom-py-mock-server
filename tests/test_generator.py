@@ -1,9 +1,10 @@
 """Tests for DICOM generator service using pydicom."""
 
 import tempfile
+
 import numpy as np
 import pydicom
-from pydicom.uid import ExplicitVRLittleEndian, JPEGBaseline8Bit, JPEG2000Lossless
+from pydicom.uid import ExplicitVRLittleEndian, JPEG2000Lossless, JPEGBaseline8Bit
 
 from dicom_py_mock_server.models.dicom import (
     MockDicomRequest,
@@ -67,15 +68,17 @@ def test_raw_image_generator_burned_text_512x512():
     assert ds.Rows == 512
     assert ds.Columns == 512
     assert ds.BitsAllocated == 16
-    assert ds.BitsStored == 16
-    assert ds.HighBit == 15
+    assert ds.BitsStored == 12
+    assert ds.HighBit == 11
+    assert ds.WindowCenter == 2048
+    assert ds.WindowWidth == 4096
     assert ds.file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
 
     # Verify text is burned into top-left region of pixel_array
     arr = ds.pixel_array
     assert arr.shape == (512, 512)
     top_left_region = arr[10:100, 10:300]
-    assert np.any(top_left_region > 5000)
+    assert np.any(top_left_region >= 4000)
 
 
 def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
@@ -154,7 +157,6 @@ def test_template_sop_mwl():
 def test_modality_study_descriptions_completeness_and_selection():
     """Verify each key modality has at least 12 unique, aligned study descriptions."""
     from dicom_py_mock_server.services.generator import (
-        MODALITY_STUDY_DESCRIPTIONS,
         get_modality_study_descriptions,
         get_random_study_description,
     )
@@ -184,3 +186,124 @@ def test_generator_auto_modality_aligned_study_description():
         ds = generator.create_dicom_file(req, instance_number=1)
         assert ds.StudyDescription in MODALITY_STUDY_DESCRIPTIONS[mod]
 
+
+def test_default_models_prefix_and_suffix():
+    """Verify that default model instances use config id_prefix and patient_suffix."""
+    patient = PatientModel()
+    assert patient.patient_id.startswith("GSH-")
+    assert patient.patient_name.split("^")[0].endswith("_GSH")
+
+    study = StudyModel()
+    assert study.accession_number.startswith("GSH-")
+
+    raw_req = RawImageGeneratorRequest()
+    assert raw_req.patient_id.startswith("GSH-")
+    assert raw_req.patient_name.split("^")[0].endswith("_GSH")
+
+
+def test_window_level_gradient_pattern_12bit():
+    """Verify 12-bit dynamic range [0, 4095] with 4 gradient squares on bottom half."""
+    generator = DicomGeneratorService()
+    req = MockDicomRequest(
+        patient=PatientModel(patient_id="WL-TEST-12BIT"),
+        num_instances=1,
+        rows=512,
+        columns=512,
+        transfer_syntax="RAW",
+        burn_in_text=False,
+    )
+    ds = generator.create_dicom_file(req, instance_number=1)
+
+    assert ds.BitsAllocated == 16
+    assert ds.BitsStored == 12
+    assert ds.HighBit == 11
+    assert ds.WindowCenter == 2048
+    assert ds.WindowWidth == 4096
+    assert ds.RescaleIntercept == "0"
+    assert ds.RescaleSlope == "1"
+
+    arr = ds.pixel_array
+    assert arr.shape == (512, 512)
+    assert arr.dtype == np.uint16
+    assert arr.min() >= 0
+    assert arr.max() <= 4095
+
+    # Bottom half (rows 256 to 512) divided into 4 squares of width 128
+    bottom_half = arr[256:512, :]
+    expected_segments = [
+        (0, 128, 0, 1023),
+        (128, 256, 1024, 2047),
+        (256, 384, 2048, 3071),
+        (384, 512, 3072, 4095),
+    ]
+
+    for c_start, c_end, v_expected_min, v_expected_max in expected_segments:
+        square = bottom_half[:, c_start:c_end]
+        # Verify vertical lines are column-constant
+        for c_idx in range(square.shape[1]):
+            col_vals = square[:, c_idx]
+            assert np.all(col_vals == col_vals[0]), f"Column {c_start + c_idx} is not column-constant"
+
+        # Verify gradient endpoints
+        assert square[0, 0] == v_expected_min, (
+            f"Square starting at col {c_start} expected {v_expected_min} but got {square[0, 0]}"
+        )
+        assert square[0, -1] == v_expected_max, (
+            f"Square ending at col {c_end} expected {v_expected_max} but got {square[0, -1]}"
+        )
+
+        # Verify monotonicity from left to right
+        row_vals = square[0, :]
+        assert np.all(np.diff(row_vals) >= 0), f"Square {c_start}:{c_end} is not monotonic left-to-right"
+
+
+def test_window_level_gradient_pattern_jpeg_8bit():
+    """Verify 8-bit dynamic range [0, 255] for JPEG Process 1 with 4 gradient segments."""
+    generator = DicomGeneratorService()
+    req = MockDicomRequest(
+        patient=PatientModel(patient_id="WL-TEST-8BIT"),
+        num_instances=1,
+        rows=512,
+        columns=512,
+        transfer_syntax="JPEG_PROCESS_1",
+        burn_in_text=False,
+    )
+    ds = generator.create_dicom_file(req, instance_number=1)
+
+    assert ds.BitsAllocated == 8
+    assert ds.BitsStored == 8
+    assert ds.HighBit == 7
+    assert ds.WindowCenter == 128
+    assert ds.WindowWidth == 256
+    assert ds.file_meta.TransferSyntaxUID == JPEGBaseline8Bit
+
+    # Precomputed background direct check for 8-bit
+    bg_8bit = generator.create_precomputed_background(512, 512, is_8bit=True)
+    assert bg_8bit.shape == (512, 512)
+    assert bg_8bit.dtype == np.uint8
+
+    bottom_half = bg_8bit[256:512, :]
+    expected_segments_8bit = [
+        (0, 128, 0, 63),
+        (128, 256, 64, 127),
+        (256, 384, 128, 191),
+        (384, 512, 192, 255),
+    ]
+
+    for c_start, c_end, v_expected_min, v_expected_max in expected_segments_8bit:
+        square = bottom_half[:, c_start:c_end]
+        for c_idx in range(square.shape[1]):
+            col_vals = square[:, c_idx]
+            assert np.all(col_vals == col_vals[0])
+
+        assert square[0, 0] == v_expected_min
+        assert square[0, -1] == v_expected_max
+        row_vals = square[0, :]
+        assert np.all(np.diff(row_vals) >= 0)
+
+
+def test_precomputed_background_caching():
+    """Verify precomputed background array is cached and deterministic."""
+    bg1 = DicomGeneratorService.create_precomputed_background(512, 512, is_8bit=False)
+    bg2 = DicomGeneratorService.create_precomputed_background(512, 512, is_8bit=False)
+    assert bg1 is bg2

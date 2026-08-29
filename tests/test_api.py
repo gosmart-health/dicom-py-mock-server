@@ -26,6 +26,7 @@ def test_scp_status_endpoint():
 
 def test_generate_endpoint(tmp_path):
     from dicom_py_mock_server.config import config
+
     config.storage_dir = str(tmp_path)
 
     payload = {
@@ -48,6 +49,7 @@ def test_generate_endpoint(tmp_path):
 
 def test_generate_raw_endpoint(tmp_path):
     from dicom_py_mock_server.config import config
+
     config.storage_dir = str(tmp_path)
 
     payload = {
@@ -116,3 +118,40 @@ def test_mwl_start_stop_endpoints():
     assert data_stop["is_auto_generating"] is False
 
 
+def test_move_api_endpoint():
+    from tests.test_cmove_workflow import MockStorageScp
+
+    viewer_port = 11135
+    viewer = MockStorageScp(ae_title="API_MOVE_VIEWER", port=viewer_port)
+    viewer.start()
+    try:
+        # Move by patient_id
+        payload = {
+            "patient_id": "API-MOVE-PAT-001",
+            "target_ae_title": "API_MOVE_VIEWER",
+            "target_host": "127.0.0.1",
+            "target_port": viewer_port,
+        }
+        res = client.post("/api/v1/move", json=payload)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert data["instances_sent"] >= 8
+        assert data["patient_id"] == "API-MOVE-PAT-001"
+        assert data["target_ae_title"] == "API_MOVE_VIEWER"
+
+        # Move by accession
+        payload_acc = {
+            "accession": "API-MOVE-ACC-888",
+            "target_ae_title": "API_MOVE_VIEWER",
+            "target_host": "127.0.0.1",
+            "target_port": viewer_port,
+        }
+        res_acc = client.post("/api/v1/scp/move", json=payload_acc)
+        assert res_acc.status_code == 200
+        data_acc = res_acc.json()
+        assert data_acc["success"] is True
+        assert data_acc["instances_sent"] >= 8
+        assert data_acc["accession"] == "API-MOVE-ACC-888"
+    finally:
+        viewer.stop()

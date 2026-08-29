@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -97,4 +97,3 @@ async def mcp_post_messages(request: Request, session_id: str | None = None):
         mcp_service.push_session_event(target_session_id, response_payload)
 
     return Response(status_code=202, content="Accepted", media_type="text/plain")
-

@@ -42,6 +42,7 @@ This document details the Software Bill of Materials (SBOM), SOUP (Software of U
 
 ### 3.4 Dependency Management & Vulnerability Tracking
 * All dependencies are locked using `uv.lock` to ensure deterministic builds.
-* Software updates and SOUP vulnerability monitoring are conducted continuously via automated tools (`uv`, Dependabot, GitHub Security Advisories).
+* Software updates and SOUP vulnerability monitoring are conducted continuously via automated tools (`uv`, `pip-audit`, GitHub Security Advisories, and GitHub Actions CI).
+* A standard machine-readable CycloneDX 1.6 Software Bill of Materials is maintained at [`sbom.json`](../../sbom.json) and validated in CI using `cyclonedx-bom`.
 
 

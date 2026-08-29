@@ -7,9 +7,7 @@ from dicom_py_mock_server.services.scp import DicomScpService
 
 __all__ = [
     "DicomGeneratorService",
+    "DicomScpService",
     "MwlGeneratorService",
     "PersonGenerator",
-    "DicomScpService",
 ]
-
-

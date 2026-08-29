@@ -1,11 +1,10 @@
 """Integration test for full MWL -> Study Root C-FIND -> C-MOVE workflow."""
 
 import time
-import pytest
+
 from pydicom import Dataset
 from pynetdicom import AE, StoragePresentationContexts, evt
 from pynetdicom.sop_class import (
-    CTImageStorage,
     ModalityWorklistInformationFind,
     StudyRootQueryRetrieveInformationModelFind,
     StudyRootQueryRetrieveInformationModelMove,
@@ -149,10 +148,12 @@ def test_full_mwl_cfind_cmove_workflow():
 
 def test_cstore_incoming_storage(tmp_path):
     """Test sending C-STORE to DICOM SCP saves the DICOM file to storage_dir."""
-    import pydicom
     from pathlib import Path
-    from dicom_py_mock_server.services.generator import DicomGeneratorService
+
+    import pydicom
+
     from dicom_py_mock_server.models.dicom import RawImageGeneratorRequest
+    from dicom_py_mock_server.services.generator import DicomGeneratorService
 
     config.storage_dir = str(tmp_path)
     scp_port = 11118
@@ -219,9 +220,7 @@ def test_cmove_on_demand_synthesis():
         move_query.StudyInstanceUID = unseen_study_uid
         move_query.PatientID = "ONDEMAND-PAT-777"
 
-        move_responses = list(
-            assoc_move.send_c_move(move_query, "VIEWER_ONDEMAND", StudyRootQueryRetrieveInformationModelMove)
-        )
+        _ = list(assoc_move.send_c_move(move_query, "VIEWER_ONDEMAND", StudyRootQueryRetrieveInformationModelMove))
         assoc_move.release()
 
         time.sleep(0.5)
@@ -230,6 +229,95 @@ def test_cmove_on_demand_synthesis():
         for ds in viewer_scp.received_datasets:
             assert str(ds.StudyInstanceUID) == unseen_study_uid
             assert str(ds.PatientID) == "ONDEMAND-PAT-777"
+    finally:
+        viewer_scp.stop()
+        scp_service.stop()
+
+
+def test_cfind_and_cmove_by_accession_number():
+    """Test querying and moving studies specifically by AccessionNumber."""
+    scp_port = 11123
+    viewer_port = 11124
+
+    mwl_service = MwlGeneratorService(config)
+    mwl_service.add_entry(
+        custom={
+            "patientName": "ACC^QUERY^PATIENT",
+            "patientId": "ACC-PAT-100",
+            "accession": "ACC-TEST-12345",
+            "modality": "CT",
+        }
+    )
+
+    scp_service = DicomScpService(ae_title="ACC_SCP", port=scp_port, mwl_service=mwl_service)
+    scp_service.start()
+
+    viewer_scp = MockStorageScp(ae_title="ACC_VIEWER", port=viewer_port)
+    viewer_scp.start()
+    config.move_destinations["ACC_VIEWER"] = {"host": "127.0.0.1", "port": viewer_port}
+
+    try:
+        # 1. MWL C-FIND by AccessionNumber
+        ae_mwl = AE(ae_title="CLIENT_SCU")
+        ae_mwl.add_requested_context(ModalityWorklistInformationFind)
+        assoc_mwl = ae_mwl.associate("127.0.0.1", scp_port)
+        assert assoc_mwl.is_established
+
+        mwl_query = Dataset()
+        mwl_query.PatientName = ""
+        mwl_query.AccessionNumber = "ACC-TEST-12345"
+        mwl_responses = list(assoc_mwl.send_c_find(mwl_query, ModalityWorklistInformationFind))
+        assoc_mwl.release()
+
+        matched_mwl = [ds for status, ds in mwl_responses if ds]
+        assert len(matched_mwl) == 1
+        assert str(matched_mwl[0].AccessionNumber) == "ACC-TEST-12345"
+
+        # 2. Study Root C-FIND by AccessionNumber
+        ae_study = AE(ae_title="CLIENT_SCU")
+        ae_study.add_requested_context(StudyRootQueryRetrieveInformationModelFind)
+        assoc_study = ae_study.associate("127.0.0.1", scp_port)
+        assert assoc_study.is_established
+
+        study_query = Dataset()
+        study_query.QueryRetrieveLevel = "STUDY"
+        study_query.AccessionNumber = "ACC-TEST-12345"
+        study_responses = list(assoc_study.send_c_find(study_query, StudyRootQueryRetrieveInformationModelFind))
+        assoc_study.release()
+
+        matched_study = [ds for status, ds in study_responses if ds]
+        assert len(matched_study) == 1
+        assert str(matched_study[0].AccessionNumber) == "ACC-TEST-12345"
+
+        # 3. C-MOVE by AccessionNumber
+        ae_move = AE(ae_title="CLIENT_SCU")
+        ae_move.add_requested_context(StudyRootQueryRetrieveInformationModelMove)
+        assoc_move = ae_move.associate("127.0.0.1", scp_port)
+        assert assoc_move.is_established
+
+        move_query = Dataset()
+        move_query.QueryRetrieveLevel = "STUDY"
+        move_query.AccessionNumber = "ACC-TEST-12345"
+        _ = list(assoc_move.send_c_move(move_query, "ACC_VIEWER", StudyRootQueryRetrieveInformationModelMove))
+        assoc_move.release()
+
+        time.sleep(0.5)
+        assert len(viewer_scp.received_datasets) >= 8
+        for ds in viewer_scp.received_datasets:
+            assert str(ds.AccessionNumber) == "ACC-TEST-12345"
+
+        # 4. Direct push_study_to_destination test
+        viewer_scp.received_datasets.clear()
+        res_push = scp_service.push_study_to_destination(
+            target_ae_title="ACC_VIEWER",
+            target_host="127.0.0.1",
+            target_port=viewer_port,
+            accession="ACC-TEST-12345",
+        )
+        assert res_push["success"] is True
+        assert res_push["instances_sent"] >= 8
+        assert len(viewer_scp.received_datasets) >= 8
+
     finally:
         viewer_scp.stop()
         scp_service.stop()

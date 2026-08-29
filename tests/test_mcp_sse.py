@@ -1,8 +1,8 @@
 """Tests for MCP SSE transport and JSON-RPC tool endpoints."""
 
 import json
-import pytest
 
+import pytest
 from fastapi.testclient import TestClient
 
 from dicom_py_mock_server.api.mcp_routes import mcp_service, sse_event_generator
@@ -168,3 +168,66 @@ def test_mcp_invalid_session_and_disabled():
     assert res_disabled.status_code == 403
     config.mcp_enabled = True
 
+
+@pytest.mark.anyio
+async def test_mcp_move_study_tool():
+    from tests.test_cmove_workflow import MockStorageScp
+
+    viewer_port = 11136
+    viewer = MockStorageScp(ae_title="MCP_VIEWER", port=viewer_port)
+    viewer.start()
+
+    session_id = mcp_service.create_session()
+    try:
+        # Move patient PAT-MCP-999
+        res_move_pat = await mcp_service.handle_jsonrpc_request(
+            session_id,
+            {
+                "jsonrpc": "2.0",
+                "id": 20,
+                "method": "tools/call",
+                "params": {
+                    "name": "move_study",
+                    "arguments": {
+                        "patient_id": "PAT-MCP-999",
+                        "target_ae_title": "MCP_VIEWER",
+                        "target_host": "127.0.0.1",
+                        "target_port": viewer_port,
+                    },
+                },
+            },
+        )
+        assert res_move_pat is not None
+        assert res_move_pat["result"]["isError"] is False
+        move_data = json.loads(res_move_pat["result"]["content"][0]["text"])
+        assert move_data["success"] is True
+        assert move_data["patient_id"] == "PAT-MCP-999"
+        assert move_data["instances_sent"] >= 8
+
+        # Move accession ACC-MCP-777
+        res_move_acc = await mcp_service.handle_jsonrpc_request(
+            session_id,
+            {
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "tools/call",
+                "params": {
+                    "name": "move_study",
+                    "arguments": {
+                        "accession": "ACC-MCP-777",
+                        "target_ae_title": "MCP_VIEWER",
+                        "target_host": "127.0.0.1",
+                        "target_port": viewer_port,
+                    },
+                },
+            },
+        )
+        assert res_move_acc is not None
+        assert res_move_acc["result"]["isError"] is False
+        acc_data = json.loads(res_move_acc["result"]["content"][0]["text"])
+        assert acc_data["success"] is True
+        assert acc_data["accession"] == "ACC-MCP-777"
+        assert acc_data["instances_sent"] >= 8
+    finally:
+        viewer.stop()
+        mcp_service.remove_session(session_id)
