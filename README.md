@@ -161,3 +161,8 @@ uv run cyclonedx-py environment --pyproject pyproject.toml .venv -o sbom.json --
 ## Release & Changelog
 
 Releases are distributed strictly as source-code releases. For details on version history, changes, and upgrades, see [CHANGELOG.md](./CHANGELOG.md).
+
+## Contacting the Developer Community
+
+* Join [Discussions](https://github.com/gosmart-health/dicom-py-mock-server/discussions) 
+* Add or Inspect [Issues](https://github.com/gosmart-health/dicom-py-mock-server/issues)
