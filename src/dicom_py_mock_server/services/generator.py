@@ -445,12 +445,18 @@ class DicomGeneratorService:
         ds.SeriesInstanceUID = series_uid
         ds.Modality = request.series.modality
         ds.SeriesNumber = request.series.series_number
-        ds.SeriesDescription = request.series.series_description or ""
+        ds.SeriesDescription = request.series.series_description or f"{request.series.modality} Series"
+        ds.NumberOfSeriesRelatedInstances = request.num_instances
+
+        # General Study Module
+        ds.NumberOfStudyRelatedSeries = 1
+        ds.NumberOfStudyRelatedInstances = request.num_instances
 
         # SOP Common Module
         ds.SOPClassUID = CTImageStorage
         ds.SOPInstanceUID = sop_instance_uid
         ds.InstanceNumber = instance_number
+        ds.Modality = request.series.modality
 
         # Check target transfer syntax for JPEG 8-bit mode
         syntax_to_apply = request.transfer_syntax or getattr(config, "transfer_syntax", "RAW")
@@ -542,7 +548,10 @@ class DicomGeneratorService:
         patient_sex = json_e.get("00100040", {}).get("Value", ["U"])[0]
         patient_dob = json_e.get("00100030", {}).get("Value", [""])[0]
 
-        series_uid = generate_uid()
+        series_uid = mwl_record.get("series_uid") or generate_uid()
+        series_number = int(mwl_record.get("series_number") or 1)
+        series_desc = mwl_record.get("series_description") or f"{modality} Series"
+
         mock_req = MockDicomRequest(
             patient={
                 "patient_id": patient_id,
@@ -560,8 +569,8 @@ class DicomGeneratorService:
             series={
                 "series_instance_uid": series_uid,
                 "modality": modality,
-                "series_number": 1,
-                "series_description": f"{modality} Series",
+                "series_number": series_number,
+                "series_description": series_desc,
             },
             num_instances=num_instances,
             burn_in_text=True,

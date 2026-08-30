@@ -11,7 +11,7 @@ import pydicom
 import structlog
 from pydicom.dataset import Dataset
 from pydicom.sequence import Sequence
-from pydicom.uid import generate_uid
+from pydicom.uid import CTImageStorage, generate_uid
 
 from dicom_py_mock_server.config import AppConfig
 from dicom_py_mock_server.config import config as global_config
@@ -427,6 +427,10 @@ class MwlGeneratorService:
         else:
             num_instances = random.randint(self.config.min_slices, self.config.max_slices)
 
+        custom_sn = (custom.get("seriesNumber") or custom.get("series_number") or 1) if custom else 1
+        custom_suid = (custom.get("seriesUid") or custom.get("series_uid")) if custom else None
+        custom_sdesc = (custom.get("seriesDescription") or custom.get("series_description")) if custom else None
+
         entry_record = {
             "json_entry": json_entry,
             "dataset": dataset,
@@ -436,6 +440,9 @@ class MwlGeneratorService:
             "accession": json_entry["00080050"]["Value"][0],
             "modality": json_entry["00080060"]["Value"][0],
             "study_uid": json_entry["0020000D"]["Value"][0],
+            "series_uid": custom_suid or generate_uid(),
+            "series_number": int(custom_sn),
+            "series_description": custom_sdesc or f"{json_entry['00080060']['Value'][0]} Series",
             "num_instances": num_instances,
         }
 
@@ -446,6 +453,8 @@ class MwlGeneratorService:
             patient_id=entry_record["patient_id"],
             accession=entry_record["accession"],
             modality=entry_record["modality"],
+            study_uid=entry_record["study_uid"],
+            series_uid=entry_record["series_uid"],
             num_instances=entry_record["num_instances"],
         )
         return entry_record
@@ -476,6 +485,9 @@ class MwlGeneratorService:
                 "accession": e["accession"],
                 "modality": e["modality"],
                 "study_uid": e["study_uid"],
+                "series_uid": e.get("series_uid", ""),
+                "series_number": e.get("series_number", 1),
+                "series_description": e.get("series_description", ""),
                 "num_instances": e.get("num_instances", self.config.min_slices),
                 "created_at": e["created_at"].isoformat(),
                 "json_entry": e["json_entry"],
@@ -508,6 +520,7 @@ class MwlGeneratorService:
     def find_entries(
         self,
         study_uid: str | None = None,
+        series_uid: str | None = None,
         patient_id: str | None = None,
         accession: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -516,6 +529,8 @@ class MwlGeneratorService:
         matched = []
         for e in self._entries:
             if study_uid and not self._matches_filter(e.get("study_uid"), study_uid):
+                continue
+            if series_uid and not self._matches_filter(e.get("series_uid"), series_uid):
                 continue
             if patient_id and not self._matches_filter(e.get("patient_id"), patient_id):
                 continue
@@ -526,7 +541,7 @@ class MwlGeneratorService:
 
     @staticmethod
     def to_study_cfind_dataset(entry: dict[str, Any]) -> Dataset:
-        """Convert MWL entry record into a DICOM Study Root C-FIND response Dataset."""
+        """Convert MWL entry record into a DICOM Study Root C-FIND (STUDY Level) response Dataset."""
         ds = Dataset()
         json_e = entry.get("json_entry", {})
 
@@ -549,10 +564,65 @@ class MwlGeneratorService:
         if "00081030" in json_e and json_e["00081030"].get("Value"):
             ds.StudyDescription = json_e["00081030"]["Value"][0]
 
-        ds.ModalitiesInStudy = entry.get("modality", "")
+        modality = entry.get("modality", "CT")
+        ds.ModalitiesInStudy = modality
+        ds.Modality = modality
         ds.NumberOfStudyRelatedSeries = 1
         ds.NumberOfStudyRelatedInstances = int(entry.get("num_instances") or 8)
+
+        # Include Series-level attributes as well so clients requesting Series fields at Study level get full info
+        ds.SeriesInstanceUID = entry.get("series_uid", "")
+        ds.SeriesNumber = int(entry.get("series_number") or 1)
+        ds.SeriesDescription = entry.get("series_description") or f"{modality} Series"
+        ds.NumberOfSeriesRelatedInstances = int(entry.get("num_instances") or 8)
+
         return ds
+
+    @staticmethod
+    def to_series_cfind_dataset(entry: dict[str, Any]) -> Dataset:
+        """Convert MWL entry record into a DICOM Study Root C-FIND (SERIES Level) response Dataset."""
+        ds = Dataset()
+        json_e = entry.get("json_entry", {})
+
+        ds.QueryRetrieveLevel = "SERIES"
+        ds.PatientName = entry.get("patient_name", "")
+        ds.PatientID = entry.get("patient_id", "")
+        ds.StudyInstanceUID = entry.get("study_uid", "")
+        ds.SeriesInstanceUID = entry.get("series_uid", "")
+        modality = entry.get("modality", "CT")
+        ds.Modality = modality
+        ds.SeriesNumber = int(entry.get("series_number") or 1)
+        ds.SeriesDescription = entry.get("series_description") or f"{modality} Series"
+        ds.NumberOfSeriesRelatedInstances = int(entry.get("num_instances") or 8)
+
+        ds.AccessionNumber = entry.get("accession", "")
+        sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
+        ds.StudyDate = sps_seq.get("00400002", {}).get("Value", [""])[0]
+        ds.StudyTime = sps_seq.get("00400003", {}).get("Value", [""])[0]
+
+        return ds
+
+    @staticmethod
+    def to_image_cfind_datasets(entry: dict[str, Any]) -> list[Dataset]:
+        """Convert MWL entry record into DICOM Study Root C-FIND (IMAGE Level) response Datasets."""
+        num_instances = int(entry.get("num_instances") or 8)
+        modality = entry.get("modality", "CT")
+        datasets = []
+        for i in range(1, num_instances + 1):
+            ds = Dataset()
+            ds.QueryRetrieveLevel = "IMAGE"
+            ds.PatientName = entry.get("patient_name", "")
+            ds.PatientID = entry.get("patient_id", "")
+            ds.StudyInstanceUID = entry.get("study_uid", "")
+            ds.SeriesInstanceUID = entry.get("series_uid", "")
+            ds.SOPInstanceUID = generate_uid()
+            ds.SOPClassUID = CTImageStorage
+            ds.InstanceNumber = i
+            ds.Modality = modality
+            ds.SeriesNumber = int(entry.get("series_number") or 1)
+            ds.NumberOfSeriesRelatedInstances = num_instances
+            datasets.append(ds)
+        return datasets
 
     def get_status(self) -> dict[str, Any]:
         """Get current MWL generator service status and configuration."""

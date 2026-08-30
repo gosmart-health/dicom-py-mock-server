@@ -1,5 +1,3 @@
-"""Tests for FastAPI endpoints."""
-
 from fastapi.testclient import TestClient
 
 from dicom_py_mock_server.main import app
