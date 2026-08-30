@@ -92,6 +92,11 @@ class DicomScpService:
                 if identifier and "StudyInstanceUID" in identifier and identifier.StudyInstanceUID
                 else None
             )
+            series_uid = (
+                str(identifier.get("SeriesInstanceUID", ""))
+                if identifier and "SeriesInstanceUID" in identifier and identifier.SeriesInstanceUID
+                else None
+            )
             patient_id = (
                 str(identifier.get("PatientID", ""))
                 if identifier and "PatientID" in identifier and identifier.PatientID
@@ -103,17 +108,29 @@ class DicomScpService:
                 else None
             )
 
+            qr_level = "STUDY"
+            if identifier and "QueryRetrieveLevel" in identifier and identifier.QueryRetrieveLevel:
+                qr_level = str(identifier.QueryRetrieveLevel).strip().upper()
+
             matched_entries = self.mwl_service.find_entries(
-                study_uid=study_uid, patient_id=patient_id, accession=accession
+                study_uid=study_uid, series_uid=series_uid, patient_id=patient_id, accession=accession
             )
-            if not matched_entries and not study_uid and not patient_id and not accession:
-                # If no specific key passed, return all active MWL entries converted to Study C-FIND responses
+            if not matched_entries and not study_uid and not series_uid and not patient_id and not accession:
+                # If no specific key passed, return all active MWL entries
                 self.mwl_service.purge_expired_entries()
                 matched_entries = self.mwl_service._entries
 
             for entry in matched_entries:
-                cfind_ds = self.mwl_service.to_study_cfind_dataset(entry)
-                yield (0xFF00, cfind_ds)
+                if qr_level == "SERIES":
+                    cfind_ds = self.mwl_service.to_series_cfind_dataset(entry)
+                    yield (0xFF00, cfind_ds)
+                elif qr_level in ("IMAGE", "INSTANCE"):
+                    image_datasets = self.mwl_service.to_image_cfind_datasets(entry)
+                    for img_ds in image_datasets:
+                        yield (0xFF00, img_ds)
+                else:
+                    cfind_ds = self.mwl_service.to_study_cfind_dataset(entry)
+                    yield (0xFF00, cfind_ds)
 
             yield (0x0000, None)
 
@@ -153,6 +170,11 @@ class DicomScpService:
             if identifier and "StudyInstanceUID" in identifier and identifier.StudyInstanceUID
             else None
         )
+        series_uid = (
+            str(identifier.get("SeriesInstanceUID", ""))
+            if identifier and "SeriesInstanceUID" in identifier and identifier.SeriesInstanceUID
+            else None
+        )
         patient_id = (
             str(identifier.get("PatientID", ""))
             if identifier and "PatientID" in identifier and identifier.PatientID
@@ -167,9 +189,9 @@ class DicomScpService:
         matched_entries = []
         if self.mwl_service:
             matched_entries = self.mwl_service.find_entries(
-                study_uid=study_uid, patient_id=patient_id, accession=accession
+                study_uid=study_uid, series_uid=series_uid, patient_id=patient_id, accession=accession
             )
-            if not matched_entries and not study_uid and not patient_id and not accession:
+            if not matched_entries and not study_uid and not series_uid and not patient_id and not accession:
                 self.mwl_service.purge_expired_entries()
                 matched_entries = self.mwl_service._entries
             elif not matched_entries and (study_uid or patient_id or accession):
@@ -272,10 +294,18 @@ class DicomScpService:
             (evt.EVT_C_STORE, self._handle_store),
         ]
 
-        self.server = self.ae.start_server((host, self.port), block=False, evt_handlers=handlers)
-        self.is_running = True
-        logger.info("dicom_scp_server_started", host=host, port=self.port, ae_title=self.ae_title)
-        return self.get_status()
+        for attempt in range(3):
+            try:
+                self.server = self.ae.start_server((host, self.port), block=False, evt_handlers=handlers)
+                self.is_running = True
+                logger.info("dicom_scp_server_started", host=host, port=self.port, ae_title=self.ae_title)
+                return self.get_status()
+            except OSError as exc:
+                if attempt == 2:
+                    raise exc
+                import time
+
+                time.sleep(0.2)
 
     def stop(self) -> ScpStatusResponse:
         """Stop the DICOM SCP server."""

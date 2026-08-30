@@ -90,7 +90,7 @@ def test_full_mwl_cfind_cmove_workflow():
         assert len(mwl_matches) == 1
         assert str(mwl_matches[0].PatientID) == patient_id
 
-        # 4. Test Study Root C-FIND
+        # 4. Test Study Root C-FIND (STUDY Level)
         ae_study = AE(ae_title="CLIENT_SCU")
         ae_study.add_requested_context(StudyRootQueryRetrieveInformationModelFind)
         assoc_study = ae_study.associate("127.0.0.1", scp_port)
@@ -107,6 +107,30 @@ def test_full_mwl_cfind_cmove_workflow():
         assert str(study_matches[0].StudyInstanceUID) == study_uid
         assert str(study_matches[0].PatientID) == patient_id
         assert str(study_matches[0].PatientName) == patient_name
+        assert str(study_matches[0].SeriesInstanceUID) != ""
+        assert str(study_matches[0].Modality) == "CT"
+        assert int(study_matches[0].SeriesNumber) == 1
+        assert int(study_matches[0].NumberOfSeriesRelatedInstances) > 0
+
+        # 4b. Test Study Root C-FIND (SERIES Level)
+        ae_series = AE(ae_title="CLIENT_SCU")
+        ae_series.add_requested_context(StudyRootQueryRetrieveInformationModelFind)
+        assoc_series = ae_series.associate("127.0.0.1", scp_port)
+        assert assoc_series.is_established
+
+        series_query = Dataset()
+        series_query.QueryRetrieveLevel = "SERIES"
+        series_query.StudyInstanceUID = study_uid
+        series_responses = list(assoc_series.send_c_find(series_query, StudyRootQueryRetrieveInformationModelFind))
+        assoc_series.release()
+
+        series_matches = [ds for status, ds in series_responses if status and status.Status == 0xFF00 and ds]
+        assert len(series_matches) == 1
+        assert str(series_matches[0].StudyInstanceUID) == study_uid
+        assert str(series_matches[0].SeriesInstanceUID) != ""
+        assert str(series_matches[0].Modality) == "CT"
+        assert int(series_matches[0].SeriesNumber) == 1
+        assert int(series_matches[0].NumberOfSeriesRelatedInstances) > 0
 
         # 5. Test C-MOVE
         ae_move = AE(ae_title="CLIENT_SCU")
@@ -138,6 +162,10 @@ def test_full_mwl_cfind_cmove_workflow():
             assert str(ds.PatientID) == patient_id
             assert str(ds.PatientName) == patient_name
             assert str(ds.StudyInstanceUID) == study_uid
+            assert str(ds.SeriesInstanceUID) != ""
+            assert str(ds.Modality) == "CT"
+            assert int(ds.SeriesNumber) == 1
+            assert int(ds.NumberOfSeriesRelatedInstances) == expected_slices
             assert ds.PixelData is not None
             assert len(ds.PixelData) > 0
 
