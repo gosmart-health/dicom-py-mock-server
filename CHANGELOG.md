@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.0.2] - 2026-08-30
+- **Fixed Issue 5** Fixed the bug where C-FIND does not return all needed attributes.
+
 ## [0.0.1] - 2026-08-28
 
 ### Added
