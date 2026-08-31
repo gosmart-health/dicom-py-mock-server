@@ -109,6 +109,20 @@ class AppConfig(BaseSettings):
         validation_alias=AliasChoices("GOSMART_MS_PATIENT_SUFFIX", "PATIENT_SUFFIX"),
         description="Suffix appended to patient last name to avoid PACS collisions",
     )
+    pn_suffix: str = Field(
+        default="_GSH",
+        validation_alias=AliasChoices("GOSMART_MS_PN_SUFFIX", "PN_SUFFIX"),
+        description="Suffix appended to generated physician names to avoid PACS collisions",
+    )
+    institution_name: str = Field(
+        default="GO SMART CLINIC",
+        validation_alias=AliasChoices(
+            "GOSMART_MS_INSTITUTION_NAME",
+            "GORMART_MS_INSTITUTION_NAME",
+            "INSTITUTION_NAME",
+        ),
+        description="Default Institution Name attribute for generated DICOM studies and MWL entries",
+    )
     id_prefix: str = Field(
         default="GSH-",
         validation_alias=AliasChoices("GOSMART_MS_ID_PREFIX", "ID_PREFIX"),

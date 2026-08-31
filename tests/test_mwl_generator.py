@@ -18,23 +18,27 @@ def test_person_generator():
     assert person.gender in ("M", "F")
     assert isinstance(person.dob, date)
 
-    # Physician generator (is_patient=False) should not have patient suffix
+    # Physician generator (is_patient=False) uses pn_suffix (default _GSH)
     physician = gen.generate("MD", is_patient=False)
-    assert not physician.name.split("^")[0].endswith("_GSH")
+    assert physician.name.split("^")[0].endswith("_GSH")
     assert not physician.mrn.startswith("GSH-")
 
     # PersonGenerator with custom suffix/prefix
-    custom_gen = PersonGenerator(patient_suffix="_CUST", id_prefix="CUST-")
+    custom_gen = PersonGenerator(patient_suffix="_CUST", id_prefix="CUST-", pn_suffix="_DOC")
     custom_patient = custom_gen.generate()
     assert custom_patient.name.split("^")[0].endswith("_CUST")
     assert custom_patient.mrn.startswith("CUST-")
+    custom_physician = custom_gen.generate("MD", is_patient=False)
+    assert custom_physician.name.split("^")[0].endswith("_DOC")
 
     # PersonGenerator with empty suffix/prefix
-    plain_gen = PersonGenerator(patient_suffix="", id_prefix="")
+    plain_gen = PersonGenerator(patient_suffix="", id_prefix="", pn_suffix="")
     plain_patient = plain_gen.generate()
     assert not plain_patient.name.split("^")[0].endswith("_GSH")
     assert not plain_patient.mrn.startswith("GSH-")
     assert len(plain_patient.mrn) == 8
+    plain_physician = plain_gen.generate("MD", is_patient=False)
+    assert not plain_physician.name.split("^")[0].endswith("_GSH")
 
 
 def test_mwl_generator_default_templates(tmp_path):

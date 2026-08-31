@@ -101,10 +101,16 @@ class MwlGeneratorService:
         self.patient_generator = patient_generator or PersonGenerator(
             patient_suffix=self.config.patient_suffix,
             id_prefix=self.config.id_prefix,
+            pn_suffix=self.config.pn_suffix,
         )
         self.template_modalities: dict[str, dict[str, Any]] = {}
         self.dicom_templates: dict[str, list[Dataset]] = {}
         self.departments: list[dict[str, Any]] = []
+
+        # Initial pools of 3 physician names for each role
+        self.referring_physicians: list[str] = self.patient_generator.generate_physician_pool(count=3, title="MD")
+        self.performing_physicians: list[str] = self.patient_generator.generate_physician_pool(count=3, title="MD")
+        self.reading_physicians: list[str] = self.patient_generator.generate_physician_pool(count=3, title="MD")
 
         # Active MWL in-memory storage: list of dicts with dataset, json_entry, created_at
         self._entries: list[dict[str, Any]] = []
@@ -238,8 +244,24 @@ class MwlGeneratorService:
 
         # Patient demographics
         patient = self.patient_generator.generate(is_patient=True)
-        attending = self.patient_generator.generate("MD", is_patient=False)
-        referring = self.patient_generator.generate("MD", is_patient=False)
+
+        # Physician demographics - randomly pick from startup-generated pools
+        referring_name = (
+            random.choice(self.referring_physicians)
+            if self.referring_physicians
+            else self.patient_generator.generate_physician("MD").name
+        )
+        performing_name = (
+            random.choice(self.performing_physicians)
+            if self.performing_physicians
+            else self.patient_generator.generate_physician("MD").name
+        )
+        reading_name = (
+            random.choice(self.reading_physicians)
+            if self.reading_physicians
+            else self.patient_generator.generate_physician("MD").name
+        )
+        institution = self.config.institution_name
 
         # IDs and UIDs
         accession = PersonGenerator.generate_random_id(8, prefix=self.config.id_prefix)
@@ -255,9 +277,6 @@ class MwlGeneratorService:
         patient_id = patient.mrn
         dob_str = patient.dob.strftime("%Y%m%d")
         sex = patient.gender
-        referring_name = referring.name
-        attending_name = attending.name
-        institution = "ZenSnap Health System"
         scheduled_station_ae = "ZEN_SNAP_MD"
         scheduled_station_name = "ZenSnapMD 4.1"
 
@@ -276,6 +295,20 @@ class MwlGeneratorService:
             study_uid = custom.get("studyUid") or study_uid
             description = custom.get("studyDescription") or custom.get("reason") or description
             department_name = custom.get("department") or department_name
+            referring_name = custom.get("referringPhysician") or custom.get("referring_physician") or referring_name
+            performing_name = (
+                custom.get("performingPhysician")
+                or custom.get("performing_physician")
+                or custom.get("attendingPhysician")
+                or performing_name
+            )
+            reading_name = custom.get("readingPhysician") or custom.get("reading_physician") or reading_name
+            institution = (
+                custom.get("institutionName")
+                or custom.get("institution_name")
+                or custom.get("institution")
+                or institution
+            )
             if custom.get("studyDate") and isinstance(custom["studyDate"], datetime):
                 start_date = custom["studyDate"].strftime("%Y%m%d")
                 start_time = custom["studyDate"].strftime("%H%M%S")
@@ -289,6 +322,8 @@ class MwlGeneratorService:
             "00080090": {"vr": "PN", "Value": [{"Alphabetic": referring_name}]},
             "00081030": {"vr": "LO", "Value": [description]},
             "00081040": {"vr": "LO", "Value": [department_name]},
+            "00081050": {"vr": "PN", "Value": [{"Alphabetic": performing_name}]},
+            "00081060": {"vr": "PN", "Value": [{"Alphabetic": reading_name}]},
             "00100010": {"vr": "PN", "Value": [{"Alphabetic": patient_name}]},
             "00100020": {"vr": "LO", "Value": [patient_id]},
             "00100030": {"vr": "DA", "Value": [dob_str]},
@@ -321,7 +356,7 @@ class MwlGeneratorService:
                         "00400001": {"vr": "AE", "Value": [scheduled_station_ae]},
                         "00400002": {"vr": "DA", "Value": [start_date]},
                         "00400003": {"vr": "TM", "Value": [start_time]},
-                        "00400006": {"vr": "PN", "Value": attending_name},
+                        "00400006": {"vr": "PN", "Value": [{"Alphabetic": performing_name}]},
                         "00400007": {"vr": "LO", "Value": [description]},
                         "00400008": {
                             "vr": "SQ",
@@ -364,6 +399,14 @@ class MwlGeneratorService:
         # Referring Physician's Name
         ref_pn = json_entry["00080090"]["Value"][0]
         ds.ReferringPhysicianName = ref_pn.get("Alphabetic", "") if isinstance(ref_pn, dict) else ref_pn
+        # Performing Physician's Name
+        if "00081050" in json_entry and json_entry["00081050"].get("Value"):
+            perf_pn = json_entry["00081050"]["Value"][0]
+            ds.PerformingPhysicianName = perf_pn.get("Alphabetic", "") if isinstance(perf_pn, dict) else perf_pn
+        # Name of Physician(s) Reading Study
+        if "00081060" in json_entry and json_entry["00081060"].get("Value"):
+            read_pn = json_entry["00081060"]["Value"][0]
+            ds.NameOfPhysiciansReadingStudy = read_pn.get("Alphabetic", "") if isinstance(read_pn, dict) else read_pn
         # Study Description
         ds.StudyDescription = json_entry["00081030"]["Value"][0]
         # Institutional Department Name
@@ -392,7 +435,14 @@ class MwlGeneratorService:
             sps_ds.ScheduledStationAETitle = sps_item["00400001"]["Value"][0]
             sps_ds.ScheduledProcedureStepStartDate = sps_item["00400002"]["Value"][0]
             sps_ds.ScheduledProcedureStepStartTime = sps_item["00400003"]["Value"][0]
-            sps_ds.ScheduledPerformingPhysicianName = sps_item["00400006"]["Value"]
+            sps_raw_perf = sps_item["00400006"]["Value"]
+            if isinstance(sps_raw_perf, list) and len(sps_raw_perf) > 0:
+                sps_perf_val = sps_raw_perf[0]
+            else:
+                sps_perf_val = sps_raw_perf
+            sps_ds.ScheduledPerformingPhysicianName = (
+                sps_perf_val.get("Alphabetic", "") if isinstance(sps_perf_val, dict) else sps_perf_val
+            )
             sps_ds.ScheduledProcedureStepDescription = sps_item["00400007"]["Value"][0]
             sps_ds.ScheduledProcedureStepID = sps_item["00400009"]["Value"][0]
             sps_ds.ScheduledStationName = sps_item["00400010"]["Value"][0]
@@ -431,6 +481,14 @@ class MwlGeneratorService:
         custom_suid = (custom.get("seriesUid") or custom.get("series_uid")) if custom else None
         custom_sdesc = (custom.get("seriesDescription") or custom.get("series_description")) if custom else None
 
+        ref_val = json_entry["00080090"]["Value"][0]
+        ref_name = ref_val.get("Alphabetic", "") if isinstance(ref_val, dict) else ref_val
+        perf_val = json_entry.get("00081050", {}).get("Value", [""])[0]
+        perf_name = perf_val.get("Alphabetic", "") if isinstance(perf_val, dict) else perf_val
+        read_val = json_entry.get("00081060", {}).get("Value", [""])[0]
+        read_name = read_val.get("Alphabetic", "") if isinstance(read_val, dict) else read_val
+        inst_name = json_entry.get("00080080", {}).get("Value", [""])[0]
+
         entry_record = {
             "json_entry": json_entry,
             "dataset": dataset,
@@ -443,6 +501,10 @@ class MwlGeneratorService:
             "series_uid": custom_suid or generate_uid(),
             "series_number": int(custom_sn),
             "series_description": custom_sdesc or f"{json_entry['00080060']['Value'][0]} Series",
+            "referring_physician": ref_name,
+            "performing_physician": perf_name,
+            "reading_physician": read_name,
+            "institution_name": inst_name,
             "num_instances": num_instances,
         }
 
@@ -488,6 +550,10 @@ class MwlGeneratorService:
                 "series_uid": e.get("series_uid", ""),
                 "series_number": e.get("series_number", 1),
                 "series_description": e.get("series_description", ""),
+                "referring_physician": e.get("referring_physician"),
+                "performing_physician": e.get("performing_physician"),
+                "reading_physician": e.get("reading_physician"),
+                "institution_name": e.get("institution_name"),
                 "num_instances": e.get("num_instances", self.config.min_slices),
                 "created_at": e["created_at"].isoformat(),
                 "json_entry": e["json_entry"],
@@ -556,6 +622,32 @@ class MwlGeneratorService:
         ds.StudyInstanceUID = entry.get("study_uid", "")
         ds.AccessionNumber = entry.get("accession", "")
 
+        # Institution and Physician names
+        inst_name = entry.get("institution_name") or json_e.get("00080080", {}).get("Value", [""])[0]
+        if inst_name:
+            ds.InstitutionName = inst_name
+
+        ref_phys = entry.get("referring_physician")
+        if not ref_phys and "00080090" in json_e and json_e["00080090"].get("Value"):
+            ref_raw = json_e["00080090"]["Value"][0]
+            ref_phys = ref_raw.get("Alphabetic", "") if isinstance(ref_raw, dict) else ref_raw
+        if ref_phys:
+            ds.ReferringPhysicianName = ref_phys
+
+        perf_phys = entry.get("performing_physician")
+        if not perf_phys and "00081050" in json_e and json_e["00081050"].get("Value"):
+            perf_raw = json_e["00081050"]["Value"][0]
+            perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
+        if perf_phys:
+            ds.PerformingPhysicianName = perf_phys
+
+        read_phys = entry.get("reading_physician")
+        if not read_phys and "00081060" in json_e and json_e["00081060"].get("Value"):
+            read_raw = json_e["00081060"]["Value"][0]
+            read_phys = read_raw.get("Alphabetic", "") if isinstance(read_raw, dict) else read_raw
+        if read_phys:
+            ds.NameOfPhysiciansReadingStudy = read_phys
+
         # Study Date & Time from SPS sequence if available
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
         ds.StudyDate = sps_seq.get("00400002", {}).get("Value", [""])[0]
@@ -594,6 +686,18 @@ class MwlGeneratorService:
         ds.SeriesNumber = int(entry.get("series_number") or 1)
         ds.SeriesDescription = entry.get("series_description") or f"{modality} Series"
         ds.NumberOfSeriesRelatedInstances = int(entry.get("num_instances") or 8)
+
+        # Institution and Performing Physician
+        inst_name = entry.get("institution_name") or json_e.get("00080080", {}).get("Value", [""])[0]
+        if inst_name:
+            ds.InstitutionName = inst_name
+
+        perf_phys = entry.get("performing_physician")
+        if not perf_phys and "00081050" in json_e and json_e["00081050"].get("Value"):
+            perf_raw = json_e["00081050"]["Value"][0]
+            perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
+        if perf_phys:
+            ds.PerformingPhysicianName = perf_phys
 
         ds.AccessionNumber = entry.get("accession", "")
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]

@@ -46,16 +46,24 @@ graph TD
 
 ### 3.2 Models Subsystem (`src/dicom_py_mock_server/models/`)
 * **`PatientModel`**: Patient demographics (`patient_id`, `patient_name`, `patient_birth_date`, `patient_sex`).
-* **`StudyModel`**: Study metadata (`study_instance_uid`, `study_date`, `study_time`, `accession_number`, `study_description`).
-* **`SeriesModel`**: Series metadata (`series_instance_uid`, `modality`, `series_number`, `series_description`).
+* **`StudyModel`**: Study metadata (`study_instance_uid`, `study_date`, `study_time`, `accession_number`, `study_description`, `institution_name`, `referring_physician_name`, `reading_physician_name`, `performing_physician_name`).
+* **`SeriesModel`**: Series metadata (`series_instance_uid`, `modality`, `series_number`, `series_description`, `performing_physician_name`).
 * **`WorklistTemplateModel`**: Configures template SOP baseline, scheduled procedure step specs, and gender-aligned name selection criteria (loaded from JSON lists of gender-specific first names and common US last names).
 * **`MockDicomRequest`**: Validates generation specs (`num_instances`, `rows`, `columns`, OCR burned-in text options, patient/study/series specs).
 * **`MockDicomResponse`**: Returns generation results, file paths, and UIDs.
 * **`ScpStatusResponse`**: Returns AE Title, port, running state, and supported DICOM services (C-ECHO, C-FIND, C-MOVE, C-GET, MWL, C-STORE).
 
-### 3.3 Generator Subsystem (`src/dicom_py_mock_server/services/generator.py`)
+### 3.3 Generator Subsystem (`src/dicom_py_mock_server/services/generator.py` & `mwl_generator.py` & `person_generator.py`)
+* **`PersonGenerator`**:
+  - Generates synthetic patient demographics with configurable `GOSMART_MS_PATIENT_SUFFIX` (`_GSH`).
+  - Generates physician records with configurable `GOSMART_MS_PN_SUFFIX` (`_GSH`).
+  - Provides helper methods to instantiate initial pools of 3 Referring, 3 Performing, and 3 Reading Physicians on startup.
+* **`MwlGeneratorService`**:
+  - Initializes 3 Referring, 3 Performing, and 3 Reading Physicians on startup.
+  - Randomly selects physician roles for Modality Worklist (MWL) entries and populates `InstitutionName` (`GORMART_MS_INSTITUTION_NAME` / `GOSMART_MS_INSTITUTION_NAME`).
 * **`DicomGeneratorService`**:
   - **Template-Based Synthesis**: Loads base DICOM SOP templates and synthesizes compliant DICOM datasets and Modality Worklist items. Note: The generator does NOT perform de-identification on template files. Patient Name, Patient ID, Patient Sex, Study Date & Time, DICOM UIDs (Study/Series/SOP Instance), and image pixel data are generated and replaced; all other DICOM elements (including private data elements) are passed through "as is".
+  - **Physician & Institution Attribute Propagation**: Propagates Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) from MWL entries and request specs into synthesized SOP instances during C-MOVE / push flows.
   - **Gender-Aligned Name Synthesizer**: Uses JSON data files containing gender-specific first names (male/female) and common US last names to generate realistic patient names matching DICOM `PatientSex` (`M`/`F`).
   - **Burned-In Text OCR Engine**: Renders high-contrast, OCR-readable text (containing image number, patient name, and patient ID) directly into image pixel arrays using Pillow/OpenCV text drawing before standard DICOM pixel array encoding.
   - **Ephemeral On-The-Fly Generation**: Synthesizes DICOM instances in memory on the fly and streams datasets during SCP network transfers, keeping local disk storage usage minimal even during high-concurrency stress testing.

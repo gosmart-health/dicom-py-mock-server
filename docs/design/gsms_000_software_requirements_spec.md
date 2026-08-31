@@ -38,6 +38,8 @@ This document specifies the functional, performance, security, and interface req
 | **REQ-FUN-016** | Scheduled Auto-Push Delivery | The system SHALL support automated background image push capabilities mimicking daily 9-5 peak activity schedules and slower off-peak generation intervals. | High |
 | **REQ-FUN-017** | Headless CI/CD Test Automation | The system SHALL support fully headless execution as a Mock SCP for integration into CI/CD test automation pipelines. | High |
 | **REQ-FUN-018** | Headless Stress Testing | The system SHALL support high-concurrency stress testing scenarios for DICOM network interactions and generation pipelines. | High |
+| **REQ-FUN-019** | Physician & Institution Demographics Generation | The system SHALL generate 3 Referring Physician, 3 Performing Physician, and 3 Reading Physician names with configurable `GOSMART_MS_PN_SUFFIX` (default `_GSH`), support default institution name `GORMART_MS_INSTITUTION_NAME` (default `GO SMART CLINIC`), and randomly assign physicians into synthesized Modality Worklist (MWL) entries. | High |
+| **REQ-FUN-020** | Physician & Institution SOP Instance Propagation | The system SHALL propagate Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) attributes to all synthesized DICOM SOP instances and C-MOVE / push operations. | High |
 
 ---
 

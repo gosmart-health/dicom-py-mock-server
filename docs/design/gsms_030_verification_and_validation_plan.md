@@ -22,6 +22,8 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
   - Verify `pydicom` dataset tag population, transfer syntax setting, and pixel array generation.
   - Verify template SOP parsing and gender-aligned patient name synthesis using JSON first/last name lists (`PatientSex` = `M`/`F`).
   - Verify OCR text renderer injects clear burned-in text (image number, patient name, patient ID) into pixel data.
+  - Verify startup generation of 3 Referring, 3 Performing, and 3 Reading Physician pools with `pn_suffix` and default `institution_name`.
+  - Verify random physician assignment into MWL entries and propagation of Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) to SOP instances.
 
 ### 2.2 API & Integration Testing (Level 2)
 * **Scope:** FastAPI route handlers, Uvicorn app initialization, auto-push scheduler, and endpoint responses.
