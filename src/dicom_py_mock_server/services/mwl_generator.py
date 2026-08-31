@@ -11,12 +11,17 @@ import pydicom
 import structlog
 from pydicom.dataset import Dataset
 from pydicom.sequence import Sequence
-from pydicom.uid import CTImageStorage, generate_uid
+from pydicom.uid import CTImageStorage
 
 from dicom_py_mock_server.config import AppConfig
 from dicom_py_mock_server.config import config as global_config
 from dicom_py_mock_server.services.generator import get_random_study_description
 from dicom_py_mock_server.services.person_generator import PersonGenerator
+from dicom_py_mock_server.services.uid_generator import (
+    generate_series_uid,
+    generate_sop_instance_uid,
+    generate_study_uid,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -265,8 +270,6 @@ class MwlGeneratorService:
 
         # IDs and UIDs
         accession = PersonGenerator.generate_random_id(8, prefix=self.config.id_prefix)
-        study_uid = generate_uid()
-        sop_instance_uid = generate_uid()
         sps_id = PersonGenerator.generate_random_id(5)
         req_proc_id = PersonGenerator.generate_random_id(4)
 
@@ -281,6 +284,7 @@ class MwlGeneratorService:
         scheduled_station_name = "ZenSnapMD 4.1"
 
         # Apply overrides if custom dictionary provided
+        custom_study_uid = None
         if custom:
             patient_name = custom.get("patientName") or patient_name
             patient_id = custom.get("patientId") or custom.get("mrn") or patient_id
@@ -292,7 +296,7 @@ class MwlGeneratorService:
             sex = custom.get("sex") or custom.get("gender") or sex
             modality = custom.get("modality") or modality
             accession = custom.get("accession") or accession
-            study_uid = custom.get("studyUid") or study_uid
+            custom_study_uid = custom.get("studyUid") or custom.get("study_uid")
             description = custom.get("studyDescription") or custom.get("reason") or description
             department_name = custom.get("department") or department_name
             referring_name = custom.get("referringPhysician") or custom.get("referring_physician") or referring_name
@@ -312,6 +316,10 @@ class MwlGeneratorService:
             if custom.get("studyDate") and isinstance(custom["studyDate"], datetime):
                 start_date = custom["studyDate"].strftime("%Y%m%d")
                 start_time = custom["studyDate"].strftime("%H%M%S")
+
+        study_uid = custom_study_uid or generate_study_uid(patient_name, patient_id, accession)
+        series_uid = generate_series_uid(study_uid, 1)
+        sop_instance_uid = generate_sop_instance_uid(series_uid, 1)
 
         json_entry = {
             "00080005": {"vr": "CS", "Value": ["ISO_IR 192"]},
@@ -498,7 +506,7 @@ class MwlGeneratorService:
             "accession": json_entry["00080050"]["Value"][0],
             "modality": json_entry["00080060"]["Value"][0],
             "study_uid": json_entry["0020000D"]["Value"][0],
-            "series_uid": custom_suid or generate_uid(),
+            "series_uid": custom_suid or generate_series_uid(json_entry["0020000D"]["Value"][0], custom_sn),
             "series_number": int(custom_sn),
             "series_description": custom_sdesc or f"{json_entry['00080060']['Value'][0]} Series",
             "referring_physician": ref_name,
@@ -711,15 +719,17 @@ class MwlGeneratorService:
         """Convert MWL entry record into DICOM Study Root C-FIND (IMAGE Level) response Datasets."""
         num_instances = int(entry.get("num_instances") or 8)
         modality = entry.get("modality", "CT")
+        study_uid = entry.get("study_uid", "")
+        series_uid = entry.get("series_uid") or generate_series_uid(study_uid, entry.get("series_number") or 1)
         datasets = []
         for i in range(1, num_instances + 1):
             ds = Dataset()
             ds.QueryRetrieveLevel = "IMAGE"
             ds.PatientName = entry.get("patient_name", "")
             ds.PatientID = entry.get("patient_id", "")
-            ds.StudyInstanceUID = entry.get("study_uid", "")
-            ds.SeriesInstanceUID = entry.get("series_uid", "")
-            ds.SOPInstanceUID = generate_uid()
+            ds.StudyInstanceUID = study_uid
+            ds.SeriesInstanceUID = series_uid
+            ds.SOPInstanceUID = generate_sop_instance_uid(series_uid, i)
             ds.SOPClassUID = CTImageStorage
             ds.InstanceNumber = i
             ds.Modality = modality

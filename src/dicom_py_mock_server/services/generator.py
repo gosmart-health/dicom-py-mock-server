@@ -20,7 +20,6 @@ from pydicom.uid import (
     JPEG2000Lossless,
     JPEGBaseline8Bit,
     RLELossless,
-    generate_uid,
 )
 
 from dicom_py_mock_server.config import config
@@ -28,6 +27,11 @@ from dicom_py_mock_server.models.dicom import (
     MockDicomRequest,
     MockDicomResponse,
     RawImageGeneratorRequest,
+)
+from dicom_py_mock_server.services.uid_generator import (
+    generate_series_uid,
+    generate_sop_instance_uid,
+    generate_study_uid,
 )
 
 logger = structlog.get_logger(__name__)
@@ -409,9 +413,12 @@ class DicomGeneratorService:
     @classmethod
     def create_dicom_file(cls, request: MockDicomRequest, instance_number: int = 1) -> FileDataset:
         """Create a single pydicom FileDataset populated with metadata and pixel data."""
-        study_uid = request.study.study_instance_uid or generate_uid()
-        series_uid = request.series.series_instance_uid or generate_uid()
-        sop_instance_uid = generate_uid()
+        patient_id = request.patient.patient_id
+        patient_name = request.patient.patient_name
+        accession = request.study.accession_number or ""
+        study_uid = request.study.study_instance_uid or generate_study_uid(patient_name, patient_id, accession)
+        series_uid = request.series.series_instance_uid or generate_series_uid(study_uid, request.series.series_number)
+        sop_instance_uid = generate_sop_instance_uid(series_uid, instance_number)
 
         # File Meta Information
         file_meta = FileMetaDataset()
@@ -423,8 +430,6 @@ class DicomGeneratorService:
         ds = FileDataset("mock.dcm", {}, file_meta=file_meta, preamble=b"\x00" * 128)
 
         # Patient Module
-        patient_id = request.patient.patient_id
-        patient_name = request.patient.patient_name
         ds.PatientID = patient_id
         ds.PatientName = patient_name
         if request.patient.patient_birth_date:
@@ -547,8 +552,8 @@ class DicomGeneratorService:
         json_e = mwl_record.get("json_entry", {})
         patient_id = mwl_record.get("patient_id") or f"{getattr(config, 'id_prefix', 'GSH-')}MOCK_PATIENT_ID"
         patient_name = mwl_record.get("patient_name") or f"MOCK{getattr(config, 'patient_suffix', '_GSH')}^PATIENT"
-        study_uid = mwl_record.get("study_uid") or generate_uid()
         accession = mwl_record.get("accession") or f"{getattr(config, 'id_prefix', 'GSH-')}ACC-001"
+        study_uid = mwl_record.get("study_uid") or generate_study_uid(patient_name, patient_id, accession)
         modality = mwl_record.get("modality", "CT")
 
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
@@ -593,8 +598,8 @@ class DicomGeneratorService:
             if not inst_name and hasattr(mwl_ds, "InstitutionName"):
                 inst_name = str(mwl_ds.InstitutionName)
 
-        series_uid = mwl_record.get("series_uid") or generate_uid()
         series_number = int(mwl_record.get("series_number") or 1)
+        series_uid = mwl_record.get("series_uid") or generate_series_uid(study_uid, series_number)
         series_desc = mwl_record.get("series_description") or f"{modality} Series"
 
         mock_req = MockDicomRequest(
@@ -637,8 +642,11 @@ class DicomGeneratorService:
         out_path = Path(target_dir)
         out_path.mkdir(parents=True, exist_ok=True)
 
-        study_uid = request.study.study_instance_uid or generate_uid()
-        series_uid = request.series.series_instance_uid or generate_uid()
+        patient_id = request.patient.patient_id
+        patient_name = request.patient.patient_name
+        accession = request.study.accession_number or ""
+        study_uid = request.study.study_instance_uid or generate_study_uid(patient_name, patient_id, accession)
+        series_uid = request.series.series_instance_uid or generate_series_uid(study_uid, request.series.series_number)
 
         # Update request object with UIDs if generated
         request.study.study_instance_uid = study_uid

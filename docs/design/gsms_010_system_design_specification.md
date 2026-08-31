@@ -79,6 +79,24 @@ graph TD
   - Registers presentation contexts for Verification (C-ECHO), Patient/Study Root Query/Retrieve (C-FIND, C-MOVE, C-GET), Modality Worklist (MWL C-FIND), and Storage (C-STORE).
   - Manages background non-blocking execution thread (`ae.start_server(..., block=False)`) for headless operation in CI/CD pipelines and stress testing.
 
+### 3.6 CSV Audit Logging Subsystem (`src/dicom_py_mock_server/services/csv_audit.py`)
+* **`CStoreAuditSession` & `CStoreAuditRecord`**:
+  - Automatically records C-STORE transfers per association across SCU push, C-MOVE retrievals, and incoming Storage SCP transactions.
+  - Generates audit files on local storage (`GORMART_MS_CSV_PATH`, default `./csv`) named `yyyymmddhhmmss_<AE_Title>.csv` in UTC.
+  - Formats CSV header `Date,Time,Destination AE,Status,Patient Name,Patient ID,Accession Number,Study UID,Series UID,Instance UID,Transfer Rate kb/s`.
+  - Computes transfer throughput in `kb/s` and categorizes association status (`Accepted`, `Rejected`, `No Connection`, `Dropped`).
+
+### 3.7 UID Generator Subsystem (`src/dicom_py_mock_server/services/uid_generator.py`)
+* **Deterministic ITU-T X.667 / ISO/IEC 9834-8 Generator (`2.25.<u128>`)**:
+  - Implements standards-compliant DICOM UID construction adhering to DICOM PS 3.5 Annex B.2 using UUID Version 5 (SHA-1, default) or Version 3 (MD5).
+  - Uses persistent application namespace UUID (`GOSMART_MS_NAMESPACE_UUID`, default `6ba7b810-9dad-11d1-80b4-00c04fd430c8`).
+  - **Hierarchical Seeding**:
+    - `StudyInstanceUID`: Derived from `study:<PatientName>:<PatientID>:<AccessionNumber>`.
+    - `SeriesInstanceUID`: Derived from `series:<StudyUID>:<SeriesNumber>`.
+    - `SOPInstanceUID`: Derived from `instance:<SeriesUID>:<InstanceNumber>`.
+  - **Privacy & PHI Protection**: Avoids raw PHI leakage by using one-way cryptographic hashing while preserving deterministic reproducibility.
+  - **Length & Format Assurance**: Enforces decimal integer format under `2.25.` prefix with guaranteed max length <= 44 chars (complying with DICOM 64-char limit).
+
 ---
 
 ## 4. Concurrency & Safety Contracts
@@ -86,5 +104,6 @@ graph TD
 1. **Thread Isolation**: The DICOM SCP network server and background auto-push scheduler run in background threads, preventing blockages on the main Uvicorn event loop.
 2. **Strict Schema Boundaries**: All input data crossing the REST boundary is sanitized and validated by Pydantic before reaching the `pydicom` generator.
 3. **Resource Protection**: Ephemeral on-the-fly DICOM generation avoids local disk saturation during prolonged stress testing or continuous 9-5 auto-push delivery.
+
 
 

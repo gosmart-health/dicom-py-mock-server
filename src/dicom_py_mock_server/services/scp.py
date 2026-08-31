@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from pydicom.uid import generate_uid
 from pynetdicom import AE, StoragePresentationContexts, evt
 from pynetdicom.sop_class import (
     ModalityWorklistInformationFind,
@@ -18,6 +17,7 @@ from pynetdicom.sop_class import (
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.models.dicom import ScpStatusResponse
 from dicom_py_mock_server.services.generator import DicomGeneratorService
+from dicom_py_mock_server.services.uid_generator import generate_dicom_uid
 
 logger = structlog.get_logger(__name__)
 
@@ -260,7 +260,7 @@ class DicomScpService:
             sop_uid = (
                 getattr(ds, "SOPInstanceUID", None)
                 or getattr(event.file_meta, "MediaStorageSOPInstanceUID", None)
-                or generate_uid()
+                or generate_dicom_uid()
             )
             file_path = out_dir / f"stored_{sop_uid}.dcm"
             ds.save_as(file_path, enforce_file_format=True)

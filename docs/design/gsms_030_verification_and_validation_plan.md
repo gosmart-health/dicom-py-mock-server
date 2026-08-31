@@ -24,6 +24,8 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
   - Verify OCR text renderer injects clear burned-in text (image number, patient name, patient ID) into pixel data.
   - Verify startup generation of 3 Referring, 3 Performing, and 3 Reading Physician pools with `pn_suffix` and default `institution_name`.
   - Verify random physician assignment into MWL entries and propagation of Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) to SOP instances.
+  - Verify C-STORE CSV audit record formatting, throughput rate calculations (`kb/s`), and UTC timestamp handling.
+  - Verify deterministic ITU-T X.667 / ISO/IEC 9834-8 `2.25.<u128>` UID generation, version 5 (SHA-1) and version 3 (MD5) bitfields, string length <= 64, hierarchical seeding (Study -> Series -> Instance), and PHI protection.
 
 ### 2.2 API & Integration Testing (Level 2)
 * **Scope:** FastAPI route handlers, Uvicorn app initialization, auto-push scheduler, and endpoint responses.
@@ -34,9 +36,10 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
   - Verify 9-5 peak vs off-peak push scheduler configuration and lifecycle control.
 
 ### 2.3 DICOM Protocol Interop & System Testing (Level 3)
-* **Scope:** `pynetdicom` Application Entity background server initialization, presentation context negotiation, Query/Retrieve (C-FIND, C-MOVE, C-GET), Modality Worklist (MWL C-FIND), C-STORE, headless CI/CD operation, and stress testing.
+* **Scope:** `pynetdicom` Application Entity background server initialization, presentation context negotiation, Query/Retrieve (C-FIND, C-MOVE, C-GET), Modality Worklist (MWL C-FIND), C-STORE, C-STORE CSV audit logging per association, headless CI/CD operation, and stress testing.
 * **Verification Methods:**
   - Validate C-ECHO verification, C-FIND query, C-MOVE/C-GET retrieve, and MWL C-FIND service context handlers.
+  - Verify C-STORE association audit CSV generation for SCU move/push, C-MOVE retrieve, and incoming Storage SCP operations across statuses (`Accepted`, `Rejected`, `No Connection`, `Dropped`).
   - Execute headless CI/CD automated test suite without manual UI interactions.
   - Run high-concurrency stress tests verifying ephemeral on-the-fly DICOM generation does not saturate local disk storage.
 

@@ -40,6 +40,8 @@ This document specifies the functional, performance, security, and interface req
 | **REQ-FUN-018** | Headless Stress Testing | The system SHALL support high-concurrency stress testing scenarios for DICOM network interactions and generation pipelines. | High |
 | **REQ-FUN-019** | Physician & Institution Demographics Generation | The system SHALL generate 3 Referring Physician, 3 Performing Physician, and 3 Reading Physician names with configurable `GOSMART_MS_PN_SUFFIX` (default `_GSH`), support default institution name `GORMART_MS_INSTITUTION_NAME` (default `GO SMART CLINIC`), and randomly assign physicians into synthesized Modality Worklist (MWL) entries. | High |
 | **REQ-FUN-020** | Physician & Institution SOP Instance Propagation | The system SHALL propagate Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) attributes to all synthesized DICOM SOP instances and C-MOVE / push operations. | High |
+| **REQ-FUN-021** | C-STORE Association CSV Audit Logging | The system SHALL record an audit CSV file on local storage (`GORMART_MS_CSV_PATH`, default `./csv`) upon completion of C-STORE transfers per association, named `<yyyymmddhhmmss>_<AE_Title>.csv` in UTC, with header columns `Date,Time,Destination AE,Status,Patient Name,Patient ID,Accession Number,Study UID,Series UID,Instance UID,Transfer Rate kb/s` and statuses `Accepted, Rejected, No Connection, Dropped`. | High |
+| **REQ-FUN-022** | Deterministic ITU-T X.667 2.25 DICOM UID Generation | The system SHALL generate standards-compliant DICOM UIDs under root `2.25.` (`2.25.<u128>`) using SHA-1 (UUIDv5) or MD5 (UUIDv3) over a persistent namespace, hierarchically deriving StudyInstanceUID from `PatientName`, `PatientID`, `AccessionNumber`, SeriesInstanceUID from `StudyUID` + `SeriesNumber`, and SOPInstanceUID from `SeriesUID` + `InstanceNumber`, without exposing PHI. | High |
 
 ---
 
@@ -62,5 +64,7 @@ This document specifies the functional, performance, security, and interface req
 | **REQ-REG-002** | DICOM Part 4 Services | DICOM SCP listener SHALL comply with DICOM Service Class Specifications for Verification, Query/Retrieve, and Storage. |
 | **REQ-REG-003** | OpenAPI Standard | The REST API SHALL publish OpenAPI 3.0 compatible interactive documentation schemas (`/docs`). |
 | **REQ-REG-004** | Local Network Intended Use | The system SHALL be restricted to local network test automation environments. It is strictly non-clinical and NOT intended as a clinical uptime evaluation tool (clinical inquiries must be directed to [GoSmart.health](https://gosmart.health)). |
+| **REQ-REG-005** | ITU-T X.667 / ISO/IEC 9834-8 & DICOM PS 3.5 Annex B.2 | Generated DICOM UIDs SHALL comply with ITU-T X.667 / ISO/IEC 9834-8 bitfields and DICOM PS 3.5 Annex B.2 UUID-derived UID decimal formatting rules under root `2.25.` with string length <= 64 characters. |
+
 
 
