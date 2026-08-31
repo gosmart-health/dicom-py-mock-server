@@ -34,6 +34,22 @@ class StudyModel(BaseModel):
         default=None,
         description="Study Description (generated based on modality if omitted)",
     )
+    institution_name: str | None = Field(
+        default_factory=lambda: config.institution_name,
+        description="Institution Name",
+    )
+    referring_physician_name: str | None = Field(
+        default=None,
+        description="Referring Physician's Name",
+    )
+    reading_physician_name: str | None = Field(
+        default=None,
+        description="Name of Physician(s) Reading Study",
+    )
+    performing_physician_name: str | None = Field(
+        default=None,
+        description="Performing Physician's Name",
+    )
 
 
 class SeriesModel(BaseModel):
@@ -43,6 +59,10 @@ class SeriesModel(BaseModel):
     modality: str = Field(default="CT", description="Modality (CT, MR, US, CR, DX, etc.)")
     series_number: int = Field(default=1, description="Series Number")
     series_description: str | None = Field(default="Axial Standard", description="Series Description")
+    performing_physician_name: str | None = Field(
+        default=None,
+        description="Performing Physician's Name",
+    )
 
 
 class MockDicomRequest(BaseModel):
@@ -108,6 +128,11 @@ class MwlGenerateRequest(BaseModel):
     study_description: str | None = Field(default=None, alias="studyDescription")
     department: str | None = None
     num_instances: int | None = Field(default=None, alias="numInstances")
+    institution_name: str | None = Field(default=None, alias="institutionName")
+    institution: str | None = None
+    referring_physician: str | None = Field(default=None, alias="referringPhysician")
+    performing_physician: str | None = Field(default=None, alias="performingPhysician")
+    reading_physician: str | None = Field(default=None, alias="readingPhysician")
 
 
 class MwlStatusResponse(BaseModel):
@@ -130,6 +155,10 @@ class MwlEntrySummary(BaseModel):
     accession: str
     modality: str
     study_uid: str
+    referring_physician: str | None = None
+    performing_physician: str | None = None
+    reading_physician: str | None = None
+    institution_name: str | None = None
     num_instances: int | None = None
     created_at: str
     json_entry: dict

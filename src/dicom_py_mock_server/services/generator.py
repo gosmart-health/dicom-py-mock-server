@@ -20,7 +20,6 @@ from pydicom.uid import (
     JPEG2000Lossless,
     JPEGBaseline8Bit,
     RLELossless,
-    generate_uid,
 )
 
 from dicom_py_mock_server.config import config
@@ -28,6 +27,11 @@ from dicom_py_mock_server.models.dicom import (
     MockDicomRequest,
     MockDicomResponse,
     RawImageGeneratorRequest,
+)
+from dicom_py_mock_server.services.uid_generator import (
+    generate_series_uid,
+    generate_sop_instance_uid,
+    generate_study_uid,
 )
 
 logger = structlog.get_logger(__name__)
@@ -409,9 +413,12 @@ class DicomGeneratorService:
     @classmethod
     def create_dicom_file(cls, request: MockDicomRequest, instance_number: int = 1) -> FileDataset:
         """Create a single pydicom FileDataset populated with metadata and pixel data."""
-        study_uid = request.study.study_instance_uid or generate_uid()
-        series_uid = request.series.series_instance_uid or generate_uid()
-        sop_instance_uid = generate_uid()
+        patient_id = request.patient.patient_id
+        patient_name = request.patient.patient_name
+        accession = request.study.accession_number or ""
+        study_uid = request.study.study_instance_uid or generate_study_uid(patient_name, patient_id, accession)
+        series_uid = request.series.series_instance_uid or generate_series_uid(study_uid, request.series.series_number)
+        sop_instance_uid = generate_sop_instance_uid(series_uid, instance_number)
 
         # File Meta Information
         file_meta = FileMetaDataset()
@@ -423,8 +430,6 @@ class DicomGeneratorService:
         ds = FileDataset("mock.dcm", {}, file_meta=file_meta, preamble=b"\x00" * 128)
 
         # Patient Module
-        patient_id = request.patient.patient_id
-        patient_name = request.patient.patient_name
         ds.PatientID = patient_id
         ds.PatientName = patient_name
         if request.patient.patient_birth_date:
@@ -440,6 +445,12 @@ class DicomGeneratorService:
         ds.StudyTime = study_time
         ds.AccessionNumber = request.study.accession_number or ""
         ds.StudyDescription = request.study.study_description or get_random_study_description(request.series.modality)
+        ds.InstitutionName = request.study.institution_name or getattr(config, "institution_name", "GO SMART CLINIC")
+
+        if request.study.referring_physician_name:
+            ds.ReferringPhysicianName = request.study.referring_physician_name
+        if request.study.reading_physician_name:
+            ds.NameOfPhysiciansReadingStudy = request.study.reading_physician_name
 
         # General Series Module
         ds.SeriesInstanceUID = series_uid
@@ -447,6 +458,10 @@ class DicomGeneratorService:
         ds.SeriesNumber = request.series.series_number
         ds.SeriesDescription = request.series.series_description or f"{request.series.modality} Series"
         ds.NumberOfSeriesRelatedInstances = request.num_instances
+
+        perf_name = request.series.performing_physician_name or request.study.performing_physician_name
+        if perf_name:
+            ds.PerformingPhysicianName = perf_name
 
         # General Study Module
         ds.NumberOfStudyRelatedSeries = 1
@@ -537,8 +552,8 @@ class DicomGeneratorService:
         json_e = mwl_record.get("json_entry", {})
         patient_id = mwl_record.get("patient_id") or f"{getattr(config, 'id_prefix', 'GSH-')}MOCK_PATIENT_ID"
         patient_name = mwl_record.get("patient_name") or f"MOCK{getattr(config, 'patient_suffix', '_GSH')}^PATIENT"
-        study_uid = mwl_record.get("study_uid") or generate_uid()
         accession = mwl_record.get("accession") or f"{getattr(config, 'id_prefix', 'GSH-')}ACC-001"
+        study_uid = mwl_record.get("study_uid") or generate_study_uid(patient_name, patient_id, accession)
         modality = mwl_record.get("modality", "CT")
 
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
@@ -548,8 +563,43 @@ class DicomGeneratorService:
         patient_sex = json_e.get("00100040", {}).get("Value", ["U"])[0]
         patient_dob = json_e.get("00100030", {}).get("Value", [""])[0]
 
-        series_uid = mwl_record.get("series_uid") or generate_uid()
+        # Extract physician and institution metadata
+        ref_phys = mwl_record.get("referring_physician")
+        if not ref_phys and "00080090" in json_e and json_e["00080090"].get("Value"):
+            ref_raw = json_e["00080090"]["Value"][0]
+            ref_phys = ref_raw.get("Alphabetic", "") if isinstance(ref_raw, dict) else ref_raw
+
+        perf_phys = mwl_record.get("performing_physician")
+        if not perf_phys and "00081050" in json_e and json_e["00081050"].get("Value"):
+            perf_raw = json_e["00081050"]["Value"][0]
+            perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
+        if not perf_phys and "00400100" in json_e:
+            sps_raw_perf = sps_seq.get("00400006", {}).get("Value", [""])[0]
+            perf_phys = sps_raw_perf.get("Alphabetic", "") if isinstance(sps_raw_perf, dict) else sps_raw_perf
+
+        read_phys = mwl_record.get("reading_physician")
+        if not read_phys and "00081060" in json_e and json_e["00081060"].get("Value"):
+            read_raw = json_e["00081060"]["Value"][0]
+            read_phys = read_raw.get("Alphabetic", "") if isinstance(read_raw, dict) else read_raw
+
+        inst_name = (
+            mwl_record.get("institution_name")
+            or json_e.get("00080080", {}).get("Value", [getattr(config, "institution_name", "GO SMART CLINIC")])[0]
+        )
+
+        mwl_ds = mwl_record.get("dataset")
+        if mwl_ds:
+            if not ref_phys and hasattr(mwl_ds, "ReferringPhysicianName"):
+                ref_phys = str(mwl_ds.ReferringPhysicianName)
+            if not perf_phys and hasattr(mwl_ds, "PerformingPhysicianName"):
+                perf_phys = str(mwl_ds.PerformingPhysicianName)
+            if not read_phys and hasattr(mwl_ds, "NameOfPhysiciansReadingStudy"):
+                read_phys = str(mwl_ds.NameOfPhysiciansReadingStudy)
+            if not inst_name and hasattr(mwl_ds, "InstitutionName"):
+                inst_name = str(mwl_ds.InstitutionName)
+
         series_number = int(mwl_record.get("series_number") or 1)
+        series_uid = mwl_record.get("series_uid") or generate_series_uid(study_uid, series_number)
         series_desc = mwl_record.get("series_description") or f"{modality} Series"
 
         mock_req = MockDicomRequest(
@@ -565,12 +615,17 @@ class DicomGeneratorService:
                 "study_time": study_time,
                 "accession_number": accession,
                 "study_description": study_desc,
+                "institution_name": inst_name,
+                "referring_physician_name": ref_phys,
+                "reading_physician_name": read_phys,
+                "performing_physician_name": perf_phys,
             },
             series={
                 "series_instance_uid": series_uid,
                 "modality": modality,
                 "series_number": series_number,
                 "series_description": series_desc,
+                "performing_physician_name": perf_phys,
             },
             num_instances=num_instances,
             burn_in_text=True,
@@ -587,8 +642,11 @@ class DicomGeneratorService:
         out_path = Path(target_dir)
         out_path.mkdir(parents=True, exist_ok=True)
 
-        study_uid = request.study.study_instance_uid or generate_uid()
-        series_uid = request.series.series_instance_uid or generate_uid()
+        patient_id = request.patient.patient_id
+        patient_name = request.patient.patient_name
+        accession = request.study.accession_number or ""
+        study_uid = request.study.study_instance_uid or generate_study_uid(patient_name, patient_id, accession)
+        series_uid = request.series.series_instance_uid or generate_series_uid(study_uid, request.series.series_number)
 
         # Update request object with UIDs if generated
         request.study.study_instance_uid = study_uid

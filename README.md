@@ -21,9 +21,10 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 ## Capabilities & Features
 
 1. **Synthetic DICOM Generation**: Generate customizable DICOM P10 objects with specified Patient, Study, Series, and instance metadata.
-2. **DICOM SCP Services**: Built-in DICOM C-FIND, C-MOVE/GET, and MWL (Modality Worklist) SCP network listeners.
-3. **Modality Worklist (MWL) Synthesis**: Automated business-hours MWL entry creation and retention window management.
-4. **MCP Integration Provisioning**: Exposes server capabilities to AI Assistants (AGY, Claude Desktop, Cursor, etc.) over Server-Sent Events (SSE) transport.
+2. **Deterministic DICOM UID Generation (ITU-T X.667 / ISO/IEC 9834-8)**: Generates standards-compliant `2.25.<u128>` UIDs using SHA-1 (UUIDv5) or MD5 (UUIDv3) over a persistent namespace, preventing PHI exposure while maintaining hierarchical reproducibility (Study -> Series -> Instance).
+3. **DICOM SCP Services**: Built-in DICOM C-FIND, C-MOVE/GET, and MWL (Modality Worklist) SCP network listeners.
+4. **Modality Worklist (MWL) Synthesis**: Automated business-hours MWL entry creation and retention window management.
+5. **MCP Integration Provisioning**: Exposes server capabilities to AI Assistants (AGY, Claude Desktop, Cursor, etc.) over Server-Sent Events (SSE) transport.
 
 ---
 
@@ -96,6 +97,7 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_SCP_AE_TITLE` | `GOSMART_MS_AE_TITLE`, `SCP_AE_TITLE`, `AE_TITLE` | `GOSMART_SCP` | Application Entity (AE) Title for the DICOM SCP listener. |
 | `GOSMART_MS_SCP_PORT` | `SCP_PORT` | `11112` | DICOM SCP listening port (C-ECHO, C-FIND, C-MOVE, C-STORE, MWL). |
 | `GOSMART_MS_STORAGE_DIR` | `STORAGE_DIR` | `./data/dicom_storage` | Local directory path to store generated DICOM files. |
+| `GORMART_MS_CSV_PATH` | `GOSMART_MS_CSV_PATH`, `CSV_PATH` | `./csv` | Local directory path to store C-STORE association audit CSV files (`yyyymmddhhmmss_<AE_Title>.csv`). |
 | `GOSMART_TEMPLATES_PATH` | `GOSMART_MS_TEMPLATES_PATH`, `TEMPLATES_PATH` | `./templates` | Directory containing DICOM (`.dcm`, `.dicom`) or JSON templates for synthesis. |
 | `GOSMART_MS_LOG_LEVEL` | `LOG_LEVEL` | `INFO` | Logging verbosity level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). |
 | `GOSMART_MS_LOG_PATH` | `GOSMART_MS_LOG_FILE`, `LOG_PATH`, `LOG_FILE` | `./logs` | Directory or file path for rotated log files (`dicom_mock_server.log`). |
@@ -111,9 +113,37 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_TRANSFER_SYNTAX` | `TRANSFER_SYNTAX` | `RAW` | Default DICOM Transfer Syntax (`RAW`, `JPEG`, `JPEG2000`, `RLE`). |
 | `GOSMART_MS_MOVE_DESTINATIONS` | `MOVE_DESTINATIONS` | `{}` | JSON string mapping C-MOVE destination AE Titles to target host/port objects. |
 | `GOSMART_MS_PATIENT_SUFFIX` | `PATIENT_SUFFIX` | `_GSH` | Suffix appended to synthetic patient last name to avoid PACS collisions (empty strings permitted). |
+| `GOSMART_MS_PN_SUFFIX` | `PN_SUFFIX` | `_GSH` | Suffix appended to generated physician names (Referring, Performing, Reading) to avoid PACS collisions (empty strings permitted). |
+| `GORMART_MS_INSTITUTION_NAME` | `GOSMART_MS_INSTITUTION_NAME`, `INSTITUTION_NAME` | `GO SMART CLINIC` | Default Institution Name attribute for synthesized studies and MWL entries. |
 | `GOSMART_MS_ID_PREFIX` | `ID_PREFIX` | `GSH-` | Prefix prepended to synthetic Patient ID and Accession number to avoid PACS collisions (empty strings permitted). |
+| `GOSMART_MS_NAMESPACE_UUID` | `GOSMART_MS_DICOM_NAMESPACE_UUID`, `NAMESPACE_UUID` | `6ba7b810-9dad-11d1-80b4-00c04fd430c8` | Persistent UUID namespace used for deterministic ITU-T X.667 DICOM UID generation. |
+| `GOSMART_MS_UID_VERSION` | `GOSMART_MS_DICOM_UID_VERSION`, `UID_VERSION` | `5` | UUID version for deterministic DICOM UID generation (`5` for SHA-1, `3` for MD5). |
 | `GOSMART_MS_APP_NAME` | `APP_NAME` | `DICOM Mock Server` | Application display name. |
 | `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.1.0` | Application version string. |
+
+---
+
+## Deterministic ITU-T X.667 / ISO/IEC 9834-8 DICOM UID Generation
+
+All synthetic DICOM UIDs are generated under the standard OSI OID root `2.25.` (`2.25.<u128>`) adhering to ITU-T X.667 / ISO/IEC 9834-8 and DICOM PS 3.5 Annex B.2.
+
+- **StudyInstanceUID**: Deterministically computed using UUIDv5 (SHA-1) over combined seed `study:<PatientName>:<PatientID>:<AccessionNumber>`.
+- **SeriesInstanceUID**: Deterministically computed from `series:<StudyUID>:<SeriesNumber>`.
+- **SOPInstanceUID**: Deterministically computed from `instance:<SeriesUID>:<InstanceNumber>`.
+
+This ensures consistent, reproducible UIDs across test runs without leaking raw patient identifiers or PHI into UID strings while maintaining strict compliance with DICOM VR UI length limits (<= 64 chars) and standard bitfield constraints.
+
+---
+
+## C-STORE Association CSV Audit Logging
+
+When a DICOM C-STORE transfer ends per association (C-MOVE push, SCU direct move/push, or incoming Storage SCP association), an audit CSV file is automatically written to local storage (`GORMART_MS_CSV_PATH`, default `./csv`).
+
+- **File Naming**: `<yyyymmddhhmmss>_<AE_Title>.csv` in UTC timestamps at the start of the C-STORE association.
+- **Columns**: `Date,Time,Destination AE,Status,Patient Name,Patient ID,Accession Number,Study UID,Series UID,Instance UID,Transfer Rate kb/s`
+- **Date and Time**: UTC timestamps (`YYYYMMDD` date and `HHMMSS` time).
+- **Status Values**: `Accepted`, `Rejected`, `No Connection`, `Dropped`.
+- **Transfer Rate**: Calculated in `kb/s` (kilobits per second) for each transferred instance.
 
 ---
 

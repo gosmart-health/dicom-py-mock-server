@@ -127,10 +127,16 @@ class PersonGenerator:
     _id_sequence: int = 0
     _base_id: int = 0
 
-    def __init__(self, patient_suffix: str | None = None, id_prefix: str | None = None) -> None:
+    def __init__(
+        self,
+        patient_suffix: str | None = None,
+        id_prefix: str | None = None,
+        pn_suffix: str | None = None,
+    ) -> None:
         self.patient_suffix = (
             patient_suffix if patient_suffix is not None else getattr(config, "patient_suffix", "_GSH")
         )
+        self.pn_suffix = pn_suffix if pn_suffix is not None else getattr(config, "pn_suffix", "_GSH")
         self.id_prefix = id_prefix if id_prefix is not None else getattr(config, "id_prefix", "GSH-")
 
     @classmethod
@@ -153,8 +159,10 @@ class PersonGenerator:
 
         if is_patient and self.patient_suffix:
             last_name = f"{last_name}{self.patient_suffix}"
+        elif not is_patient and self.pn_suffix:
+            last_name = f"{last_name}{self.pn_suffix}"
 
-        patient_name = f"{last_name}^{first_name}^^^{suffix}"
+        person_name = f"{last_name}^{first_name}^^^{suffix}" if suffix else f"{last_name}^{first_name}"
         mrn = self.generate_random_id(8, prefix=self.id_prefix if is_patient else "")
 
         today = datetime.now().date()
@@ -163,8 +171,20 @@ class PersonGenerator:
         dob = today - timedelta(days=days_old)
 
         return PersonInfo(
-            name=patient_name,
+            name=person_name,
             mrn=mrn,
             gender=gender,
             dob=dob,
         )
+
+    def generate_physician(self, title: str = "MD") -> PersonInfo:
+        """Generate a random physician record."""
+        return self.generate(suffix=title, is_patient=False)
+
+    def generate_physician_pool(self, count: int = 3, title: str = "MD") -> list[str]:
+        """Generate a list of distinct physician names."""
+        pool: list[str] = []
+        for _ in range(count):
+            physician = self.generate_physician(title=title)
+            pool.append(physician.name)
+        return pool

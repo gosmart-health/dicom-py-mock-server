@@ -109,10 +109,34 @@ class AppConfig(BaseSettings):
         validation_alias=AliasChoices("GOSMART_MS_PATIENT_SUFFIX", "PATIENT_SUFFIX"),
         description="Suffix appended to patient last name to avoid PACS collisions",
     )
+    pn_suffix: str = Field(
+        default="_GSH",
+        validation_alias=AliasChoices("GOSMART_MS_PN_SUFFIX", "PN_SUFFIX"),
+        description="Suffix appended to generated physician names to avoid PACS collisions",
+    )
+    institution_name: str = Field(
+        default="GO SMART CLINIC",
+        validation_alias=AliasChoices(
+            "GOSMART_MS_INSTITUTION_NAME",
+            "GORMART_MS_INSTITUTION_NAME",
+            "INSTITUTION_NAME",
+        ),
+        description="Default Institution Name attribute for generated DICOM studies and MWL entries",
+    )
     id_prefix: str = Field(
         default="GSH-",
         validation_alias=AliasChoices("GOSMART_MS_ID_PREFIX", "ID_PREFIX"),
         description="Prefix prepended to patient ID and accession number to avoid PACS collisions",
+    )
+    dicom_namespace_uuid: str = Field(
+        default="6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+        validation_alias=AliasChoices("GOSMART_MS_NAMESPACE_UUID", "GOSMART_MS_DICOM_NAMESPACE_UUID", "NAMESPACE_UUID"),
+        description="Persistent UUID namespace used for deterministic ITU-T X.667 DICOM UID generation",
+    )
+    dicom_uid_version: int = Field(
+        default=5,
+        validation_alias=AliasChoices("GOSMART_MS_UID_VERSION", "GOSMART_MS_DICOM_UID_VERSION", "UID_VERSION"),
+        description="UUID version for deterministic DICOM UID generation (5 for SHA-1, 3 for MD5)",
     )
 
     @property

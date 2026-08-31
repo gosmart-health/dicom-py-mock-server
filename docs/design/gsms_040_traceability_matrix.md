@@ -34,8 +34,14 @@ This matrix establishes complete bi-directional traceability linking **Software 
 | **REQ-FUN-016** | Scheduled Auto-Push Delivery | `src/dicom_py_mock_server/services/scheduler.py` | HAZ-008 | 9-5 peak & off-peak background scheduler | Integration test `test_scheduler.py::test_autopush_scheduling` | Pass |
 | **REQ-FUN-017** | Headless CI/CD Test Automation | `src/dicom_py_mock_server/services/scp.py` | HAZ-003 | Non-blocking headless execution thread | System test `test_headless_scp.py::test_ci_cd_headless_execution` | Pass |
 | **REQ-FUN-018** | Headless Stress Testing | `src/dicom_py_mock_server/services/generator.py` | HAZ-009 | High-concurrency ephemeral synthesis | System test `test_stress.py::test_high_concurrency_stress` | Pass |
+| **REQ-FUN-019** | Physician & Institution Demographics Generation | `src/dicom_py_mock_server/services/mwl_generator.py` & `person_generator.py` | HAZ-006 | Startup pool generation & random assignment | Unit test `test_physicians_and_institution.py::test_mwl_generator_initial_physician_pools` | Pass |
+| **REQ-FUN-020** | Physician & Institution SOP Instance Propagation | `src/dicom_py_mock_server/services/generator.py` | HAZ-001 | SOP instance dataset attribute propagation | Unit test `test_physicians_and_institution.py::test_sop_instance_generation_attribute_propagation_from_mwl` | Pass |
+| **REQ-FUN-021** | C-STORE Association CSV Audit Logging | `src/dicom_py_mock_server/services/csv_audit.py` & `scp.py` | HAZ-003 / HAZ-005 | Association session tracking & local disk CSV serialization | Integration test `test_csv_audit.py::test_push_study_generates_accepted_csv` | Pass |
+| **REQ-FUN-022** | Deterministic ITU-T X.667 2.25 DICOM UID Generation | `src/dicom_py_mock_server/services/uid_generator.py` | HAZ-001 / HAZ-006 | Cryptographic namespace UUIDv5/v3 hashing & hierarchy chaining | Unit test `test_uid_generator.py::test_study_uid_determinism_and_components` | Pass |
 | **REQ-PERF-004** | Ephemeral On-The-Fly Generation | `src/dicom_py_mock_server/services/generator.py` | HAZ-009 | In-memory byte streaming & low disk usage | System test `test_stress.py::test_ephemeral_disk_footprint` | Pass |
 | **REQ-REG-001** | DICOM Part 10 Format | `src/dicom_py_mock_server/services/generator.py` | HAZ-001 / HAZ-002 | `enforce_file_format=True` setting | Unit test `test_generator.py::test_dicom_file_generation` | Pass |
 | **REQ-REG-004** | Local Network Intended Use | `src/dicom_py_mock_server/main.py` | HAZ-010 | Non-clinical warning banner & OpenAPI disclaimers | Unit test `test_main.py::test_non_clinical_disclaimer` | Pass |
+| **REQ-REG-005** | ITU-T X.667 / ISO/IEC 9834-8 & DICOM PS 3.5 Annex B.2 | `src/dicom_py_mock_server/services/uid_generator.py` | HAZ-001 | Version/variant bitfields, 2.25 prefix, length <= 64 validation | Unit test `test_uid_generator.py::test_uuid_bitfields_itu_t_x667_compliance` | Pass |
+
 
 
