@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.1.0] - 2026-08-31
+
+### Added
+- **Deterministic ITU-T X.667 / ISO/IEC 9834-8 DICOM UID Generation (Issue #8)**:
+  - Implemented standards-compliant `2.25.<u128>` DICOM UID construction adhering to DICOM PS 3.5 Annex B.2 using SHA-1 (UUIDv5, default) and MD5 (UUIDv3) over a persistent namespace UUID (`GOSMART_MS_NAMESPACE_UUID`, default `6ba7b810-9dad-11d1-80b4-00c04fd430c8`).
+  - Hierarchical deterministic derivation: StudyInstanceUID from `PatientName`, `PatientID`, and `AccessionNumber`; SeriesInstanceUID from `StudyUID` and `SeriesNumber`; SOPInstanceUID from `SeriesUID` and `InstanceNumber`.
+  - Privacy and PHI protection preventing raw identifier strings from leaking into DICOM UIDs while guaranteeing reproducible generation across test iterations.
+  - Configuration support via `GOSMART_MS_NAMESPACE_UUID` and `GOSMART_MS_UID_VERSION`.
+- **C-STORE Association CSV Audit Logging (Issue #3)**:
+  - Automated generation of CSV audit logs upon completion of C-STORE transfers (SCU move/push, C-MOVE retrievals, and incoming Storage SCP transactions).
+  - Generates UTC-timestamped audit files `<yyyymmddhhmmss>_<AE_Title>.csv` in configurable path `GORMART_MS_CSV_PATH` (default `./csv`).
+  - Logs header columns: `Date,Time,Destination AE,Status,Patient Name,Patient ID,Accession Number,Study UID,Series UID,Instance UID,Transfer Rate kb/s` with statuses `Accepted`, `Rejected`, `No Connection`, `Dropped`.
+- **Physician & Institution Demographics & Propagation (Issue #5)**:
+  - Initializes synthetic pools of Referring Physician, Performing Physician, and Reading Physician names on startup with configurable `GOSMART_MS_PN_SUFFIX` (default `_GSH`) and default `GORMART_MS_INSTITUTION_NAME` (`GO SMART CLINIC`).
+  - Propagates Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) attributes across MWL entries, SOP instances, and C-MOVE network transfers.
+
 ## [0.0.2] - 2026-08-30
 - **Fixed Issue 5** Fixed the bug where C-FIND does not return all needed attributes.
 
