@@ -435,7 +435,6 @@ class DicomScpService:
 
         # Connect as SCU to target
         ae = AE(ae_title=self.ae_title)
-        target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
         preferred_syntax = matched_entries[0].get("transfer_syntax") or config.transfer_syntax
         target_syntax = get_prioritized_transfer_syntaxes(preferred_syntax)[0]
         for cx in StoragePresentationContexts:
