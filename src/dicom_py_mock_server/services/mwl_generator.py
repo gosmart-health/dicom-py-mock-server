@@ -139,8 +139,24 @@ class MwlGeneratorService:
 
         loaded_file_templates: dict[str, dict[str, Any]] = {}
 
-        templates_dir = Path(self.config.templates_path)
-        if templates_dir.exists() and templates_dir.is_dir():
+        path_obj = Path(self.config.templates_path)
+        if path_obj.is_absolute():
+            candidate_paths = [path_obj]
+        else:
+            candidate_paths = [
+                path_obj,
+                Path.cwd() / path_obj,
+            ]
+            for parent in Path(__file__).resolve().parents:
+                candidate_paths.append(parent / path_obj)
+
+        templates_dir = None
+        for p in candidate_paths:
+            if p.exists() and p.is_dir() and any(p.rglob("*")):
+                templates_dir = p
+                break
+
+        if templates_dir:
             for file_path in templates_dir.rglob("*"):
                 if not file_path.is_file():
                     continue
@@ -148,9 +164,12 @@ class MwlGeneratorService:
                 if ext in (".dcm", ".dicom"):
                     try:
                         ds = pydicom.dcmread(file_path, force=True)
-                        modality = str(getattr(ds, "Modality", "") or ds.get("Modality", "")).strip().upper()
+                        modality = ""
+                        if "Modality" in ds and ds.Modality:
+                            modality = str(ds.Modality).strip().upper()
                         if not modality:
-                            modality = file_path.stem.upper()
+                            stem = file_path.stem.upper()
+                            modality = stem.split("_")[0] if "_" in stem else stem
 
                         if modality not in self.dicom_templates:
                             self.dicom_templates[modality] = []
@@ -180,20 +199,11 @@ class MwlGeneratorService:
                         logger.warning("failed_to_load_template_file", path=str(file_path), error=str(exc))
 
         if loaded_file_templates:
-            # If at least one template file was loaded, use ONLY the loaded template modalities
+            # Only use modalities from loaded template files
             self.template_modalities = loaded_file_templates
         else:
-            # Fall back to default modalities if no file templates found
-            modalities_set: set[str] = set()
-            for dept in self.departments:
-                for mod in dept.get("modalities", []):
-                    modalities_set.add(mod)
-
-            for mod in sorted(modalities_set):
-                self.template_modalities[mod] = {
-                    "modality": mod,
-                    "source": "default",
-                }
+            self.template_modalities = {}
+            logger.error("no_template_files_found_in_templates_path", templates_path=str(self.config.templates_path))
 
         logger.info(
             "mwl_template_modalities_loaded",
@@ -206,8 +216,17 @@ class MwlGeneratorService:
         return sorted(self.template_modalities.keys())
 
     def get_dicom_templates_by_modality(self, modality: str) -> list[Dataset]:
-        """Get in-memory loaded DICOM template datasets for a specific modality."""
-        return self.dicom_templates.get(modality.upper(), [])
+        """Get in-memory loaded DICOM template datasets for a specific modality.
+
+        If no template dataset exists specifically for `modality`, fall back to any available
+        loaded DICOM template dataset so template-based synthesis is always used.
+        """
+        mod_upper = modality.upper()
+        if mod_upper in self.dicom_templates:
+            return self.dicom_templates[mod_upper]
+
+        all_templates = [ds for sublist in self.dicom_templates.values() for ds in sublist]
+        return all_templates
 
     def get_current_rate_per_hr(self, current_time: datetime | None = None) -> float:
         """Calculate current MWL entry creation rate based on local machine time.
@@ -228,8 +247,18 @@ class MwlGeneratorService:
         self,
         custom: dict[str, Any] | None = None,
         scheduled_at: datetime | None = None,
-    ) -> dict[str, Any]:
-        """Generate a single MWL DICOM Web JSON entry matching mwlEntryGenerator.ts format."""
+    ) -> dict[str, Any] | None:
+        """Generate a single MWL DICOM Web JSON entry matching mwlEntryGenerator.ts format.
+
+        Returns None if no template file is loaded.
+        """
+        if not self.template_modalities and not self.dicom_templates:
+            logger.error(
+                "mwl_template_not_found_cannot_generate_entry",
+                templates_path=str(self.config.templates_path),
+            )
+            return None
+
         now = scheduled_at or datetime.now()
 
         # Determine modality
@@ -240,8 +269,7 @@ class MwlGeneratorService:
             if available_modalities:
                 modality = random.choice(available_modalities)
             else:
-                dept_info = random.choice(self.departments)
-                modality = random.choice(dept_info["modalities"])
+                modality = "CT"
 
         # Modality-aligned description and department
         description = get_random_study_description(modality)
@@ -472,10 +500,16 @@ class MwlGeneratorService:
             logger.info("purged_expired_mwl_entries", count=purged, remaining=len(self._entries))
         return purged
 
-    def add_entry(self, custom: dict[str, Any] | None = None, scheduled_at: datetime | None = None) -> dict[str, Any]:
+    def add_entry(
+        self, custom: dict[str, Any] | None = None, scheduled_at: datetime | None = None
+    ) -> dict[str, Any] | None:
         """Generate and add a new MWL entry to the active MWL list."""
         now = datetime.now()
         json_entry = self.generate_json(custom=custom, scheduled_at=scheduled_at)
+        if not json_entry:
+            logger.error("cannot_add_mwl_entry_due_to_missing_template", custom=custom)
+            return None
+
         dataset = self.json_to_dataset(json_entry)
 
         # Determine randomized instance count between min_slices and max_slices
@@ -496,10 +530,13 @@ class MwlGeneratorService:
         read_val = json_entry.get("00081060", {}).get("Value", [""])[0]
         read_name = read_val.get("Alphabetic", "") if isinstance(read_val, dict) else read_val
         inst_name = json_entry.get("00080080", {}).get("Value", [""])[0]
+        templates_for_mod = self.get_dicom_templates_by_modality(json_entry["00080060"]["Value"][0])
+        dicom_template = random.choice(templates_for_mod) if templates_for_mod else None
 
         entry_record = {
             "json_entry": json_entry,
             "dataset": dataset,
+            "template_dataset": dicom_template,
             "created_at": scheduled_at or now,
             "patient_id": json_entry["00100020"]["Value"][0],
             "patient_name": json_entry["00100010"]["Value"][0].get("Alphabetic", ""),

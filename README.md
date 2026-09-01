@@ -25,6 +25,7 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 3. **DICOM SCP Services**: Built-in DICOM C-FIND, C-MOVE/GET, and MWL (Modality Worklist) SCP network listeners.
 4. **Modality Worklist (MWL) Synthesis**: Automated business-hours MWL entry creation and retention window management.
 5. **MCP Integration Provisioning**: Exposes server capabilities to AI Assistants (AGY, Claude Desktop, Cursor, etc.) over Server-Sent Events (SSE) transport.
+6. **Template SOP Compression & PACS Verification**: Synthesize valid DICOM Part-10 files directly from templates (such as `templates/CT_small.dcm`) with burned metadata text, precomputed background test patterns, and supported compression syntaxes (`JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, `IMPLICIT_VR_LITTLE_ENDIAN`) saved to `test_output/` for PACS viewer inspection.
 
 ---
 

@@ -94,6 +94,11 @@ def generate_mwl_entry(request: MwlGenerateRequest | None = None):
     """Manually generate a new MWL entry and add it to the active list."""
     custom_dict = request.model_dump(by_alias=True, exclude_none=True) if request else None
     record = mwl_service.add_entry(custom=custom_dict)
+    if not record:
+        raise HTTPException(
+            status_code=400,
+            detail="No template file found for requested modality.",
+        )
     return {
         "success": True,
         "patient_id": record["patient_id"],

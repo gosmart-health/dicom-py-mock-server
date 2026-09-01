@@ -12,7 +12,7 @@ from pynetdicom.sop_class import (
 
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
-from dicom_py_mock_server.services.scp import DicomScpService
+from dicom_py_mock_server.services.scp import SUPPORTED_TRANSFER_SYNTAXES, DicomScpService
 
 
 class MockStorageScp:
@@ -34,7 +34,7 @@ class MockStorageScp:
     def start(self):
         self.ae = AE(ae_title=self.ae_title)
         for cx in StoragePresentationContexts:
-            self.ae.add_supported_context(cx.abstract_syntax)
+            self.ae.add_supported_context(cx.abstract_syntax, SUPPORTED_TRANSFER_SYNTAXES)
         handlers = [(evt.EVT_C_STORE, self._handle_store)]
         self.server = self.ae.start_server(("127.0.0.1", self.port), block=False, evt_handlers=handlers)
 
@@ -204,7 +204,7 @@ def test_cstore_incoming_storage(tmp_path):
 
         ae = AE(ae_title="SCU_SENDER")
         for cx in StoragePresentationContexts:
-            ae.add_requested_context(cx.abstract_syntax)
+            ae.add_requested_context(cx.abstract_syntax, SUPPORTED_TRANSFER_SYNTAXES)
         assoc = ae.associate("127.0.0.1", scp_port)
         assert assoc.is_established
 
@@ -349,3 +349,139 @@ def test_cfind_and_cmove_by_accession_number():
     finally:
         viewer_scp.stop()
         scp_service.stop()
+
+
+def test_cstore_push_preserves_negotiated_transfer_syntax_jpeg2000_rle_jpeg_raw():
+    """Verify C-STORE transfers send with negotiated Transfer Syntaxes (JPEG2000, RLE, JPEG, RAW)
+    without falling back to Implicit VR Little Endian.
+    """
+    from pydicom.uid import (
+        ExplicitVRLittleEndian,
+        ImplicitVRLittleEndian,
+        JPEG2000Lossless,
+        JPEGBaseline8Bit,
+        RLELossless,
+    )
+    from pynetdicom.presentation import build_context
+
+    from dicom_py_mock_server.models.dicom import MockDicomRequest
+    from dicom_py_mock_server.services.generator import DicomGeneratorService
+
+    test_cases = [
+        ("RAW", ExplicitVRLittleEndian),
+        ("JPEG", JPEGBaseline8Bit),
+        ("JPEG2000", JPEG2000Lossless),
+        ("RLE", RLELossless),
+    ]
+
+    for idx, (syntax_name, expected_ts) in enumerate(test_cases):
+        port = 11250 + idx
+        received_ts = []
+
+        def handle_store(event):
+            received_ts.append(event.context.transfer_syntax)
+            return 0x0000
+
+        ts_list = [expected_ts, ExplicitVRLittleEndian, ImplicitVRLittleEndian]
+        contexts = [build_context(cx.abstract_syntax, ts_list) for cx in StoragePresentationContexts]
+
+        scp_ae = AE(ae_title="SYNTAX_SCP")
+        for cx in contexts:
+            scp_ae.add_supported_context(cx.abstract_syntax, ts_list)
+        server = scp_ae.start_server(("127.0.0.1", port), block=False, evt_handlers=[(evt.EVT_C_STORE, handle_store)])
+
+        try:
+            scu_ae = AE(ae_title="SYNTAX_SCU")
+            for cx in contexts:
+                scu_ae.add_requested_context(cx.abstract_syntax, ts_list)
+
+            assoc = scu_ae.associate("127.0.0.1", port, ae_title="SYNTAX_SCP")
+            assert assoc.is_established
+
+            req = MockDicomRequest(transfer_syntax=syntax_name, burn_in_text=True)
+            ds = DicomGeneratorService.create_dicom_file(req)
+
+            status = assoc.send_c_store(ds)
+            assert status.Status == 0x0000
+            assert len(received_ts) == 1
+            assert received_ts[0] == expected_ts
+            assoc.release()
+        finally:
+            server.shutdown()
+
+
+def test_cmove_with_jpeg2000_lossless_transfer_syntax():
+    """Verify C-MOVE operation correctly transfers datasets using JPEG2000 Lossless transfer syntax."""
+    from pydicom.uid import JPEG2000Lossless
+
+    original_syntax = config.transfer_syntax
+    config.transfer_syntax = "JPEG2000_LOSSLESS"
+
+    scp_port = 11260
+    viewer_port = 11261
+
+    mwl_service = MwlGeneratorService(config)
+    mwl_entry = mwl_service.add_entry(
+        custom={
+            "patientName": "J2K^MOVE^PATIENT",
+            "patientId": "J2K-MOVE-001",
+            "modality": "CT",
+            "accession": "ACC-J2K-99",
+        }
+    )
+
+    scp_service = DicomScpService(ae_title="J2K_SCP", port=scp_port, mwl_service=mwl_service)
+    scp_service.start()
+
+    viewer_scp = MockStorageScp(ae_title="J2K_VIEWER", port=viewer_port)
+    viewer_scp.start()
+    config.move_destinations["J2K_VIEWER"] = {"host": "127.0.0.1", "port": viewer_port}
+
+    try:
+        ae_move = AE(ae_title="CLIENT_SCU")
+        ae_move.add_requested_context(StudyRootQueryRetrieveInformationModelMove)
+        assoc_move = ae_move.associate("127.0.0.1", scp_port)
+        assert assoc_move.is_established
+
+        move_query = Dataset()
+        move_query.QueryRetrieveLevel = "STUDY"
+        move_query.StudyInstanceUID = mwl_entry["study_uid"]
+
+        move_responses = list(
+            assoc_move.send_c_move(move_query, "J2K_VIEWER", StudyRootQueryRetrieveInformationModelMove)
+        )
+        assoc_move.release()
+
+        statuses = [status.Status for status, ds in move_responses if status]
+        assert 0x0000 in statuses or 0xFF00 in statuses
+
+        time.sleep(0.5)
+        assert len(viewer_scp.received_datasets) >= 1
+        for ds in viewer_scp.received_datasets:
+            assert ds.file_meta.TransferSyntaxUID == JPEG2000Lossless
+            assert ds.PixelData is not None
+            assert len(ds.PixelData) > 0
+    finally:
+        viewer_scp.stop()
+        scp_service.stop()
+        config.transfer_syntax = original_syntax
+
+
+def test_microdicom_cstore_push_if_listening():
+    """Integration test helper: Push DICOM study to MicroDICOM instance at 127.0.0.1:11113 (AE: MDICOM) if active."""
+    mwl_service = MwlGeneratorService(config)
+    scp_service = DicomScpService(ae_title="TEST_PUSH_SCP", port=11270, mwl_service=mwl_service)
+
+    res = scp_service.push_study_to_destination(
+        target_ae_title="MDICOM",
+        target_host="127.0.0.1",
+        target_port=11113,
+        patient_id="MICRODICOM-PAT-01",
+        accession="ACC-MD-01",
+    )
+    # If MicroDICOM is running on port 11113, res['success'] should be True.
+    # If not running, assoc failure message is expected.
+    if res["success"]:
+        assert res["instances_sent"] > 0
+    else:
+        assert "Failed to establish association" in res["message"]

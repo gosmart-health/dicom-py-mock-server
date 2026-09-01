@@ -15,6 +15,7 @@ dependencies = [
     "pylibjpeg>=2.1.0",
     "pylibjpeg-libjpeg>=2.4.0",
     "pylibjpeg-openjpeg>=2.5.0",
+    "pylibjpeg-rle>=2.0.0",
     "pynetdicom>=2.0.0",
     "structlog>=26.1.0",
     "uvicorn[standard]>=0.28.0",

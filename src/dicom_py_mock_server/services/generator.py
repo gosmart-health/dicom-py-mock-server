@@ -1,5 +1,6 @@
 """Service for generating synthetic DICOM objects using pydicom."""
 
+import copy
 import functools
 import io
 import random
@@ -357,27 +358,31 @@ class DicomGeneratorService:
         target_name = (syntax_name or getattr(config, "transfer_syntax", "RAW")).upper().strip()
         target_uid = TRANSFER_SYNTAX_MAP.get(target_name, ExplicitVRLittleEndian)
 
+        current_uid = getattr(ds.file_meta, "TransferSyntaxUID", None)
+        if current_uid != target_uid:
+            is_comp = (
+                getattr(ds, "is_compressed", False)
+                or (current_uid and getattr(current_uid, "is_compressed", False))
+                or current_uid not in (ExplicitVRLittleEndian, ImplicitVRLittleEndian, None)
+            )
+            if is_comp:
+                try:
+                    ds.decompress()
+                except Exception as exc:
+                    logger.warning("decompress_failed_before_syntax_conversion", error=str(exc))
+
         if target_uid in (ExplicitVRLittleEndian, ImplicitVRLittleEndian):
             ds.file_meta.TransferSyntaxUID = target_uid
-            # Enforce uncompressed pixel representation
-            arr = np.frombuffer(ds.PixelData, dtype=np.uint16) if isinstance(ds.PixelData, bytes) else ds.pixel_array
+            ds.LossyImageCompression = "00"
+            arr = ds.pixel_array if hasattr(ds, "pixel_array") else np.frombuffer(ds.PixelData, dtype=np.uint16)
             ds.PixelData = arr.astype(np.uint16).tobytes()
-            return ds
-
-        if target_uid == JPEGBaseline8Bit:
+        elif target_uid == JPEGBaseline8Bit:
             # JPEG Process 1 is 8-bit baseline
-            if isinstance(ds.PixelData, bytes):
-                if getattr(ds, "BitsAllocated", 16) == 8:
-                    arr8 = np.frombuffer(ds.PixelData, dtype=np.uint8).reshape((ds.Rows, ds.Columns))
-                else:
-                    arr16 = np.frombuffer(ds.PixelData, dtype=np.uint16).reshape((ds.Rows, ds.Columns))
-                    arr8 = (arr16 >> 4).astype(np.uint8) if arr16.max() > 255 else arr16.astype(np.uint8)
+            arr = ds.pixel_array if hasattr(ds, "pixel_array") else np.frombuffer(ds.PixelData, dtype=np.uint16)
+            if arr.dtype == np.uint8 or arr.max() <= 255:
+                arr8 = arr.astype(np.uint8)
             else:
-                arr = ds.pixel_array
-                if arr.dtype == np.uint8 or arr.max() <= 255:
-                    arr8 = arr.astype(np.uint8)
-                else:
-                    arr8 = (arr >> 4).astype(np.uint8)
+                arr8 = (arr >> 4).astype(np.uint8)
 
             img = Image.fromarray(arr8)
             buf = io.BytesIO()
@@ -390,14 +395,24 @@ class DicomGeneratorService:
             ds.HighBit = 7
             ds.WindowCenter = 128
             ds.WindowWidth = 256
+            ds.SmallestImagePixelValue = 0
+            ds.LargestImagePixelValue = 255
+            ds.LossyImageCompression = "01"
+            ds.LossyImageCompressionMethod = "ISO_10918_1"
             ds.PixelData = encapsulate([jpeg_bytes])
-            return ds
-
-        if target_uid in (JPEG2000Lossless, JPEG2000, RLELossless):
+        elif target_uid in (JPEG2000Lossless, JPEG2000, RLELossless):
             try:
                 ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
-                ds.compress(target_uid)
-                return ds
+                if target_uid == JPEG2000Lossless:
+                    ds.compress(JPEG2000Lossless, generate_instance_uid=False)
+                    ds.LossyImageCompression = "00"
+                elif target_uid == JPEG2000:
+                    ds.compress(JPEG2000, j2k_cr=[10], generate_instance_uid=False)
+                    ds.LossyImageCompression = "01"
+                    ds.LossyImageCompressionMethod = "ISO_15444_1"
+                elif target_uid == RLELossless:
+                    ds.compress(RLELossless, generate_instance_uid=False)
+                    ds.LossyImageCompression = "00"
             except Exception as exc:
                 logger.warning(
                     "compression_failed_falling_back_to_raw",
@@ -405,9 +420,15 @@ class DicomGeneratorService:
                     error=str(exc),
                 )
                 ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
-                return ds
+        else:
+            ds.file_meta.TransferSyntaxUID = target_uid
 
-        ds.file_meta.TransferSyntaxUID = target_uid
+        # Synchronize dataset VR and endianness encoding flags with the final TransferSyntaxUID
+        is_implicit = ds.file_meta.TransferSyntaxUID == ImplicitVRLittleEndian
+        ds.is_implicit_VR = is_implicit
+        ds.is_little_endian = True
+        ds._read_implicit = is_implicit
+        ds._read_little = True
         return ds
 
     @classmethod
@@ -427,7 +448,14 @@ class DicomGeneratorService:
         file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
 
         # Dataset initialization
-        ds = FileDataset("mock.dcm", {}, file_meta=file_meta, preamble=b"\x00" * 128)
+        ds = FileDataset(
+            "mock.dcm",
+            {},
+            file_meta=file_meta,
+            preamble=b"\x00" * 128,
+            is_implicit_VR=False,
+            is_little_endian=True,
+        )
 
         # Patient Module
         ds.PatientID = patient_id
@@ -496,12 +524,16 @@ class DicomGeneratorService:
             ds.HighBit = 7
             ds.WindowCenter = 128
             ds.WindowWidth = 256
+            ds.SmallestImagePixelValue = 0
+            ds.LargestImagePixelValue = 255
         else:
             ds.BitsAllocated = 16
             ds.BitsStored = 12
             ds.HighBit = 11
             ds.WindowCenter = 2048
             ds.WindowWidth = 4096
+            ds.SmallestImagePixelValue = 0
+            ds.LargestImagePixelValue = 4095
 
         if request.burn_in_text:
             pixel_matrix = cls.burn_metadata_text(
@@ -537,6 +569,113 @@ class DicomGeneratorService:
             burn_in_text=True,
         )
         return cls.create_dicom_file(mock_req, instance_number=raw_req.image_number)
+
+    @classmethod
+    def create_dicom_from_template(
+        cls,
+        template: FileDataset | str | Path,
+        transfer_syntax: str | None = None,
+        patient_name: str | None = None,
+        patient_id: str | None = None,
+        study_date: str | None = None,
+        study_time: str | None = None,
+        image_number: int = 1,
+        burn_in_text: bool = True,
+        rows: int = 512,
+        cols: int = 512,
+        institution_name: str | None = None,
+        referring_physician_name: str | None = None,
+        performing_physician_name: str | None = None,
+        reading_physician_name: str | None = None,
+        study_description: str | None = None,
+        accession_number: str | None = None,
+        modality: str | None = None,
+    ) -> FileDataset:
+        """Create a synthetic DICOM dataset based on a base template DICOM file/dataset.
+
+        Swaps pixel data with precomputed background and burned metadata strings,
+        resolves tag VR ambiguities for explicit transfer syntax compliance,
+        and encodes with the requested transfer syntax.
+        """
+        import pydicom
+
+        if isinstance(template, (str, Path)):
+            ds = pydicom.dcmread(template)
+        else:
+            ds = copy.deepcopy(template)
+
+        syntax_name = (transfer_syntax or getattr(config, "transfer_syntax", "RAW")).upper().strip()
+        target_uid = TRANSFER_SYNTAX_MAP.get(syntax_name, ExplicitVRLittleEndian)
+        is_8bit = target_uid == JPEGBaseline8Bit
+
+        p_name = patient_name or (str(ds.PatientName) if hasattr(ds, "PatientName") else "MOCK_PATIENT")
+        p_id = patient_id or (str(ds.PatientID) if hasattr(ds, "PatientID") else "MOCK_ID")
+        s_date = study_date or (str(ds.StudyDate) if hasattr(ds, "StudyDate") else time.strftime("%Y%m%d"))
+        s_time = study_time or (str(ds.StudyTime) if hasattr(ds, "StudyTime") else time.strftime("%H%M%S"))
+
+        ds.PatientName = p_name
+        ds.PatientID = p_id
+        ds.StudyDate = s_date
+        ds.StudyTime = s_time
+        ds.Rows = rows
+        ds.Columns = cols
+        ds.InstitutionName = institution_name or getattr(config, "institution_name", "GO SMART CLINIC")
+        if referring_physician_name:
+            ds.ReferringPhysicianName = referring_physician_name
+        if performing_physician_name:
+            ds.PerformingPhysicianName = performing_physician_name
+        if reading_physician_name:
+            ds.NameOfPhysiciansReadingStudy = reading_physician_name
+        if study_description:
+            ds.StudyDescription = study_description
+        if accession_number:
+            ds.AccessionNumber = accession_number
+        if modality:
+            ds.Modality = modality
+
+        if burn_in_text:
+            pixel_matrix = cls.burn_metadata_text(
+                rows=rows,
+                cols=cols,
+                patient_name=p_name,
+                patient_id=p_id,
+                study_date=s_date,
+                study_time=s_time,
+                image_number=image_number,
+                is_8bit=is_8bit,
+            )
+        else:
+            pixel_matrix = cls.create_precomputed_background(rows, cols, is_8bit=is_8bit).copy()
+
+        ds.PixelRepresentation = 0
+        ds.SamplesPerPixel = 1
+        ds.PhotometricInterpretation = "MONOCHROME2"
+        ds.RescaleIntercept = "0"
+        ds.RescaleSlope = "1"
+
+        if is_8bit:
+            ds.BitsAllocated = 8
+            ds.BitsStored = 8
+            ds.HighBit = 7
+            ds.WindowCenter = 128
+            ds.WindowWidth = 256
+            ds.add_new(0x00280106, "US", 0)
+            ds.add_new(0x00280107, "US", 255)
+        else:
+            ds.BitsAllocated = 16
+            ds.BitsStored = 12
+            ds.HighBit = 11
+            ds.WindowCenter = 2048
+            ds.WindowWidth = 4096
+            ds.add_new(0x00280106, "US", 0)
+            ds.add_new(0x00280107, "US", 4095)
+
+        if (0x0028, 0x0120) in ds:
+            del ds[0x0028, 0x0120]
+
+        ds.PixelData = pixel_matrix.tobytes()
+        ds = cls.apply_transfer_syntax(ds, syntax_name)
+        return ds
 
     @classmethod
     def create_instances_from_mwl(
@@ -630,6 +769,85 @@ class DicomGeneratorService:
             num_instances=num_instances,
             burn_in_text=True,
         )
+
+        template_ds = mwl_record.get("template_dataset")
+        if not template_ds:
+            templates_dir = Path(getattr(config, "templates_path", "./templates"))
+            if templates_dir.exists() and templates_dir.is_dir():
+                for p in templates_dir.rglob("*"):
+                    if p.is_file() and p.suffix.lower() in (".dcm", ".dicom"):
+                        try:
+                            import pydicom
+
+                            temp_read = pydicom.dcmread(p, force=True)
+                            temp_mod = str(getattr(temp_read, "Modality", "")).strip().upper()
+                            if temp_mod == modality:
+                                template_ds = temp_read
+                                break
+                        except Exception:
+                            pass
+
+        if template_ds:
+            t_rows = int(getattr(template_ds, "Rows", 512))
+            t_cols = int(getattr(template_ds, "Columns", 512))
+            datasets = []
+            for i in range(1, num_instances + 1):
+                ds = cls.create_dicom_from_template(
+                    template=template_ds,
+                    transfer_syntax=mwl_record.get("transfer_syntax"),
+                    patient_name=patient_name,
+                    patient_id=patient_id,
+                    study_date=study_date,
+                    study_time=study_time,
+                    image_number=i,
+                    burn_in_text=True,
+                    rows=t_rows,
+                    cols=t_cols,
+                    institution_name=inst_name,
+                    referring_physician_name=ref_phys,
+                    performing_physician_name=perf_phys,
+                    reading_physician_name=read_phys,
+                    study_description=study_desc,
+                    accession_number=accession,
+                    modality=modality,
+                )
+                ds.PatientID = patient_id
+                ds.PatientName = patient_name
+                if patient_dob:
+                    ds.PatientBirthDate = patient_dob
+                if patient_sex:
+                    ds.PatientSex = patient_sex
+
+                ds.StudyInstanceUID = study_uid
+                ds.StudyDate = study_date
+                ds.StudyTime = study_time
+                ds.AccessionNumber = accession
+                ds.StudyDescription = study_desc
+                if inst_name:
+                    ds.InstitutionName = inst_name
+                if ref_phys:
+                    ds.ReferringPhysicianName = ref_phys
+                if read_phys:
+                    ds.NameOfPhysiciansReadingStudy = read_phys
+
+                ds.SeriesInstanceUID = series_uid
+                ds.Modality = modality
+                ds.SeriesNumber = series_number
+                ds.SeriesDescription = series_desc
+                if perf_phys:
+                    ds.PerformingPhysicianName = perf_phys
+
+                sop_inst_uid = generate_sop_instance_uid(series_uid, i)
+                ds.SOPInstanceUID = sop_inst_uid
+                if getattr(ds, "file_meta", None):
+                    ds.file_meta.MediaStorageSOPInstanceUID = sop_inst_uid
+                ds.InstanceNumber = i
+
+                ds.NumberOfSeriesRelatedInstances = num_instances
+                ds.NumberOfStudyRelatedSeries = 1
+                ds.NumberOfStudyRelatedInstances = num_instances
+                datasets.append(ds)
+            return datasets
 
         datasets = []
         for i in range(1, num_instances + 1):

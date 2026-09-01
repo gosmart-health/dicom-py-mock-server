@@ -20,6 +20,7 @@ lib/
 lib64/
 parts/
 sdist/
+test_output/
 var/
 wheels/
 share/python-wheels/

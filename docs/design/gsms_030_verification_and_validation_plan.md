@@ -26,6 +26,7 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
   - Verify random physician assignment into MWL entries and propagation of Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) to SOP instances.
   - Verify C-STORE CSV audit record formatting, throughput rate calculations (`kb/s`), and UTC timestamp handling.
   - Verify deterministic ITU-T X.667 / ISO/IEC 9834-8 `2.25.<u128>` UID generation, version 5 (SHA-1) and version 3 (MD5) bitfields, string length <= 64, hierarchical seeding (Study -> Series -> Instance), and PHI protection.
+  - Verify raw-first image generation with test patterns and burned-in text across all transfer syntaxes (RAW, JPEG, JPEG2000 Lossless, JPEG2000 Lossy, RLE), UID retention across compression, and presentation context advertisement in SCP/SCU services.
 
 ### 2.2 API & Integration Testing (Level 2)
 * **Scope:** FastAPI route handlers, Uvicorn app initialization, auto-push scheduler, and endpoint responses.
