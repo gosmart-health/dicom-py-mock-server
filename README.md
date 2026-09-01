@@ -148,6 +148,67 @@ When a DICOM C-STORE transfer ends per association (C-MOVE push, SCU direct move
 
 ---
 
+## DICOMweb RESTful Services (PS3.18)
+
+The server exposes standard DICOMweb REST services mounted at `/dicomweb/...` (and aliased at `/api/v1/dicomweb/...` and direct root `/studies`):
+
+### 1. QIDO-RS (Query / Search DICOM Objects)
+
+| Endpoint | Description | Response Type |
+| :--- | :--- | :--- |
+| `GET /dicomweb/studies` | Search for studies with query filters (`PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`, `ModalitiesInStudy`, `limit`, `offset`) | `application/dicom+json` |
+| `GET /dicomweb/studies/{studyUID}/series` | Search for series within a study | `application/dicom+json` |
+| `GET /dicomweb/series` | Search for series across all studies | `application/dicom+json` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances` | Search for instances within a series | `application/dicom+json` |
+| `GET /dicomweb/instances` | Search for instances across all studies | `application/dicom+json` |
+
+#### Example QIDO-RS Request
+```bash
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies?PatientID=GSH*&limit=10" \
+     -H "Accept: application/dicom+json"
+```
+
+---
+
+### 2. WADO-RS (Retrieve DICOM Objects, Metadata & Rendered Previews)
+
+| Endpoint | Description | Response Type |
+| :--- | :--- | :--- |
+| `GET /dicomweb/studies/{studyUID}` | Retrieve all DICOM instances in a study | `multipart/related; type="application/dicom"` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}` | Retrieve all DICOM instances in a series | `multipart/related; type="application/dicom"` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}` | Retrieve a single DICOM instance | `multipart/related; type="application/dicom"` or `application/dicom` |
+| `GET /dicomweb/studies/{studyUID}/metadata` | Retrieve study metadata (omitting pixel data) | `application/dicom+json` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}/rendered` | Render instance pixel array to image | `image/jpeg` or `image/png` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}/frames/{frameList}` | Retrieve raw pixel data for specific frames | `multipart/related; type="application/octet-stream"` |
+
+#### Transfer Syntax Negotiation & Transcoding
+WADO-RS endpoints automatically transcode instances on-the-fly to the requested transfer syntax specified in the `Accept` header or query parameter `transferSyntax`:
+
+```bash
+# Retrieve JPEG 2000 Lossless instances
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
+     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.4.90"'
+
+# Retrieve Explicit VR Little Endian (RAW) instances
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
+     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.1"'
+
+# Retrieve JPEG Baseline 8-bit instances
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
+     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.4.50"'
+```
+
+---
+
+### 3. WADO-URI (Legacy Single-Object Retrieval)
+
+```bash
+curl -X GET "http://127.0.0.1:8000/dicomweb/wado?requestType=WADO&studyUID=2.25.123&seriesUID=2.25.456&objectUID=2.25.789&contentType=application/dicom" \
+     -o instance.dcm
+```
+
+---
+
 ## Running the Server
 
 Start the FastAPI application and DICOM mock services:

@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.2.0] - 2026-09-01
+
+### Added
+- **DICOMweb Standard Protocol Services (PS 3.18)**:
+  - **QIDO-RS (Query based on ID for DICOM Objects)**:
+    - Implemented RESTful query endpoints: `/dicomweb/studies`, `/dicomweb/studies/{studyUID}/series`, `/dicomweb/studies/{studyUID}/series/{seriesUID}/instances`, and `/dicomweb/instances`.
+    - Supports query matching filters (`PatientID`, `PatientName`, `StudyDate`, `ModalitiesInStudy`, `Modality`, `AccessionNumber`, `fuzzyMatching`), field projection (`includefield`), and pagination (`limit`, `offset`).
+    - Returns standard DICOM JSON format (`application/dicom+json`).
+  - **WADO-RS (Web Access to DICOM Objects by RESTful Services)**:
+    - Implemented retrieve endpoints for studies, series, instances, and frame objects (`/dicomweb/studies/{studyUID}`, `/dicomweb/studies/{studyUID}/series/{seriesUID}`, `/dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{sopUID}`).
+    - Full metadata retrieval (`/metadata`) returning bulk JSON dataset hierarchy.
+    - Rendered consumer format retrieval (`/rendered`) providing server-side dynamic rendering to JPEG and PNG with frame indexing (`frame=N`), quality control (`quality=1-100`), and window level adjustments.
+    - Multipart DICOM Part 10 packaging (`multipart/related; type="application/dicom"`).
+  - **STOW-RS (Store Over the Web by RESTful Services)**:
+    - Implemented web-based DICOM ingestion endpoints (`POST /dicomweb/studies` and `POST /dicomweb/studies/{studyUID}`).
+    - Parses `multipart/related` payloads containing DICOM Part 10 streams, stores instances to local storage directory, and returns standard XML/JSON STOW response headers.
+  - **WADO-URI (Web Access to DICOM Persistent Objects via URI)**:
+    - Implemented legacy single-part HTTP GET interface (`/dicomweb/wado`) supporting `requestType=WADO`, `contentType=application/dicom`, `contentType=image/jpeg`, `contentType=image/png`, frame extraction, and transfer syntax negotiation.
+- **Design & Specification Documentation**:
+  - Updated Software Requirements Specification (`gsms_000_software_requirements_spec.md`), System Design (`gsms_010_system_design_specification.md`), Verification Plan (`gsms_030_verification_and_validation_plan.md`), Traceability Matrix (`gsms_040_traceability_matrix.md`), and `README.md` with complete DICOMweb endpoints and testing instructions.
+
+### Fixed
+- **Pydicom 4.0 Compatibility & Deprecation Cleanup (`generator.py`)**:
+  - Removed deprecated kwargs `is_implicit_VR=False` and `is_little_endian=True` in `FileDataset(...)` initialization in `DicomGeneratorService.create_dicom_file`.
+  - Removed deprecated property mutations `ds.is_implicit_VR` and `ds.is_little_endian` in `apply_transfer_syntax`.
+  - Cleared dataset internal read-encoding flags (`_is_implicit_VR`, `_is_little_endian`, `_read_implicit`, `_read_little` set to `None`) so in-memory synthesized DICOM instances correctly adhere to their `file_meta.TransferSyntaxUID` without defaulting to Implicit VR Little Endian during `pynetdicom` C-STORE operations.
+- **Test Suite Modernization (`test_generator.py`)**:
+  - Updated transfer syntax assertion checks to use standard `file_meta.TransferSyntaxUID.is_implicit_VR` and `file_meta.TransferSyntaxUID.is_little_endian` properties.
+
 ## [0.1.1] - 2026-09-01
 
 ### Added
@@ -43,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Propagates Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) attributes across MWL entries, SOP instances, and C-MOVE network transfers.
 
 ## [0.0.2] - 2026-08-30
-- **Fixed Issue 5** Fixed the bug where C-FIND does not return all needed attributes.
+- **Fixed Issue 5**: Fixed the bug where C-FIND does not return all needed attributes.
 
 ## [0.0.1] - 2026-08-28
 
@@ -65,4 +94,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Synthetic PHI Safeguard**: All generated patient names, IDs, and accessions are strictly synthetic, preventing unintentional ingestion of real clinical PHI.
 - **Default Loopback Binding**: REST and MCP HTTP services bind to local loopback (`127.0.0.1`) by default to prevent unintended exposure to external networks.
 - **SOUP & Dependency Auditing**: Continuous dependency vulnerability monitoring with `pip-audit` and deterministic builds locked with `uv.lock`.
-

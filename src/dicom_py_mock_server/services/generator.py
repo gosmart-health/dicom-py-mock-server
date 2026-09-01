@@ -359,17 +359,14 @@ class DicomGeneratorService:
         target_uid = TRANSFER_SYNTAX_MAP.get(target_name, ExplicitVRLittleEndian)
 
         current_uid = getattr(ds.file_meta, "TransferSyntaxUID", None)
-        if current_uid != target_uid:
-            is_comp = (
-                getattr(ds, "is_compressed", False)
-                or (current_uid and getattr(current_uid, "is_compressed", False))
-                or current_uid not in (ExplicitVRLittleEndian, ImplicitVRLittleEndian, None)
-            )
-            if is_comp:
-                try:
-                    ds.decompress()
-                except Exception as exc:
-                    logger.warning("decompress_failed_before_syntax_conversion", error=str(exc))
+        if current_uid == target_uid:
+            return ds
+
+        if current_uid not in (ExplicitVRLittleEndian, ImplicitVRLittleEndian, None):
+            try:
+                ds.decompress()
+            except Exception as exc:
+                logger.warning("decompress_failed_before_syntax_conversion", error=str(exc))
 
         if target_uid in (ExplicitVRLittleEndian, ImplicitVRLittleEndian):
             ds.file_meta.TransferSyntaxUID = target_uid

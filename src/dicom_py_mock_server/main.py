@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
-from dicom_py_mock_server.api import mcp_router, router
+from dicom_py_mock_server.api import dicomweb_router, mcp_router, router
 from dicom_py_mock_server.api.routes import mwl_service, scp_service
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.logging_config import get_logger, setup_logging
@@ -53,11 +53,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=config.app_name,
     version=config.app_version,
-    description="FastAPI service for generating mock DICOM objects and serving DICOM SCP services.",
+    description="FastAPI service for mock DICOM objects, DICOM SCP, and DICOMweb QIDO/WADO services.",
     lifespan=lifespan,
 )
 
 app.include_router(router)
+app.include_router(dicomweb_router)
 app.include_router(mcp_router)
 
 

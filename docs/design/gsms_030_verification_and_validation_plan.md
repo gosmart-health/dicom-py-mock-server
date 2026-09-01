@@ -29,12 +29,17 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
   - Verify raw-first image generation with test patterns and burned-in text across all transfer syntaxes (RAW, JPEG, JPEG2000 Lossless, JPEG2000 Lossy, RLE), UID retention across compression, and presentation context advertisement in SCP/SCU services.
 
 ### 2.2 API & Integration Testing (Level 2)
-* **Scope:** FastAPI route handlers, Uvicorn app initialization, auto-push scheduler, and endpoint responses.
+* **Scope:** FastAPI route handlers, Uvicorn app initialization, auto-push scheduler, DICOMweb QIDO-RS/WADO-RS/WADO-URI handlers, and endpoint responses.
 * **Framework:** `starlette.testclient.TestClient` / `pytest`.
 * **Verification Methods:**
   - Execute REST requests against `/health`, `/api/v1/generate`, `/api/v1/worklist/generate`, `/api/v1/autopush/start`, `/api/v1/scp/status`.
   - Validate JSON response schemas and status codes.
   - Verify 9-5 peak vs off-peak push scheduler configuration and lifecycle control.
+  - Verify QIDO-RS search studies, series, and instances return valid `application/dicom+json` responses adhering to query filters (`PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`, `limit`, `offset`).
+  - Verify WADO-RS metadata endpoints return DICOM JSON stripped of bulk/pixel data.
+  - Verify WADO-RS retrieve endpoints return multipart DICOM streams correctly transcoded to requested transfer syntaxes (`Explicit VR Little Endian`, `JPEG Baseline`, `JPEG 2000 Lossless`, `RLE Lossless`).
+  - Verify WADO-RS rendered image views return valid JPEG and PNG binary streams with valid magic bytes.
+  - Verify WADO-URI legacy single-object retrieval for both DICOM datasets and rendered previews.
 
 ### 2.3 DICOM Protocol Interop & System Testing (Level 3)
 * **Scope:** `pynetdicom` Application Entity background server initialization, presentation context negotiation, Query/Retrieve (C-FIND, C-MOVE, C-GET), Modality Worklist (MWL C-FIND), C-STORE, C-STORE CSV audit logging per association, headless CI/CD operation, and stress testing.
