@@ -16,7 +16,7 @@ class AppConfig(BaseSettings):
     )
 
     app_name: str = "DICOM Mock Server"
-    app_version: str = "0.1.0"
+    app_version: str = "0.1.1"
     host: str = "127.0.0.1"
     port: int = 8000
     scp_ae_title: str = Field(
@@ -95,9 +95,9 @@ class AppConfig(BaseSettings):
         description="Maximum number of slices for volume image generation",
     )
     transfer_syntax: str = Field(
-        default="RAW",
+        default="JPEG2000_LOSSLESS",
         validation_alias=AliasChoices("GOSMART_MS_TRANSFER_SYNTAX", "TRANSFER_SYNTAX"),
-        description="Default DICOM Transfer Syntax for generated images (RAW, JPEG, JPEG2000, RLE)",
+        description="Default DICOM Transfer Syntax for generated images (RAW, JPEG, JPEG2000, JPEG2000_LOSSLESS, RLE)",
     )
     move_destinations: dict[str, dict[str, Any]] = Field(
         default_factory=dict,

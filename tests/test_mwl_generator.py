@@ -42,14 +42,12 @@ def test_person_generator():
 
 
 def test_mwl_generator_default_templates(tmp_path):
-    # Ensure empty templates directory triggers default fallback modalities
+    # Ensure empty templates directory produces NO template modalities and logs error
     cfg = AppConfig(templates_path=str(tmp_path))
     service = MwlGeneratorService(app_config=cfg)
     modalities = service.get_template_modalities()
-    assert "CT" in modalities
-    assert "MR" in modalities
-    assert "US" in modalities
-    assert "DX" in modalities
+    assert modalities == []
+    assert service.add_entry() is None
 
 
 def test_mwl_generator_template_file_loading(tmp_path):

@@ -157,7 +157,7 @@ def test_mwl_service_uid_integration():
             "patientName": "MWL^DET^PATIENT",
             "patientId": "MWL-ID-001",
             "accession": "MWL-ACC-001",
-            "modality": "MR",
+            "modality": "CT",
         }
     )
 
@@ -170,7 +170,7 @@ def test_mwl_service_uid_integration():
             "patientName": "MWL^DET^PATIENT",
             "patientId": "MWL-ID-001",
             "accession": "MWL-ACC-001",
-            "modality": "MR",
+            "modality": "CT",
         }
     )
     assert entry2["0020000D"]["Value"][0] == entry["study_uid"]

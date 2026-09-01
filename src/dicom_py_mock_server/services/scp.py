@@ -4,7 +4,16 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from pydicom.uid import (
+    JPEG2000,
+    ExplicitVRLittleEndian,
+    ImplicitVRLittleEndian,
+    JPEG2000Lossless,
+    JPEGBaseline8Bit,
+    RLELossless,
+)
 from pynetdicom import AE, StoragePresentationContexts, evt
+from pynetdicom.presentation import build_context
 from pynetdicom.sop_class import (
     ModalityWorklistInformationFind,
     PatientRootQueryRetrieveInformationModelFind,
@@ -20,6 +29,58 @@ from dicom_py_mock_server.services.generator import DicomGeneratorService
 from dicom_py_mock_server.services.uid_generator import generate_dicom_uid
 
 logger = structlog.get_logger(__name__)
+
+
+def get_prioritized_transfer_syntaxes(preferred_syntax: str | None = None) -> list[Any]:
+    """Get list of supported transfer syntaxes ordered with the preferred syntax first."""
+    pref = (preferred_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).upper().strip()
+
+    pref_uid = None
+    if "JPEG2000_LOSSY" in pref:
+        pref_uid = JPEG2000
+    elif "JPEG2000" in pref:
+        pref_uid = JPEG2000Lossless
+    elif "JPEG" in pref:
+        pref_uid = JPEGBaseline8Bit
+    elif "RLE" in pref:
+        pref_uid = RLELossless
+    elif "RAW" in pref or "EXPLICIT" in pref:
+        pref_uid = ExplicitVRLittleEndian
+    elif "IMPLICIT" in pref:
+        pref_uid = ImplicitVRLittleEndian
+
+    all_syntaxes = [
+        JPEG2000Lossless,
+        JPEG2000,
+        RLELossless,
+        JPEGBaseline8Bit,
+        ExplicitVRLittleEndian,
+        ImplicitVRLittleEndian,
+    ]
+
+    if pref_uid and pref_uid in all_syntaxes:
+        return [pref_uid] + [ts for ts in all_syntaxes if ts != pref_uid]
+    return all_syntaxes
+
+
+SUPPORTED_TRANSFER_SYNTAXES = get_prioritized_transfer_syntaxes()
+
+
+def adapt_dataset_for_accepted_context(ds: Any, accepted_contexts: list[Any]) -> Any:
+    """Adapt dataset transfer syntax to match the negotiated context accepted by the peer."""
+    sop_class = getattr(ds, "SOPClassUID", None)
+    if not sop_class:
+        return ds
+
+    accepted_ts = None
+    for cx in accepted_contexts:
+        if cx.abstract_syntax == sop_class and cx.transfer_syntax:
+            accepted_ts = cx.transfer_syntax[0]
+            break
+
+    if accepted_ts and getattr(ds.file_meta, "TransferSyntaxUID", None) != accepted_ts:
+        ds = DicomGeneratorService.apply_transfer_syntax(ds, str(accepted_ts))
+    return ds
 
 
 class DicomScpService:
@@ -161,8 +222,10 @@ class DicomScpService:
             yield (None, None)
             return
 
-        # 1st yield: (addr, port, kwargs) including Storage presentation contexts for outgoing C-STORE association
-        yield (addr, port, {"contexts": StoragePresentationContexts})
+        # 1st yield: (addr, port, kwargs) including Storage presentation contexts with the target transfer syntax
+        target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
+        storage_contexts = [build_context(cx.abstract_syntax, [target_syntax]) for cx in StoragePresentationContexts]
+        yield (addr, port, {"contexts": storage_contexts})
 
         identifier = getattr(event, "identifier", None)
         study_uid = (
@@ -283,9 +346,10 @@ class DicomScpService:
         self.ae.add_supported_context(PatientRootQueryRetrieveInformationModelMove)
         self.ae.add_supported_context(StudyRootQueryRetrieveInformationModelMove)
         self.ae.add_supported_context(ModalityWorklistInformationFind)
+        target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
         for cx in StoragePresentationContexts:
-            self.ae.add_supported_context(cx.abstract_syntax)
-            self.ae.add_requested_context(cx.abstract_syntax)
+            self.ae.add_supported_context(cx.abstract_syntax, SUPPORTED_TRANSFER_SYNTAXES)
+            self.ae.add_requested_context(cx.abstract_syntax, [target_syntax])
 
         handlers = [
             (evt.EVT_C_ECHO, self._handle_echo),
@@ -371,8 +435,9 @@ class DicomScpService:
 
         # Connect as SCU to target
         ae = AE(ae_title=self.ae_title)
+        target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
         for cx in StoragePresentationContexts:
-            ae.add_requested_context(cx.abstract_syntax)
+            ae.add_requested_context(cx.abstract_syntax, [target_syntax])
 
         assoc = ae.associate(target_host, target_port, ae_title=target_ae_title)
         if not assoc.is_established:
@@ -397,6 +462,7 @@ class DicomScpService:
         sent_count = 0
         try:
             for ds in all_datasets:
+                ds = adapt_dataset_for_accepted_context(ds, assoc.accepted_contexts)
                 status = assoc.send_c_store(ds)
                 if status and status.Status in (0x0000, 0xB000, 0xB006, 0xB007):
                     sent_count += 1

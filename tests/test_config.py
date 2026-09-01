@@ -5,7 +5,7 @@ from dicom_py_mock_server.config import AppConfig
 
 def test_default_config_values():
     """Test default values when no environment variables are set."""
-    cfg = AppConfig()
+    cfg = AppConfig(_env_file=None)
     assert cfg.scp_ae_title == "GOSMART_SCP"
     assert cfg.ae_title == "GOSMART_SCP"
     assert cfg.scp_port == 11112
@@ -21,6 +21,7 @@ def test_default_config_values():
     assert cfg.pn_suffix == "_GSH"
     assert cfg.institution_name == "GO SMART CLINIC"
     assert cfg.id_prefix == "GSH-"
+    assert cfg.transfer_syntax == "JPEG2000_LOSSLESS"
 
 
 def test_env_variables_override(monkeypatch):

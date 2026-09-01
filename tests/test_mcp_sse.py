@@ -96,7 +96,7 @@ async def test_mcp_service_jsonrpc_protocol(tmp_path):
             "method": "tools/call",
             "params": {
                 "name": "generate_mwl_entry",
-                "arguments": {"patientId": "MWL-MCP-PAT", "modality": "MR"},
+                "arguments": {"patientId": "MWL-MCP-PAT", "modality": "CT"},
             },
         },
     )

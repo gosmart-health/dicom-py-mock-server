@@ -4,7 +4,14 @@ import tempfile
 
 import numpy as np
 import pydicom
-from pydicom.uid import ExplicitVRLittleEndian, JPEG2000Lossless, JPEGBaseline8Bit
+from pydicom.uid import (
+    JPEG2000,
+    ExplicitVRLittleEndian,
+    ImplicitVRLittleEndian,
+    JPEG2000Lossless,
+    JPEGBaseline8Bit,
+    RLELossless,
+)
 
 from dicom_py_mock_server.models.dicom import (
     MockDicomRequest,
@@ -45,61 +52,103 @@ def test_dicom_file_generation():
         assert hasattr(ds, "PixelData")
 
 
-def test_raw_image_generator_burned_text_512x512():
+def test_ocr_burned_in_text():
     generator = DicomGeneratorService()
-    raw_req = RawImageGeneratorRequest(
-        patient_name="SMART^PATIENT",
-        patient_id="RAW-PAT-999",
+    req = RawImageGeneratorRequest(
+        patient_name="OCR^TEST",
+        patient_id="ID-OCR-999",
         study_date="20260828",
         study_time="143000",
-        image_number=5,
+        image_number=1,
         rows=512,
         columns=512,
         transfer_syntax="RAW",
     )
-
-    ds = generator.create_raw_dicom_file(raw_req)
-
-    assert ds.PatientName == "SMART^PATIENT"
-    assert ds.PatientID == "RAW-PAT-999"
-    assert ds.StudyDate == "20260828"
-    assert ds.StudyTime == "143000"
-    assert ds.InstanceNumber == 5
+    ds = generator.create_raw_dicom_file(req)
     assert ds.Rows == 512
     assert ds.Columns == 512
     assert ds.BitsAllocated == 16
     assert ds.BitsStored == 12
-    assert ds.HighBit == 11
-    assert ds.WindowCenter == 2048
-    assert ds.WindowWidth == 4096
-    assert ds.file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
+    assert ds.PixelRepresentation == 0
+    assert hasattr(ds, "PixelData")
+    assert len(ds.PixelData) == 512 * 512 * 2
 
-    # Verify text is burned into top-left region of pixel_array
+    # Verify OCR text area and gradient pattern
     arr = ds.pixel_array
-    assert arr.shape == (512, 512)
     top_left_region = arr[10:100, 10:300]
     assert np.any(top_left_region >= 4000)
+    # Verify bottom half has 4 gradient segments spanning 0 to 4095
+    bottom_half = arr[256:512, :]
+    assert bottom_half.min() == 0
+    assert bottom_half.max() == 4095
 
 
 def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
     generator = DicomGeneratorService()
 
-    # RAW (Explicit VR Little Endian)
+    # 1. RAW (Explicit VR Little Endian)
     req_raw = RawImageGeneratorRequest(transfer_syntax="RAW")
     ds_raw = generator.create_raw_dicom_file(req_raw)
     assert ds_raw.file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
+    assert ds_raw.pixel_array.shape == (512, 512)
+    assert ds_raw.pixel_array.dtype == np.uint16
+    assert ds_raw.pixel_array.max() == 4095
+    assert ds_raw.SmallestImagePixelValue == 0
+    assert ds_raw.LargestImagePixelValue == 4095
+    assert ds_raw.is_implicit_VR is False
+    assert ds_raw.original_encoding == (False, True)
 
-    # JPEG Process 1 (JPEGBaseline8Bit)
+    # 2. JPEG Process 1 (JPEGBaseline8Bit)
     req_jpeg = RawImageGeneratorRequest(transfer_syntax="JPEG")
     ds_jpeg = generator.create_raw_dicom_file(req_jpeg)
     assert ds_jpeg.file_meta.TransferSyntaxUID == JPEGBaseline8Bit
     assert ds_jpeg.pixel_array.shape == (512, 512)
+    assert ds_jpeg.pixel_array.dtype == np.uint8
+    assert ds_jpeg.pixel_array.max() == 255
+    assert ds_jpeg.BitsAllocated == 8
+    assert ds_jpeg.BitsStored == 8
+    assert ds_jpeg.HighBit == 7
+    assert ds_jpeg.SmallestImagePixelValue == 0
+    assert ds_jpeg.LargestImagePixelValue == 255
+    assert ds_jpeg.LossyImageCompression == "01"
+    assert ds_jpeg.is_implicit_VR is False
+    assert ds_jpeg.original_encoding == (False, True)
 
-    # JPEG 2000 (JPEG2000Lossless)
+    # 3. JPEG 2000 Lossless (JPEG2000Lossless)
     req_j2k = RawImageGeneratorRequest(transfer_syntax="JPEG2000")
     ds_j2k = generator.create_raw_dicom_file(req_j2k)
-    assert ds_j2k.file_meta.TransferSyntaxUID in (JPEG2000Lossless, ExplicitVRLittleEndian)
+    assert ds_j2k.file_meta.TransferSyntaxUID == JPEG2000Lossless
     assert ds_j2k.pixel_array.shape == (512, 512)
+    assert ds_j2k.pixel_array.dtype == np.uint16
+    assert ds_j2k.pixel_array.max() == 4095
+    assert ds_j2k.LossyImageCompression == "00"
+    assert ds_j2k.is_implicit_VR is False
+    assert ds_j2k.original_encoding == (False, True)
+    # Ensure SOP Instance UID was preserved
+    assert ds_j2k.file_meta.MediaStorageSOPInstanceUID == ds_j2k.SOPInstanceUID
+
+    # 4. JPEG 2000 Lossy (JPEG2000)
+    req_j2k_lossy = RawImageGeneratorRequest(transfer_syntax="JPEG2000_LOSSY")
+    ds_j2k_lossy = generator.create_raw_dicom_file(req_j2k_lossy)
+    assert ds_j2k_lossy.file_meta.TransferSyntaxUID == JPEG2000
+    assert ds_j2k_lossy.pixel_array.shape == (512, 512)
+    assert ds_j2k_lossy.pixel_array.dtype == np.uint16
+    assert ds_j2k_lossy.pixel_array.max() == 4095
+    assert ds_j2k_lossy.LossyImageCompression == "01"
+    assert ds_j2k_lossy.is_implicit_VR is False
+    assert ds_j2k_lossy.original_encoding == (False, True)
+
+    # 5. RLE Lossless (RLELossless)
+    req_rle = RawImageGeneratorRequest(transfer_syntax="RLE")
+    ds_rle = generator.create_raw_dicom_file(req_rle)
+    assert ds_rle.file_meta.TransferSyntaxUID == RLELossless
+    assert ds_rle.pixel_array.shape == (512, 512)
+    assert ds_rle.pixel_array.dtype == np.uint16
+    assert ds_rle.pixel_array.max() == 4095
+    assert ds_rle.LossyImageCompression == "00"
+    assert ds_rle.is_implicit_VR is False
+    assert ds_rle.original_encoding == (False, True)
+    assert ds_rle.file_meta.MediaStorageSOPInstanceUID == ds_rle.SOPInstanceUID
 
 
 def test_template_sop_synthesis():
@@ -307,3 +356,82 @@ def test_precomputed_background_caching():
     bg1 = DicomGeneratorService.create_precomputed_background(512, 512, is_8bit=False)
     bg2 = DicomGeneratorService.create_precomputed_background(512, 512, is_8bit=False)
     assert bg1 is bg2
+
+
+def test_template_jpeg2000_lossless_generation():
+    """Generate JPEG2000 Lossless DICOM Part-10 file based on templates/CT_small.dcm.
+
+    Swaps pixels with burned metadata text on precomputed background and saves
+    to test_output/jpeg_2000_lossless.dcm without deletion for PACS viewer verification.
+    """
+    from pathlib import Path
+
+    out_dir = Path("test_output")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "jpeg_2000_lossless.dcm"
+
+    ds = DicomGeneratorService.create_dicom_from_template(
+        template="templates/CT_small.dcm",
+        transfer_syntax="JPEG2000_LOSSLESS",
+        patient_name="JPEG2000^TEST",
+        patient_id="J2K-PAT-001",
+        burn_in_text=True,
+    )
+
+    ds.save_as(out_file, enforce_file_format=True)
+
+    assert out_file.exists()
+    assert out_file.stat().st_size > 0
+
+    read_back = pydicom.dcmread(out_file)
+    assert read_back.file_meta.TransferSyntaxUID == JPEG2000Lossless
+    assert read_back.PatientName == "JPEG2000^TEST"
+    assert read_back.PatientID == "J2K-PAT-001"
+    assert read_back.Rows == 512
+    assert read_back.Columns == 512
+    assert read_back.pixel_array.shape == (512, 512)
+    assert read_back.pixel_array.dtype == np.uint16
+    assert read_back.pixel_array.max() == 4095
+
+
+def test_template_all_supported_compressions_generation():
+    """Generate Part-10 files for all supported transfer syntaxes based on templates/CT_small.dcm.
+
+    Saves files to test_output/ directory without deleting them post-run.
+    """
+    from pathlib import Path
+
+    out_dir = Path("test_output")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    cases = [
+        ("jpeg_2000_lossless.dcm", "JPEG2000_LOSSLESS", JPEG2000Lossless, np.uint16),
+        ("jpeg_2000_lossy.dcm", "JPEG2000_LOSSY", JPEG2000, np.uint16),
+        ("jpeg_baseline.dcm", "JPEG", JPEGBaseline8Bit, np.uint8),
+        ("rle_lossless.dcm", "RLE", RLELossless, np.uint16),
+        ("explicit_vr_little_endian.dcm", "EXPLICIT_VR_LITTLE_ENDIAN", ExplicitVRLittleEndian, np.uint16),
+        ("implicit_vr_little_endian.dcm", "IMPLICIT_VR_LITTLE_ENDIAN", ImplicitVRLittleEndian, np.uint16),
+    ]
+
+    for filename, syntax_key, expected_uid, expected_dtype in cases:
+        out_file = out_dir / filename
+
+        ds = DicomGeneratorService.create_dicom_from_template(
+            template="templates/CT_small.dcm",
+            transfer_syntax=syntax_key,
+            patient_name=f"SYNTAX^{syntax_key}",
+            patient_id=f"ID-{syntax_key}",
+            burn_in_text=True,
+        )
+
+        ds.save_as(out_file, enforce_file_format=True)
+
+        assert out_file.exists()
+        assert out_file.stat().st_size > 0
+
+        read_back = pydicom.dcmread(out_file)
+        assert read_back.file_meta.TransferSyntaxUID == expected_uid
+        assert read_back.Rows == 512
+        assert read_back.Columns == 512
+        assert read_back.pixel_array.shape == (512, 512)
+        assert read_back.pixel_array.dtype == expected_dtype

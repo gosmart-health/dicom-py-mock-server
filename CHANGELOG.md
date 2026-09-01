@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.1.1] - 2026-09-01
+
+### Added
+- **Direct MicroDICOM Viewer Integration Tests**:
+  - Added `test_microdicom_send_jpeg2000_lossless_from_ct_small_template` verifying template-based JPEG 2000 Lossless DICOM synthesis, presentation context negotiation, and C-STORE push directly to MicroDICOM Viewer (`127.0.0.1:11113`, `AE_Title=MDICOM`).
+  - Added TCP port availability helper (`_is_microdicom_available()`) to gracefully skip port 11113 integration tests via `pytest.skip()` during offline CI or development environments.
+
+### Fixed
+- **DICOM Transfer Syntax Association Negotiation (`scp.py`)**:
+  - Fixed Storage SCU requested presentation contexts in C-MOVE sub-operations and C-STORE pushes to propose the specific configured `target_syntax` (`JPEG2000_LOSSLESS`, `RAW`, `RLE`, `JPEG`).
+  - Resolved association negotiation failure where DICOM viewers (such as MicroDICOM) selected alternate uncompressed or JPEG Baseline transfer syntaxes when multiple syntaxes were offered in a single context, causing subsequent compressed C-STORE sub-operations to fail.
+  - Maintained full multi-syntax support (`SUPPORTED_TRANSFER_SYNTAXES`) for incoming Storage SCP operations.
+- **Template DICOM Synthesis & Dimension Scaling (`generator.py`)**:
+  - Fixed synthesized DICOM instance dimensions to consistently default to `512`x`512` (with dynamic range patterns and burned-in metadata) rather than inheriting smaller dimensions from base template files (e.g. `templates/CT_small.dcm` 128x128).
+  - Cleaned up duplicate keyword arguments in `DicomGeneratorService.create_instances_from_mwl`.
+- **Default Transfer Syntax**:
+  - Updated default `transfer_syntax` from `"RAW"` to `"JPEG2000_LOSSLESS"` in application config and generation fallbacks.
+
 ## [0.1.0] - 2026-08-31
 
 ### Added

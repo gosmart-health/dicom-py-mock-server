@@ -87,14 +87,14 @@ def test_mwl_generate_endpoint():
     payload = {
         "patientName": "MWL^API^TEST",
         "patientId": "MWL-PAT-999",
-        "modality": "US",
+        "modality": "CT",
     }
     response = client.post("/api/v1/mwl/generate", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
     assert data["patient_id"] == "MWL-PAT-999"
-    assert data["modality"] == "US"
+    assert data["modality"] == "CT"
 
     # Verify listing
     res_list = client.get("/api/v1/mwl")
