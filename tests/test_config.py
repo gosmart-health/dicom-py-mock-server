@@ -5,7 +5,7 @@ from dicom_py_mock_server.config import AppConfig
 
 def test_default_config_values():
     """Test default values when no environment variables are set."""
-    cfg = AppConfig()
+    cfg = AppConfig(_env_file=None)
     assert cfg.scp_ae_title == "GOSMART_SCP"
     assert cfg.ae_title == "GOSMART_SCP"
     assert cfg.scp_port == 11112
