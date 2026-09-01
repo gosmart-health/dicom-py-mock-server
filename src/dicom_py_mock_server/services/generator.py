@@ -15,6 +15,7 @@ from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.encaps import encapsulate
 from pydicom.uid import (
     JPEG2000,
+    UID,
     CTImageStorage,
     ExplicitVRLittleEndian,
     ImplicitVRLittleEndian,
@@ -38,6 +39,7 @@ from dicom_py_mock_server.services.uid_generator import (
 logger = structlog.get_logger(__name__)
 
 TRANSFER_SYNTAX_MAP = {
+    # Raw / Uncompressed Little Endian
     "RAW": ExplicitVRLittleEndian,
     "EXPLICIT_RAW": ExplicitVRLittleEndian,
     "EXPLICIT_VR_LITTLE_ENDIAN": ExplicitVRLittleEndian,
@@ -45,19 +47,48 @@ TRANSFER_SYNTAX_MAP = {
     "IMPLICIT_RAW": ImplicitVRLittleEndian,
     "IMPLICIT_VR_LITTLE_ENDIAN": ImplicitVRLittleEndian,
     "1.2.840.10008.1.2": ImplicitVRLittleEndian,
+    # JPEG Baseline (Process 1)
     "JPEG": JPEGBaseline8Bit,
     "JPEG_PROCESS_1": JPEGBaseline8Bit,
     "JPEG_BASELINE": JPEGBaseline8Bit,
     "1.2.840.10008.1.2.4.50": JPEGBaseline8Bit,
+    # JPEG 2000 Lossless
     "JPEG2000": JPEG2000Lossless,
+    "JPEG200": JPEG2000Lossless,
     "JPEG2000_LOSSLESS": JPEG2000Lossless,
+    "JPEG200_LOSSLESS": JPEG2000Lossless,
+    "JPEG2000LOSSLESS": JPEG2000Lossless,
+    "JPEG200LOSSLESS": JPEG2000Lossless,
     "1.2.840.10008.1.2.4.90": JPEG2000Lossless,
+    # JPEG 2000 Lossy
     "JPEG2000_LOSSY": JPEG2000,
+    "JPEG200_LOSSY": JPEG2000,
+    "JPEG2000LOSSY": JPEG2000,
+    "JPEG200LOSSY": JPEG2000,
     "1.2.840.10008.1.2.4.91": JPEG2000,
+    # RLE Lossless
     "RLE": RLELossless,
     "RLE_LOSSLESS": RLELossless,
+    "RLELOSSLESS": RLELossless,
     "1.2.840.10008.1.2.5": RLELossless,
 }
+
+
+def resolve_transfer_syntax(syntax_name: str | None) -> UID:
+    """Resolve a transfer syntax name, alias, or UID string to a pydicom UID."""
+    if not syntax_name or not str(syntax_name).strip():
+        return ExplicitVRLittleEndian
+    name = str(syntax_name).strip().strip('"').strip("'")
+    if name in TRANSFER_SYNTAX_MAP:
+        return TRANSFER_SYNTAX_MAP[name]
+    norm = name.upper().replace("-", "_").replace(" ", "_")
+    if norm in TRANSFER_SYNTAX_MAP:
+        return TRANSFER_SYNTAX_MAP[norm]
+    norm_no_under = norm.replace("_", "")
+    if norm_no_under in TRANSFER_SYNTAX_MAP:
+        return TRANSFER_SYNTAX_MAP[norm_no_under]
+    return ExplicitVRLittleEndian
+
 
 MODALITY_STUDY_DESCRIPTIONS: dict[str, list[str]] = {
     "CT": [
@@ -355,8 +386,7 @@ class DicomGeneratorService:
     @classmethod
     def apply_transfer_syntax(cls, ds: FileDataset, syntax_name: str | None = None) -> FileDataset:
         """Convert or set dataset Transfer Syntax UID and encode pixel data accordingly."""
-        target_name = (syntax_name or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).upper().strip()
-        target_uid = TRANSFER_SYNTAX_MAP.get(target_name, ExplicitVRLittleEndian)
+        target_uid = resolve_transfer_syntax(syntax_name or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS"))
 
         current_uid = getattr(ds.file_meta, "TransferSyntaxUID", None)
         if current_uid == target_uid:
@@ -500,8 +530,7 @@ class DicomGeneratorService:
 
         # Check target transfer syntax for JPEG 8-bit mode
         syntax_to_apply = request.transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
-        target_name = syntax_to_apply.upper().strip()
-        target_uid = TRANSFER_SYNTAX_MAP.get(target_name, ExplicitVRLittleEndian)
+        target_uid = resolve_transfer_syntax(syntax_to_apply)
         is_jpeg_8bit = target_uid == JPEGBaseline8Bit
 
         # Image Pixel Module
@@ -601,8 +630,8 @@ class DicomGeneratorService:
         else:
             ds = copy.deepcopy(template)
 
-        syntax_name = (transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).upper().strip()
-        target_uid = TRANSFER_SYNTAX_MAP.get(syntax_name, ExplicitVRLittleEndian)
+        syntax_name = transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
+        target_uid = resolve_transfer_syntax(syntax_name)
         is_8bit = target_uid == JPEGBaseline8Bit
 
         p_name = patient_name or (str(ds.PatientName) if hasattr(ds, "PatientName") else "MOCK_PATIENT")

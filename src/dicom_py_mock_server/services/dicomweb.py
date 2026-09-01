@@ -13,7 +13,7 @@ from PIL import Image
 from pydicom.dataset import Dataset
 
 from dicom_py_mock_server.config import config
-from dicom_py_mock_server.services.generator import DicomGeneratorService
+from dicom_py_mock_server.services.generator import TRANSFER_SYNTAX_MAP, DicomGeneratorService
 from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
 
 logger = structlog.get_logger(__name__)
@@ -67,21 +67,38 @@ class DicomWebService:
         return v_str.upper() == q_str.upper()
 
     @staticmethod
-    def parse_transfer_syntax_header(accept_header: str | None, query_param: str | None = None) -> str | None:
-        """Extract requested transfer syntax UID from Accept header or query parameter."""
-        if query_param:
-            return query_param.strip()
+    def parse_transfer_syntax_header(
+        accept_header: str | None = None,
+        query_param: str | None = None,
+        direct_header: str | None = None,
+    ) -> str | None:
+        """Extract requested transfer syntax UID or name from headers or query parameters."""
+        if direct_header and str(direct_header).strip():
+            val = str(direct_header).strip().strip('"').strip("'")
+            if val != "*":
+                return val
+
+        if query_param and str(query_param).strip():
+            val = str(query_param).strip().strip('"').strip("'")
+            if val != "*":
+                return val
 
         if not accept_header:
             return None
 
-        # Look for transfer-syntax="1.2.840.10008.1.2.4.90" or transfer-syntax=*
+        # Look for transfer-syntax="1.2.840.10008.1.2.4.90" or transfer-syntax=JPEG200
         match = re.search(r'transfer-syntax\s*=\s*"?([^";,\s]+)"?', accept_header, re.IGNORECASE)
         if match:
             ts = match.group(1).strip()
             if ts == "*":
                 return None
             return ts
+
+        # Check if accept header itself directly specifies a known syntax or UID
+        raw_accept = accept_header.strip().strip('"').strip("'")
+        if raw_accept.upper() in TRANSFER_SYNTAX_MAP or raw_accept in TRANSFER_SYNTAX_MAP:
+            return raw_accept
+
         return None
 
     def search_studies(self, query_params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -107,15 +124,27 @@ class DicomWebService:
                 study_datasets.append(ds)
 
         # Apply filtering
-        patient_id = query_params.get("PatientID") or query_params.get("patientID")
-        patient_name = query_params.get("PatientName") or query_params.get("patientName")
-        accession = query_params.get("AccessionNumber") or query_params.get("accessionNumber")
-        study_uid_q = query_params.get("StudyInstanceUID") or query_params.get("studyInstanceUID")
-        study_date = query_params.get("StudyDate") or query_params.get("studyDate")
+        patient_id = query_params.get("PatientID") or query_params.get("patientID") or query_params.get("patient_id")
+        patient_name = (
+            query_params.get("PatientName") or query_params.get("patientName") or query_params.get("patient_name")
+        )
+        accession = (
+            query_params.get("AccessionNumber") or query_params.get("accessionNumber") or query_params.get("accession")
+        )
+        study_uid_q = (
+            query_params.get("StudyInstanceUID")
+            or query_params.get("studyInstanceUID")
+            or query_params.get("study_uid")
+        )
+        study_date = query_params.get("StudyDate") or query_params.get("studyDate") or query_params.get("study_date")
         modalities = (
             query_params.get("ModalitiesInStudy") or query_params.get("modality") or query_params.get("Modality")
         )
-        study_desc = query_params.get("StudyDescription") or query_params.get("studyDescription")
+        study_desc = (
+            query_params.get("StudyDescription")
+            or query_params.get("studyDescription")
+            or query_params.get("study_desc")
+        )
 
         matched: list[Dataset] = []
         for ds in study_datasets:
@@ -137,12 +166,21 @@ class DicomWebService:
                     continue
             matched.append(ds)
 
-        # Apply offset and limit
+        # Apply offset and limit (supporting standard limit and variations like ?limit-100)
         offset = int(query_params.get("offset", 0) or 0)
-        limit = query_params.get("limit")
+        limit = query_params.get("limit") or query_params.get("Limit")
+        if limit is None:
+            for k in query_params:
+                m = re.match(r"^limit[-_:=](\d+)$", k, re.IGNORECASE)
+                if m:
+                    limit = m.group(1)
+                    break
         if limit is not None:
-            limit = int(limit)
-            matched = matched[offset : offset + limit]
+            try:
+                limit_val = int(limit)
+                matched = matched[offset : offset + limit_val]
+            except ValueError:
+                pass
         elif offset > 0:
             matched = matched[offset:]
 

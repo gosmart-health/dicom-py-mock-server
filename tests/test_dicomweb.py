@@ -191,27 +191,83 @@ def test_wado_retrieve_study_and_series_multipart(client):
         assert str(ds.SeriesInstanceUID) == series_uid
 
 
+def test_qido_cors_headers(client):
+    """Verify CORS headers are present on QIDO endpoints for browser-based viewers."""
+    # Test OPTIONS preflight
+    resp_options = client.options(
+        "/dicomweb/studies",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp_options.status_code == 200
+    assert resp_options.headers.get("access-control-allow-origin") in ("*", "http://localhost:3000")
+
+    # Test GET request
+    resp_get = client.get("/dicomweb/studies", headers={"Origin": "http://localhost:3000"})
+    assert resp_get.status_code == 200
+    assert resp_get.headers.get("access-control-allow-origin") in ("*", "http://localhost:3000")
+
+
+def test_qido_search_studies_limit_variations(client):
+    """Verify QIDO-RS handles both ?limit=100 and ?limit-100 style query parameters."""
+    resp_eq = client.get("/dicomweb/studies?limit=2")
+    assert resp_eq.status_code == 200
+    assert len(resp_eq.json()) <= 2
+
+    resp_dash = client.get("/dicomweb/studies?limit-2")
+    assert resp_dash.status_code == 200
+    assert len(resp_dash.json()) <= 2
+
+
 def test_wado_retrieve_transfer_syntax_negotiation(client):
     """Verify WADO-RS correctly transcodes datasets to requested transfer syntax across all supported syntaxes."""
     studies = client.get("/dicomweb/studies").json()
     study_uid = studies[0]["0020000D"]["Value"][0]
 
     transfer_syntaxes_to_test = [
-        ("1.2.840.10008.1.2.1", "Explicit VR Little Endian"),
-        ("1.2.840.10008.1.2.4.90", "JPEG 2000 Lossless"),
-        ("1.2.840.10008.1.2.4.50", "JPEG Baseline 8-Bit"),
-        ("1.2.840.10008.1.2.5", "RLE Lossless"),
+        ("1.2.840.10008.1.2.1", "1.2.840.10008.1.2.1", "Explicit VR Little Endian UID"),
+        ("1.2.840.10008.1.2.4.90", "1.2.840.10008.1.2.4.90", "JPEG 2000 Lossless UID"),
+        ("1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.50", "JPEG Baseline 8-Bit UID"),
+        ("1.2.840.10008.1.2.5", "1.2.840.10008.1.2.5", "RLE Lossless UID"),
+        ("RAW", "1.2.840.10008.1.2.1", "RAW Named Syntax"),
+        ("JPEG200", "1.2.840.10008.1.2.4.90", "JPEG200 Alias"),
+        ("JPEG200_LOSSLESS", "1.2.840.10008.1.2.4.90", "JPEG200_LOSSLESS Alias"),
+        ("JPEG2000", "1.2.840.10008.1.2.4.90", "JPEG2000 Named Syntax"),
+        ("JPEG2000_LOSSLESS", "1.2.840.10008.1.2.4.90", "JPEG2000_LOSSLESS Named Syntax"),
+        ("RLE", "1.2.840.10008.1.2.5", "RLE Named Syntax"),
+        ("RLE_LOSSLESS", "1.2.840.10008.1.2.5", "RLE_LOSSLESS Named Syntax"),
     ]
 
-    for ts_uid, ts_label in transfer_syntaxes_to_test:
-        headers = {"Accept": f'multipart/related; type="application/dicom"; transfer-syntax="{ts_uid}"'}
+    for req_syntax, expected_ts_uid, ts_label in transfer_syntaxes_to_test:
+        headers = {"Accept": f'multipart/related; type="application/dicom"; transfer-syntax="{req_syntax}"'}
         resp = client.get(f"/dicomweb/studies/{study_uid}", headers=headers)
-        assert resp.status_code == 200, f"Failed for {ts_label} ({ts_uid})"
+        assert resp.status_code == 200, f"Failed for {ts_label} ({req_syntax})"
         dsets = _extract_multipart_dicom_parts(resp.headers["content-type"], resp.content)
         assert len(dsets) >= 1
         for ds in dsets:
             actual_ts = str(ds.file_meta.TransferSyntaxUID)
-            assert actual_ts == ts_uid, f"Expected {ts_uid} ({ts_label}), got {actual_ts}"
+            assert actual_ts == expected_ts_uid, (
+                f"Expected {expected_ts_uid} for {ts_label} ({req_syntax}), got {actual_ts}"
+            )
+
+    # Test via direct Transfer-Syntax header
+    resp_header = client.get(
+        f"/dicomweb/studies/{study_uid}",
+        headers={"transfer-syntax": "JPEG200"},
+    )
+    assert resp_header.status_code == 200
+    dsets_header = _extract_multipart_dicom_parts(resp_header.headers["content-type"], resp_header.content)
+    assert len(dsets_header) >= 1
+    assert str(dsets_header[0].file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.90"
+
+    # Test via query parameter ?transferSyntax=RLE
+    resp_query = client.get(f"/dicomweb/studies/{study_uid}?transferSyntax=RLE")
+    assert resp_query.status_code == 200
+    dsets_query = _extract_multipart_dicom_parts(resp_query.headers["content-type"], resp_query.content)
+    assert len(dsets_query) >= 1
+    assert str(dsets_query[0].file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.5"
 
 
 def test_wado_single_instance_direct_application_dicom(client):

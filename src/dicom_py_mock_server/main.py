@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from dicom_py_mock_server.api import dicomweb_router, mcp_router, router
 from dicom_py_mock_server.api.routes import mwl_service, scp_service
@@ -55,6 +56,16 @@ app = FastAPI(
     version=config.app_version,
     description="FastAPI service for mock DICOM objects, DICOM SCP, and DICOMweb QIDO/WADO services.",
     lifespan=lifespan,
+)
+
+# Enable CORS for browser-based DICOM viewers and tools
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.include_router(router)
