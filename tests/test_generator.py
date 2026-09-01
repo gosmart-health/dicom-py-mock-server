@@ -102,6 +102,9 @@ def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
     req_jpeg = RawImageGeneratorRequest(transfer_syntax="JPEG")
     ds_jpeg = generator.create_raw_dicom_file(req_jpeg)
     assert ds_jpeg.file_meta.TransferSyntaxUID == JPEGBaseline8Bit
+    assert ds_jpeg.PhotometricInterpretation == "MONOCHROME2"
+    assert ds_jpeg.SamplesPerPixel == 1
+    assert ds_jpeg.PixelRepresentation == 0
     assert ds_jpeg.pixel_array.shape == (512, 512)
     assert ds_jpeg.pixel_array.dtype == np.uint8
     assert ds_jpeg.pixel_array.max() == 255

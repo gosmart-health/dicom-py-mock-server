@@ -405,28 +405,51 @@ class DicomGeneratorService:
             ds.PixelData = arr.astype(np.uint16).tobytes()
         elif target_uid == JPEGBaseline8Bit:
             # JPEG Process 1 is 8-bit baseline
-            arr = ds.pixel_array if hasattr(ds, "pixel_array") else np.frombuffer(ds.PixelData, dtype=np.uint16)
+            try:
+                arr = ds.pixel_array
+            except Exception:
+                if isinstance(ds.PixelData, bytes):
+                    if getattr(ds, "BitsAllocated", 16) == 8:
+                        arr = np.frombuffer(ds.PixelData, dtype=np.uint8)
+                    else:
+                        arr = np.frombuffer(ds.PixelData, dtype=np.uint16)
+                else:
+                    arr = np.array(ds.PixelData)
+
+            if arr.ndim == 1 and hasattr(ds, "Rows") and hasattr(ds, "Columns"):
+                arr = arr.reshape((ds.Rows, ds.Columns))
+
             if arr.dtype == np.uint8 or arr.max() <= 255:
                 arr8 = arr.astype(np.uint8)
             else:
                 arr8 = (arr >> 4).astype(np.uint8)
 
-            img = Image.fromarray(arr8)
+            img = Image.fromarray(arr8, mode="L")
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=95)
             jpeg_bytes = buf.getvalue()
 
             ds.file_meta.TransferSyntaxUID = JPEGBaseline8Bit
+            ds.PhotometricInterpretation = "MONOCHROME2"
+            ds.SamplesPerPixel = 1
+            ds.PixelRepresentation = 0
             ds.BitsAllocated = 8
             ds.BitsStored = 8
             ds.HighBit = 7
             ds.WindowCenter = 128
             ds.WindowWidth = 256
-            ds.SmallestImagePixelValue = 0
-            ds.LargestImagePixelValue = 255
+            ds.RescaleIntercept = "0"
+            ds.RescaleSlope = "1"
+            ds.add_new(0x00280106, "US", 0)
+            ds.add_new(0x00280107, "US", 255)
+            if (0x0028, 0x0120) in ds:
+                del ds[0x0028, 0x0120]
+            if (0x0028, 0x0006) in ds:
+                del ds[0x0028, 0x0006]
             ds.LossyImageCompression = "01"
             ds.LossyImageCompressionMethod = "ISO_10918_1"
             ds.PixelData = encapsulate([jpeg_bytes])
+
         elif target_uid in (JPEG2000Lossless, JPEG2000, RLELossless):
             try:
                 ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
@@ -793,6 +816,7 @@ class DicomGeneratorService:
                 "performing_physician_name": perf_phys,
             },
             num_instances=num_instances,
+            transfer_syntax=mwl_record.get("transfer_syntax"),
             burn_in_text=True,
         )
 

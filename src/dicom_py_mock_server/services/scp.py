@@ -436,6 +436,8 @@ class DicomScpService:
         # Connect as SCU to target
         ae = AE(ae_title=self.ae_title)
         target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
+        preferred_syntax = matched_entries[0].get("transfer_syntax") or config.transfer_syntax
+        target_syntax = get_prioritized_transfer_syntaxes(preferred_syntax)[0]
         for cx in StoragePresentationContexts:
             ae.add_requested_context(cx.abstract_syntax, [target_syntax])
 
@@ -484,3 +486,5 @@ class DicomScpService:
             "target_host": target_host,
             "target_port": target_port,
         }
+
+    move_study = push_study_to_destination

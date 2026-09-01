@@ -3,6 +3,7 @@
 import io
 import re
 
+import numpy as np
 import pydicom
 import pytest
 from fastapi.testclient import TestClient
@@ -290,6 +291,48 @@ def test_wado_single_instance_direct_application_dicom(client):
     ds = pydicom.dcmread(io.BytesIO(resp.content), force=True)
     assert str(ds.SOPInstanceUID) == sop_uid
     assert str(ds.StudyInstanceUID) == study_uid
+
+
+def test_wado_retrieve_jpeg_8bit_monochrome2(client):
+    """Verify WADO-RS and WADO-URI output 8-bit MONOCHROME2 datasets for JPEG baseline."""
+    studies = client.get("/dicomweb/studies").json()
+    study_uid = studies[0]["0020000D"]["Value"][0]
+    series_list = client.get(f"/dicomweb/studies/{study_uid}/series").json()
+    series_uid = series_list[0]["0020000E"]["Value"][0]
+    instances = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances").json()
+    sop_uid = instances[0]["00080018"]["Value"][0]
+
+    # 1. WADO-RS with Accept header transfer-syntax="JPEG"
+    headers = {"Accept": 'multipart/related; type="application/dicom"; transfer-syntax="JPEG"'}
+    resp_rs = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}", headers=headers)
+    assert resp_rs.status_code == 200
+    dsets = _extract_multipart_dicom_parts(resp_rs.headers["content-type"], resp_rs.content)
+    assert len(dsets) == 1
+    ds_rs = dsets[0]
+    assert str(ds_rs.file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.50"
+    assert ds_rs.PhotometricInterpretation == "MONOCHROME2"
+    assert ds_rs.BitsAllocated == 8
+    assert ds_rs.BitsStored == 8
+    assert ds_rs.HighBit == 7
+    assert ds_rs.SamplesPerPixel == 1
+    assert ds_rs.PixelRepresentation == 0
+    assert ds_rs.pixel_array.dtype == np.uint8
+    assert ds_rs.pixel_array.shape == (ds_rs.Rows, ds_rs.Columns)
+
+    # 2. WADO-URI with transferSyntax=JPEG
+    resp_uri = client.get(
+        f"/dicomweb/wado?requestType=WADO&studyUID={study_uid}&seriesUID={series_uid}&objectUID={sop_uid}&transferSyntax=JPEG"
+    )
+    assert resp_uri.status_code == 200
+    ds_uri = pydicom.dcmread(io.BytesIO(resp_uri.content), force=True)
+    assert str(ds_uri.file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.50"
+    assert ds_uri.PhotometricInterpretation == "MONOCHROME2"
+    assert ds_uri.BitsAllocated == 8
+    assert ds_uri.BitsStored == 8
+    assert ds_uri.HighBit == 7
+    assert ds_uri.SamplesPerPixel == 1
+    assert ds_uri.PixelRepresentation == 0
+    assert ds_uri.pixel_array.dtype == np.uint8
 
 
 def test_wado_rendered_jpeg_and_png(client):

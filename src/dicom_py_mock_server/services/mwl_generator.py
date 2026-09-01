@@ -551,6 +551,7 @@ class MwlGeneratorService:
             "reading_physician": read_name,
             "institution_name": inst_name,
             "num_instances": num_instances,
+            "transfer_syntax": (custom or {}).get("transfer_syntax") or (custom or {}).get("transferSyntax"),
         }
 
         self._entries.append(entry_record)
