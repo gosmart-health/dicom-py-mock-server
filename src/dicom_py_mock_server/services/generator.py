@@ -355,7 +355,7 @@ class DicomGeneratorService:
     @classmethod
     def apply_transfer_syntax(cls, ds: FileDataset, syntax_name: str | None = None) -> FileDataset:
         """Convert or set dataset Transfer Syntax UID and encode pixel data accordingly."""
-        target_name = (syntax_name or getattr(config, "transfer_syntax", "RAW")).upper().strip()
+        target_name = (syntax_name or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).upper().strip()
         target_uid = TRANSFER_SYNTAX_MAP.get(target_name, ExplicitVRLittleEndian)
 
         current_uid = getattr(ds.file_meta, "TransferSyntaxUID", None)
@@ -502,7 +502,7 @@ class DicomGeneratorService:
         ds.Modality = request.series.modality
 
         # Check target transfer syntax for JPEG 8-bit mode
-        syntax_to_apply = request.transfer_syntax or getattr(config, "transfer_syntax", "RAW")
+        syntax_to_apply = request.transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
         target_name = syntax_to_apply.upper().strip()
         target_uid = TRANSFER_SYNTAX_MAP.get(target_name, ExplicitVRLittleEndian)
         is_jpeg_8bit = target_uid == JPEGBaseline8Bit
@@ -604,7 +604,7 @@ class DicomGeneratorService:
         else:
             ds = copy.deepcopy(template)
 
-        syntax_name = (transfer_syntax or getattr(config, "transfer_syntax", "RAW")).upper().strip()
+        syntax_name = (transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).upper().strip()
         target_uid = TRANSFER_SYNTAX_MAP.get(syntax_name, ExplicitVRLittleEndian)
         is_8bit = target_uid == JPEGBaseline8Bit
 
@@ -884,7 +884,7 @@ class DicomGeneratorService:
             study_uid=study_uid,
             series_uid=series_uid,
             num_instances=len(saved_files),
-            transfer_syntax=request.transfer_syntax or getattr(config, "transfer_syntax", "RAW"),
+            transfer_syntax=request.transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS"),
         )
 
         return MockDicomResponse(

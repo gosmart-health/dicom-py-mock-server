@@ -485,3 +485,71 @@ def test_microdicom_cstore_push_if_listening():
         assert res["instances_sent"] > 0
     else:
         assert "Failed to establish association" in res["message"]
+
+
+def test_microdicom_send_jpeg2000_lossless_from_ct_small_template():
+    """Test loading templates/CT_small.dcm, applying JPEG2000 Lossless generated image,
+    negotiating JPEG2000 Lossless transfer syntax, and sending directly to MicroDICOM Viewer at port 11113 (MDICOM).
+    """
+    import socket
+
+    import pydicom
+    from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, ImplicitVRLittleEndian, JPEG2000Lossless
+    from pynetdicom.presentation import build_context
+
+    from dicom_py_mock_server.services.generator import DicomGeneratorService
+
+    template_path = "templates/CT_small.dcm"
+    template_ds = pydicom.dcmread(template_path)
+
+    # 1. Create dataset from template with JPEG2000 Lossless compression & burned-in metadata
+    ds = DicomGeneratorService.create_dicom_from_template(
+        template=template_path,
+        transfer_syntax="JPEG2000_LOSSLESS",
+        patient_name="BROWN_GSH^CHARLES",
+        patient_id="GSH-65523803",
+        study_date="20260901",
+        study_time="122604",
+        image_number=1,
+        burn_in_text=True,
+        rows=template_ds.Rows,
+        cols=template_ds.Columns,
+    )
+
+    assert ds.file_meta.TransferSyntaxUID == JPEG2000Lossless
+    assert ds.PatientName == "BROWN_GSH^CHARLES"
+    assert ds.PatientID == "GSH-65523803"
+
+    # 2. Check if MicroDICOM Viewer is listening on port 11113
+    s = socket.socket()
+    try:
+        is_port_open = s.connect_ex(("127.0.0.1", 11113)) == 0
+    finally:
+        s.close()
+
+    if not is_port_open:
+        # If MicroDICOM is not currently open, verify association logic with requested contexts
+        ae = AE(ae_title="GOSMART_SCP")
+        cx = build_context(CTImageStorage, [JPEG2000Lossless, ExplicitVRLittleEndian, ImplicitVRLittleEndian])
+        assoc = ae.associate("127.0.0.1", 11113, contexts=[cx], ae_title="MDICOM")
+        assert not assoc.is_established
+        return
+
+    # 3. Associate with MicroDICOM proposing prioritized JPEG2000 Lossless presentation context
+    ae = AE(ae_title="GOSMART_SCP")
+    cx = build_context(CTImageStorage, [JPEG2000Lossless, ExplicitVRLittleEndian, ImplicitVRLittleEndian])
+    assoc = ae.associate("127.0.0.1", 11113, contexts=[cx], ae_title="MDICOM")
+    assert assoc.is_established
+
+    try:
+        # Verify accepted transfer syntax is JPEG2000 Lossless
+        matching_cx = [c for c in assoc.accepted_contexts if c.abstract_syntax == CTImageStorage]
+        assert len(matching_cx) > 0
+        accepted_ts = matching_cx[0].transfer_syntax[0]
+        assert accepted_ts == JPEG2000Lossless
+
+        # Send C-STORE request
+        status = assoc.send_c_store(ds)
+        assert status and status.Status in (0x0000, 0xB000, 0xB006, 0xB007)
+    finally:
+        assoc.release()

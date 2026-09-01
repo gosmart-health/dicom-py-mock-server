@@ -21,6 +21,7 @@ def test_default_config_values():
     assert cfg.pn_suffix == "_GSH"
     assert cfg.institution_name == "GO SMART CLINIC"
     assert cfg.id_prefix == "GSH-"
+    assert cfg.transfer_syntax == "JPEG2000_LOSSLESS"
 
 
 def test_env_variables_override(monkeypatch):

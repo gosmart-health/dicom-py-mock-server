@@ -33,7 +33,7 @@ logger = structlog.get_logger(__name__)
 
 def get_prioritized_transfer_syntaxes(preferred_syntax: str | None = None) -> list[Any]:
     """Get list of supported transfer syntaxes ordered with the preferred syntax first."""
-    pref = (preferred_syntax or getattr(config, "transfer_syntax", "JPEG2000")).upper().strip()
+    pref = (preferred_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).upper().strip()
 
     pref_uid = None
     if "JPEG2000_LOSSY" in pref:
