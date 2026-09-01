@@ -73,33 +73,39 @@ class DicomWebService:
         direct_header: str | None = None,
     ) -> str | None:
         """Extract requested transfer syntax UID or name from headers or query parameters."""
+        resolved: str | None = None
         if direct_header and str(direct_header).strip():
             val = str(direct_header).strip().strip('"').strip("'")
             if val != "*":
-                return val
+                resolved = val
 
-        if query_param and str(query_param).strip():
+        if not resolved and query_param and str(query_param).strip():
             val = str(query_param).strip().strip('"').strip("'")
             if val != "*":
-                return val
+                resolved = val
 
-        if not accept_header:
-            return None
+        if not resolved and accept_header:
+            # Look for transfer-syntax="1.2.840.10008.1.2.4.90" or transfer-syntax=JPEG200
+            match = re.search(r'transfer-syntax\s*=\s*"?([^";,\s]+)"?', accept_header, re.IGNORECASE)
+            if match:
+                ts = match.group(1).strip()
+                if ts != "*":
+                    resolved = ts
 
-        # Look for transfer-syntax="1.2.840.10008.1.2.4.90" or transfer-syntax=JPEG200
-        match = re.search(r'transfer-syntax\s*=\s*"?([^";,\s]+)"?', accept_header, re.IGNORECASE)
-        if match:
-            ts = match.group(1).strip()
-            if ts == "*":
-                return None
-            return ts
+            if not resolved:
+                # Check if accept header itself directly specifies a known syntax or UID
+                raw_accept = accept_header.strip().strip('"').strip("'")
+                if raw_accept.upper() in TRANSFER_SYNTAX_MAP or raw_accept in TRANSFER_SYNTAX_MAP:
+                    resolved = raw_accept
 
-        # Check if accept header itself directly specifies a known syntax or UID
-        raw_accept = accept_header.strip().strip('"').strip("'")
-        if raw_accept.upper() in TRANSFER_SYNTAX_MAP or raw_accept in TRANSFER_SYNTAX_MAP:
-            return raw_accept
-
-        return None
+        logger.info(
+            "dicomweb_transfer_syntax_parsed",
+            accept_header=accept_header,
+            direct_header=direct_header,
+            query_param=query_param,
+            resolved_transfer_syntax=resolved,
+        )
+        return resolved
 
     def search_studies(self, query_params: dict[str, Any]) -> list[dict[str, Any]]:
         """QIDO-RS: Search for studies matching query parameters and return DICOM JSON."""

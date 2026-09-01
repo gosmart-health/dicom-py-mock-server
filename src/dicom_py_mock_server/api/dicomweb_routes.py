@@ -2,6 +2,7 @@
 
 import io
 
+import structlog
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -10,7 +11,9 @@ from dicom_py_mock_server.config import config
 from dicom_py_mock_server.services.dicomweb import DicomWebService
 from dicom_py_mock_server.services.generator import DicomGeneratorService
 
+logger = structlog.get_logger(__name__)
 dicomweb_router = APIRouter()
+
 
 dicomweb_service = DicomWebService(
     mwl_service=mwl_service,
