@@ -222,9 +222,9 @@ class DicomScpService:
             yield (None, None)
             return
 
-        # 1st yield: (addr, port, kwargs) including Storage presentation contexts with all supported transfer syntaxes
-        syntaxes = get_prioritized_transfer_syntaxes(config.transfer_syntax)
-        storage_contexts = [build_context(cx.abstract_syntax, syntaxes) for cx in StoragePresentationContexts]
+        # 1st yield: (addr, port, kwargs) including Storage presentation contexts with the target transfer syntax
+        target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
+        storage_contexts = [build_context(cx.abstract_syntax, [target_syntax]) for cx in StoragePresentationContexts]
         yield (addr, port, {"contexts": storage_contexts})
 
         identifier = getattr(event, "identifier", None)
@@ -346,10 +346,10 @@ class DicomScpService:
         self.ae.add_supported_context(PatientRootQueryRetrieveInformationModelMove)
         self.ae.add_supported_context(StudyRootQueryRetrieveInformationModelMove)
         self.ae.add_supported_context(ModalityWorklistInformationFind)
-        syntaxes = get_prioritized_transfer_syntaxes(config.transfer_syntax)
+        target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
         for cx in StoragePresentationContexts:
-            self.ae.add_supported_context(cx.abstract_syntax, syntaxes)
-            self.ae.add_requested_context(cx.abstract_syntax, syntaxes)
+            self.ae.add_supported_context(cx.abstract_syntax, SUPPORTED_TRANSFER_SYNTAXES)
+            self.ae.add_requested_context(cx.abstract_syntax, [target_syntax])
 
         handlers = [
             (evt.EVT_C_ECHO, self._handle_echo),
@@ -435,9 +435,9 @@ class DicomScpService:
 
         # Connect as SCU to target
         ae = AE(ae_title=self.ae_title)
-        syntaxes = get_prioritized_transfer_syntaxes(config.transfer_syntax)
+        target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
         for cx in StoragePresentationContexts:
-            ae.add_requested_context(cx.abstract_syntax, syntaxes)
+            ae.add_requested_context(cx.abstract_syntax, [target_syntax])
 
         assoc = ae.associate(target_host, target_port, ae_title=target_ae_title)
         if not assoc.is_established:
