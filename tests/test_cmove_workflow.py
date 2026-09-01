@@ -510,7 +510,6 @@ def test_microdicom_send_jpeg2000_lossless_from_ct_small_template():
     """Test loading templates/CT_small.dcm, applying JPEG2000 Lossless generated image,
     negotiating JPEG2000 Lossless transfer syntax, and sending directly to MicroDICOM Viewer at port 11113 (MDICOM).
     """
-    import pydicom
     import pytest
     from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, ImplicitVRLittleEndian, JPEG2000Lossless
     from pynetdicom.presentation import build_context
@@ -521,7 +520,6 @@ def test_microdicom_send_jpeg2000_lossless_from_ct_small_template():
         pytest.skip("MicroDICOM Viewer is not available on 127.0.0.1:11113")
 
     template_path = "templates/CT_small.dcm"
-    template_ds = pydicom.dcmread(template_path)
 
     # 1. Create dataset from template with JPEG2000 Lossless compression & burned-in metadata
     ds = DicomGeneratorService.create_dicom_from_template(
@@ -533,13 +531,15 @@ def test_microdicom_send_jpeg2000_lossless_from_ct_small_template():
         study_time="122604",
         image_number=1,
         burn_in_text=True,
-        rows=template_ds.Rows,
-        cols=template_ds.Columns,
+        rows=512,
+        cols=512,
     )
 
     assert ds.file_meta.TransferSyntaxUID == JPEG2000Lossless
     assert ds.PatientName == "BROWN_GSH^CHARLES"
     assert ds.PatientID == "GSH-65523803"
+    assert ds.Rows == 512
+    assert ds.Columns == 512
 
     try:
         # 2. Associate with MicroDICOM proposing prioritized JPEG2000 Lossless presentation context

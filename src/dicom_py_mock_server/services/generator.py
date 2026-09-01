@@ -787,9 +787,10 @@ class DicomGeneratorService:
                         except Exception:
                             pass
 
+        rows = int(mwl_record.get("rows") or 512)
+        cols = int(mwl_record.get("columns") or mwl_record.get("cols") or 512)
+
         if template_ds:
-            t_rows = int(getattr(template_ds, "Rows", 512))
-            t_cols = int(getattr(template_ds, "Columns", 512))
             datasets = []
             for i in range(1, num_instances + 1):
                 ds = cls.create_dicom_from_template(
@@ -801,8 +802,8 @@ class DicomGeneratorService:
                     study_time=study_time,
                     image_number=i,
                     burn_in_text=True,
-                    rows=t_rows,
-                    cols=t_cols,
+                    rows=rows,
+                    cols=cols,
                     institution_name=inst_name,
                     referring_physician_name=ref_phys,
                     performing_physician_name=perf_phys,
