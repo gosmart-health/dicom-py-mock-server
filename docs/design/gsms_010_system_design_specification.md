@@ -98,6 +98,21 @@ graph TD
   - **Privacy & PHI Protection**: Avoids raw PHI leakage by using one-way cryptographic hashing while preserving deterministic reproducibility.
   - **Length & Format Assurance**: Enforces decimal integer format under `2.25.` prefix with guaranteed max length <= 44 chars (complying with DICOM 64-char limit).
 
+### 3.8 DICOMweb RESTful Subsystem (`src/dicom_py_mock_server/services/dicomweb.py` & `api/dicomweb_routes.py`)
+* **`DicomWebService` & `dicomweb_router`**:
+  - **QIDO-RS (Query based on ID for DICOM Objects - DICOM PS3.18 Section 10.6)**:
+    - Search Studies (`GET /dicomweb/studies`, `/studies`), Series (`GET /dicomweb/studies/{studyUID}/series`, `/series`), and Instances (`GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances`, `/instances`).
+    - Standard JSON serialization (`application/dicom+json`) using `pydicom.dataset.Dataset.to_json_dict()`.
+    - Query filtering (`PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`, `ModalitiesInStudy`, `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID`) with wildcard/substring matching and pagination (`limit`, `offset`).
+  - **WADO-RS (Web Access to DICOM Objects by RESTful Services - DICOM PS3.18 Section 10.4)**:
+    - Retrieve Studies, Series, and Instances (`GET /dicomweb/studies/{studyUID}[/series/{seriesUID}[/instances/{instanceUID}]]`).
+    - Retrieve Metadata (`GET .../metadata`) returning DICOM JSON without bulk/pixel data.
+    - Transfer Syntax Negotiation: Parses `Accept: multipart/related; type="application/dicom"; transfer-syntax="..."` and dynamically transcodes instances using `DicomGeneratorService.apply_transfer_syntax` across RAW, JPEG Baseline, JPEG2000 Lossless, JPEG2000 Lossy, and RLE Lossless.
+    - Rendered Preview & Frame Retrieval (`GET .../rendered`, `GET .../frames/{frameList}`) returning normalized 8-bit JPEG/PNG images or raw frame bytes.
+  - **WADO-URI (DICOM PS3.18 Section 9)**:
+    - Legacy single-object retrieval (`GET /dicomweb/wado?requestType=WADO&studyUID=...&seriesUID=...&objectUID=...&contentType=...&transferSyntax=...`).
+  - **Dual Data Sourcing**: Integrates seamlessly across in-memory synthesized MWL datasets and stored `.dcm` files on disk.
+
 ---
 
 ## 4. Concurrency & Safety Contracts
