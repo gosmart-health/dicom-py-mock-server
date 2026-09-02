@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WADO Study Download Utility Scripts**:
   - Added `wado_download_study.py` standalone utility script to download complete DICOM studies via WADO-RS and extract individual `.dcm` instances into a destination directory without external dependencies.
   - Added `wado_download_study.sh` helper shell script for automated testing.
+- **High-Volume Stress Testing Support (Up to 1024 Slices)**:
+  - Expanded `MockDicomRequest.num_instances` upper validation bound from 100 to 1024 instances (`le=1024`) for high-volume stress testing.
+  - Updated MCP tool schema definition for `num_instances` to accept up to 1024 slices.
+  - Updated WADO-RS study, series, and metadata endpoints (`/studies/{studyUID}`, `/series/{seriesUID}`, `/metadata`) to support query parameters (`limit`, `slices`, `count`, `numInstances`, `num_instances`).
+  - Ensured WADO-RS retrieval follows the actual number of slices generated for the requested study/series rather than truncating at an arbitrary fixed 100 limit.
 - **Enhanced Logging**:
   - Automatically log caller `method_name` and `func_name` across structured JSON log events.
   - Log incoming HTTP and DICOMweb request headers (`Accept`) and resolved transfer syntaxes.

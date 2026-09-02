@@ -71,7 +71,7 @@ class MockDicomRequest(BaseModel):
     patient: PatientModel = Field(default_factory=PatientModel)
     study: StudyModel = Field(default_factory=StudyModel)
     series: SeriesModel = Field(default_factory=SeriesModel)
-    num_instances: int = Field(default=1, ge=1, le=100, description="Number of DICOM instances to generate")
+    num_instances: int = Field(default=1, ge=1, le=1024, description="Number of DICOM instances to generate")
     rows: int = Field(default=512, ge=16, le=2048, description="Image Rows")
     columns: int = Field(default=512, ge=16, le=2048, description="Image Columns")
     transfer_syntax: str | None = Field(default=None, description="Transfer syntax (RAW, JPEG, JPEG2000, RLE)")
