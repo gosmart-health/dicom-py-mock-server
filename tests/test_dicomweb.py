@@ -392,3 +392,83 @@ def test_wado_404_and_400_handling(client):
     # 400 for invalid WADO-URI requestType
     resp_400 = client.get("/dicomweb/wado?requestType=INVALID&studyUID=1&seriesUID=2&objectUID=3")
     assert resp_400.status_code == 400
+
+
+def test_wado_retrieve_frames_transfer_syntax_negotiation(client):
+    """Verify WADO-RS frames retrieval dynamically encodes frames to requested transfer syntax."""
+    studies = client.get("/dicomweb/studies").json()
+    study_uid = studies[0]["0020000D"]["Value"][0]
+    series_list = client.get(f"/dicomweb/studies/{study_uid}/series").json()
+    series_uid = series_list[0]["0020000E"]["Value"][0]
+    instances = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances").json()
+    sop_uid = instances[0]["00080018"]["Value"][0]
+
+    # 1. Client requests JPEG Process 1 via complex Accept header
+    jpeg_accept = (
+        'multipart/related; type="image/jpeg"; transfer-syntax="1.2.840.10008.1.2.4.50", '
+        "image/jpeg, application/octet-stream"
+    )
+    resp_jpeg = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": jpeg_accept},
+    )
+    assert resp_jpeg.status_code == 200
+    assert 'type="image/jpeg"' in resp_jpeg.headers["content-type"]
+    assert b"Content-Type: image/jpeg" in resp_jpeg.content
+    assert b"\xff\xd8\xff" in resp_jpeg.content  # JPEG header in body
+
+    # 2. Client requests JPEG 2000 via type="image/jp2"
+    resp_j2k = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="image/jp2"'},
+    )
+    assert resp_j2k.status_code == 200
+    assert 'type="image/jp2"' in resp_j2k.headers["content-type"]
+    assert b"Content-Type: image/jp2" in resp_j2k.content
+
+    # 3. Client requests RLE via type="image/rle"
+    resp_rle = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="image/rle"'},
+    )
+    assert resp_rle.status_code == 200
+    assert 'type="image/rle"' in resp_rle.headers["content-type"]
+    assert b"Content-Type: image/rle" in resp_rle.content
+
+    # 4. Client requests raw octet-stream
+    resp_raw = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="application/octet-stream"'},
+    )
+    assert resp_raw.status_code == 200
+    assert 'type="application/octet-stream"' in resp_raw.headers["content-type"]
+    assert b"Content-Type: application/octet-stream" in resp_raw.content
+
+
+def test_wado_metadata_transfer_syntax_and_pixel_preservation(client):
+    """Verify metadata transcoding negotiation and that get_metadata does not strip pixel data in memory."""
+    studies = client.get("/dicomweb/studies").json()
+    study_uid = studies[0]["0020000D"]["Value"][0]
+    series_list = client.get(f"/dicomweb/studies/{study_uid}/series").json()
+    series_uid = series_list[0]["0020000E"]["Value"][0]
+    instances = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances").json()
+    sop_uid = instances[0]["00080018"]["Value"][0]
+
+    # 1. Metadata query with transferSyntax=1.2.840.10008.1.2.4.50 (JPEG Process 1)
+    meta_jpeg = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/metadata?transferSyntax=1.2.840.10008.1.2.4.50"
+    )
+    assert meta_jpeg.status_code == 200
+    meta_json = meta_jpeg.json()[0]
+    assert meta_json["00280100"]["Value"][0] == 8  # BitsAllocated = 8
+    assert meta_json["00280101"]["Value"][0] == 8  # BitsStored = 8
+    assert meta_json["00280102"]["Value"][0] == 7  # HighBit = 7
+    assert meta_json["00281050"]["Value"][0] == 128.0  # WindowCenter = 128
+
+    # 2. Subsequent frame retrieval on the same instance works without error (PixelData preserved)
+    resp_frame = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="image/jpeg"'},
+    )
+    assert resp_frame.status_code == 200
+    assert b"\xff\xd8\xff" in resp_frame.content

@@ -85,18 +85,43 @@ class DicomWebService:
                 resolved = val
 
         if not resolved and accept_header:
-            # Look for transfer-syntax="1.2.840.10008.1.2.4.90" or transfer-syntax=JPEG200
+            # 1. Look for transfer-syntax="1.2.840.10008.1.2.4.90" or transfer-syntax=JPEG200
             match = re.search(r'transfer-syntax\s*=\s*"?([^";,\s]+)"?', accept_header, re.IGNORECASE)
             if match:
                 ts = match.group(1).strip()
                 if ts != "*":
                     resolved = ts
 
+            # 2. Check for type="image/jpeg", type="image/jp2", type="image/rle", type="application/octet-stream"
             if not resolved:
-                # Check if accept header itself directly specifies a known syntax or UID
-                raw_accept = accept_header.strip().strip('"').strip("'")
-                if raw_accept.upper() in TRANSFER_SYNTAX_MAP or raw_accept in TRANSFER_SYNTAX_MAP:
-                    resolved = raw_accept
+                type_match = re.search(r'type\s*=\s*"?([^";,\s]+)"?', accept_header, re.IGNORECASE)
+                if type_match:
+                    media_type = type_match.group(1).strip().lower()
+                    if media_type in ("image/jpeg", "image/jpg"):
+                        resolved = "1.2.840.10008.1.2.4.50"
+                    elif media_type in ("image/jp2", "image/jpx", "image/j2c"):
+                        resolved = "1.2.840.10008.1.2.4.90"
+                    elif media_type in ("image/rle", "image/dicom-rle"):
+                        resolved = "1.2.840.10008.1.2.5"
+                    elif media_type == "application/octet-stream":
+                        resolved = "1.2.840.10008.1.2.1"
+
+            # 3. Check direct media types in Accept (e.g. image/jpeg, image/jp2, image/rle, application/octet-stream)
+            if not resolved:
+                accept_lower = accept_header.lower()
+                if "image/jpeg" in accept_lower or "image/jpg" in accept_lower:
+                    resolved = "1.2.840.10008.1.2.4.50"
+                elif "image/jp2" in accept_lower or "image/jpx" in accept_lower:
+                    resolved = "1.2.840.10008.1.2.4.90"
+                elif "image/rle" in accept_lower:
+                    resolved = "1.2.840.10008.1.2.5"
+                elif "application/octet-stream" in accept_lower and "application/dicom" not in accept_lower:
+                    resolved = "1.2.840.10008.1.2.1"
+                else:
+                    # Check if accept header itself directly specifies a known syntax or UID
+                    raw_accept = accept_header.strip().strip('"').strip("'")
+                    if raw_accept.upper() in TRANSFER_SYNTAX_MAP or raw_accept in TRANSFER_SYNTAX_MAP:
+                        resolved = raw_accept
 
         logger.info(
             "dicomweb_transfer_syntax_parsed",
@@ -421,11 +446,15 @@ class DicomWebService:
         return None
 
     @staticmethod
-    def get_metadata(datasets: list[Dataset]) -> list[dict[str, Any]]:
+    def get_metadata(datasets: list[Dataset], requested_transfer_syntax: str | None = None) -> list[dict[str, Any]]:
         """Extract metadata (omitting PixelData and bulk data) in DICOM JSON format."""
+        import copy
+
         metadata_list = []
         for ds in datasets:
-            ds_copy = ds.copy()
+            ds_copy = copy.deepcopy(ds)
+            if requested_transfer_syntax:
+                ds_copy = DicomGeneratorService.apply_transfer_syntax(ds_copy, requested_transfer_syntax)
             # Remove pixel data element (0x7FE0, 0x0010) and pixel data provider url
             if (0x7FE0, 0x0010) in ds_copy:
                 del ds_copy[0x7FE0, 0x0010]
@@ -520,20 +549,119 @@ class DicomWebService:
 
         return buf.getvalue(), media_type
 
-    def get_frame_bytes(self, dataset: Dataset, frame_numbers: list[int]) -> list[bytes]:
-        """Extract raw pixel frame bytes for specified frame numbers (1-indexed)."""
+    def get_encoded_frames(
+        self,
+        dataset: Dataset,
+        frame_numbers: list[int],
+        requested_transfer_syntax: str | None = None,
+    ) -> tuple[list[bytes], str]:
+        """Extract and encode pixel frames for specified frame numbers (1-indexed).
+
+        Returns (encoded_frame_bytes_list, content_type_str).
+        """
+        from pydicom.dataset import FileMetaDataset
+        from pydicom.encaps import generate_pixel_data_frame
+        from pydicom.uid import (
+            JPEG2000,
+            ExplicitVRLittleEndian,
+            JPEG2000Lossless,
+            JPEGBaseline8Bit,
+            RLELossless,
+        )
+
+        from dicom_py_mock_server.services.generator import resolve_transfer_syntax
+
         frames: list[bytes] = []
         try:
             arr = dataset.pixel_array
-            if arr.ndim == 2:
-                # Single frame
-                if 1 in frame_numbers:
-                    frames.append(arr.tobytes())
-            elif arr.ndim == 3:
-                for fn in frame_numbers:
-                    idx = fn - 1
-                    if 0 <= idx < arr.shape[0]:
-                        frames.append(arr[idx].tobytes())
         except Exception as exc:
-            logger.warning("failed_to_extract_frames", error=str(exc))
+            logger.warning("failed_to_extract_pixel_array_for_frames", error=str(exc))
+            return [], "application/octet-stream"
+
+        frame_arrays: list[np.ndarray] = []
+        if arr.ndim == 2:
+            if 1 in frame_numbers:
+                frame_arrays.append(arr)
+        elif arr.ndim == 3:
+            for fn in frame_numbers:
+                idx = fn - 1
+                if 0 <= idx < arr.shape[0]:
+                    frame_arrays.append(arr[idx])
+
+        if not frame_arrays:
+            return [], "application/octet-stream"
+
+        if requested_transfer_syntax:
+            target_uid = resolve_transfer_syntax(requested_transfer_syntax)
+        else:
+            target_uid = getattr(getattr(dataset, "file_meta", None), "TransferSyntaxUID", ExplicitVRLittleEndian)
+
+        if target_uid == JPEGBaseline8Bit:
+            media_type = "image/jpeg"
+            for f_arr in frame_arrays:
+                if f_arr.dtype == np.uint8 or f_arr.max() <= 255:
+                    f_arr8 = f_arr.astype(np.uint8)
+                else:
+                    f_arr8 = (f_arr >> 4).astype(np.uint8)
+                img = Image.fromarray(f_arr8, mode="L")
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=95)
+                frames.append(buf.getvalue())
+        elif target_uid in (JPEG2000Lossless, JPEG2000):
+            media_type = "image/jp2"
+            for f_arr in frame_arrays:
+                temp_ds = Dataset()
+                temp_ds.Rows, temp_ds.Columns = f_arr.shape
+                temp_ds.BitsAllocated = 16 if f_arr.dtype == np.uint16 else 8
+                temp_ds.BitsStored = 12 if f_arr.dtype == np.uint16 else 8
+                temp_ds.HighBit = 11 if f_arr.dtype == np.uint16 else 7
+                temp_ds.PixelRepresentation = 0
+                temp_ds.SamplesPerPixel = 1
+                temp_ds.PhotometricInterpretation = "MONOCHROME2"
+                temp_ds.PixelData = f_arr.tobytes()
+                temp_ds.file_meta = FileMetaDataset()
+                temp_ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+                try:
+                    if target_uid == JPEG2000:
+                        temp_ds.compress(JPEG2000, j2k_cr=[10], generate_instance_uid=False)
+                    else:
+                        temp_ds.compress(JPEG2000Lossless, generate_instance_uid=False)
+                    enc_frame = next(generate_pixel_data_frame(temp_ds.PixelData))
+                    frames.append(enc_frame)
+                except Exception as exc:
+                    logger.warning("j2k_frame_compression_failed_falling_back_to_raw", error=str(exc))
+                    frames.append(f_arr.tobytes())
+                    media_type = "application/octet-stream"
+        elif target_uid == RLELossless:
+            media_type = "image/rle"
+            for f_arr in frame_arrays:
+                temp_ds = Dataset()
+                temp_ds.Rows, temp_ds.Columns = f_arr.shape
+                temp_ds.BitsAllocated = 16 if f_arr.dtype == np.uint16 else 8
+                temp_ds.BitsStored = 12 if f_arr.dtype == np.uint16 else 8
+                temp_ds.HighBit = 11 if f_arr.dtype == np.uint16 else 7
+                temp_ds.PixelRepresentation = 0
+                temp_ds.SamplesPerPixel = 1
+                temp_ds.PhotometricInterpretation = "MONOCHROME2"
+                temp_ds.PixelData = f_arr.tobytes()
+                temp_ds.file_meta = FileMetaDataset()
+                temp_ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+                try:
+                    temp_ds.compress(RLELossless, generate_instance_uid=False)
+                    enc_frame = next(generate_pixel_data_frame(temp_ds.PixelData))
+                    frames.append(enc_frame)
+                except Exception as exc:
+                    logger.warning("rle_frame_compression_failed_falling_back_to_raw", error=str(exc))
+                    frames.append(f_arr.tobytes())
+                    media_type = "application/octet-stream"
+        else:
+            media_type = "application/octet-stream"
+            for f_arr in frame_arrays:
+                frames.append(f_arr.tobytes())
+
+        return frames, media_type
+
+    def get_frame_bytes(self, dataset: Dataset, frame_numbers: list[int]) -> list[bytes]:
+        """Extract raw pixel frame bytes for specified frame numbers (1-indexed)."""
+        frames, _ = self.get_encoded_frames(dataset, frame_numbers, requested_transfer_syntax=None)
         return frames

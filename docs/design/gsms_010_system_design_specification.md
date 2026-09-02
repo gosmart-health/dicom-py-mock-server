@@ -106,9 +106,9 @@ graph TD
     - Query filtering (`PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`, `ModalitiesInStudy`, `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID`) with wildcard/substring matching and pagination (`limit`, `offset`).
   - **WADO-RS (Web Access to DICOM Objects by RESTful Services - DICOM PS3.18 Section 10.4)**:
     - Retrieve Studies, Series, and Instances (`GET /dicomweb/studies/{studyUID}[/series/{seriesUID}[/instances/{instanceUID}]]`).
-    - Retrieve Metadata (`GET .../metadata`) returning DICOM JSON without bulk/pixel data.
-    - Transfer Syntax Negotiation: Parses `Accept: multipart/related; type="application/dicom"; transfer-syntax="..."` and dynamically transcodes instances using `DicomGeneratorService.apply_transfer_syntax` across RAW, JPEG Baseline, JPEG2000 Lossless, JPEG2000 Lossy, and RLE Lossless.
-    - Rendered Preview & Frame Retrieval (`GET .../rendered`, `GET .../frames/{frameList}`) returning normalized 8-bit JPEG/PNG images or raw frame bytes.
+    - Retrieve Metadata (`GET .../metadata`) returning DICOM JSON without bulk/pixel data, with optional transfer syntax negotiation.
+    - Transfer Syntax Negotiation: Parses `Accept` headers (`multipart/related; type="application/dicom"; transfer-syntax="..."`, `type="image/jpeg"`, `type="image/jp2"`, `type="image/rle"`, `type="application/octet-stream"`) as well as query parameters (`?transferSyntax=...`), and dynamically transcodes instances, frames, and metadata using `DicomGeneratorService.apply_transfer_syntax` across RAW, JPEG Baseline (Process 1), JPEG2000 Lossless, JPEG2000 Lossy, and RLE Lossless without forcing a server-wide environment variable override.
+    - Rendered Preview & Frame Retrieval (`GET .../rendered`, `GET .../frames/{frameList}`) returning dynamically negotiated and encoded frame streams (`image/jpeg`, `image/jp2`, `image/rle`, `application/octet-stream`) or rendered JPEG/PNG images.
   - **WADO-URI (DICOM PS3.18 Section 9)**:
     - Legacy single-object retrieval (`GET /dicomweb/wado?requestType=WADO&studyUID=...&seriesUID=...&objectUID=...&contentType=...&transferSyntax=...`).
   - **Dual Data Sourcing**: Integrates seamlessly across in-memory synthesized MWL datasets and stored `.dcm` files on disk.
