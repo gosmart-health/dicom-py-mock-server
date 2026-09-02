@@ -3,12 +3,23 @@
 import logging
 import logging.handlers
 import sys
+import warnings
 from pathlib import Path
 
 import structlog
 from structlog.types import Processor
 
 from dicom_py_mock_server.config import AppConfig, config
+
+
+class PydicomDeprecationFilter(logging.Filter):
+    """Filter out pydicom v4.0 deprecation warnings for internal property accesses."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "is_implicit_VR" in msg or "is_little_endian" in msg:
+            return False
+        return True
 
 
 def setup_logging(cfg: AppConfig | None = None) -> None:
@@ -19,6 +30,10 @@ def setup_logging(cfg: AppConfig | None = None) -> None:
     """
     if cfg is None:
         cfg = config
+
+    # Silence pydicom DeprecationWarnings on is_implicit_VR / is_little_endian
+    warnings.filterwarnings("ignore", category=DeprecationWarning, message=r".*is_implicit_VR.*")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, message=r".*is_little_endian.*")
 
     log_level = getattr(logging, cfg.log_level.upper(), logging.INFO)
 
@@ -92,6 +107,11 @@ def setup_logging(cfg: AppConfig | None = None) -> None:
     file_handler.setFormatter(file_formatter)
     file_handler.setLevel(log_level)
 
+    # Add deprecation filter to handlers
+    dep_filter = PydicomDeprecationFilter()
+    console_handler.addFilter(dep_filter)
+    file_handler.addFilter(dep_filter)
+
     # Root Logger Setup
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
@@ -100,9 +120,10 @@ def setup_logging(cfg: AppConfig | None = None) -> None:
     root_logger.addHandler(file_handler)
 
     # Standardize third-party library loggers
-    for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error", "pynetdicom", "fastapi"):
+    for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error", "pynetdicom", "fastapi", "pydicom"):
         lib_logger = logging.getLogger(logger_name)
         lib_logger.handlers.clear()
+        lib_logger.addFilter(dep_filter)
         lib_logger.propagate = True
 
 

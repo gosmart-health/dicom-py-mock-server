@@ -473,10 +473,8 @@ class DicomGeneratorService:
         else:
             ds.file_meta.TransferSyntaxUID = target_uid
 
-        # Synchronize dataset VR and endianness encoding flags with the final TransferSyntaxUID
-        is_implicit = ds.file_meta.TransferSyntaxUID == ImplicitVRLittleEndian
-        ds.is_implicit_VR = is_implicit
-        ds.is_little_endian = True
+        # Synchronize internal encoding flags with TransferSyntaxUID for pynetdicom compatibility
+        is_implicit = target_uid == ImplicitVRLittleEndian
         ds._read_implicit = is_implicit
         ds._read_little = True
         return ds
@@ -503,12 +501,13 @@ class DicomGeneratorService:
             {},
             file_meta=file_meta,
             preamble=b"\x00" * 128,
-            is_implicit_VR=False,
-            is_little_endian=True,
         )
+        ds._read_implicit = False
+        ds._read_little = True
 
         # Patient Module
         ds.PatientID = patient_id
+
         ds.PatientName = patient_name
         if request.patient.patient_birth_date:
             ds.PatientBirthDate = request.patient.patient_birth_date
