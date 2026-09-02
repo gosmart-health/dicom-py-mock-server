@@ -67,6 +67,8 @@ def test_structlog_json_file_output(tmp_path):
     assert log_entry["status"] == "success"
     assert log_entry["level"] == "info"
     assert log_entry["logger"] == "test.module"
+    assert log_entry["method_name"] == "test_structlog_json_file_output"
+    assert log_entry["func_name"] == "test_structlog_json_file_output"
     assert "timestamp" in log_entry
 
 
@@ -94,3 +96,5 @@ def test_stdlib_logging_interception(tmp_path):
     assert log_entry["event"] == "Standard library log message from third-party package"
     assert log_entry["logger"] == "stdlib.test"
     assert log_entry["level"] == "info"
+    assert log_entry["method_name"] == "test_stdlib_logging_interception"
+    assert log_entry["func_name"] == "test_stdlib_logging_interception"

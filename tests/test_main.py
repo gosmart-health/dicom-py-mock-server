@@ -1,7 +1,10 @@
+import time
+
 from fastapi.testclient import TestClient
 from pynetdicom import AE
 from pynetdicom.sop_class import Verification
 
+from dicom_py_mock_server.api.routes import scp_service
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.main import STARTUP_NOTICE, app
 
@@ -17,8 +20,13 @@ def test_startup_notice():
     )
 
 
-def test_app_lifespan_starts_scp_and_seeds_mock_studies():
+def test_app_lifespan_starts_scp_and_seeds_mock_studies(monkeypatch):
     """Verify that starting the app starts DICOM SCP and seeds/generates mock studies."""
+    test_port = 11129
+    monkeypatch.setattr(config, "scp_port", test_port)
+    scp_service.port = test_port
+    scp_service.stop()
+    time.sleep(0.1)
     with TestClient(app) as client:
         # Check SCP status endpoint
         res_scp = client.get("/api/v1/scp/status")

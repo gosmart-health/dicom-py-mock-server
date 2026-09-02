@@ -15,6 +15,7 @@ from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.encaps import encapsulate
 from pydicom.uid import (
     JPEG2000,
+    UID,
     CTImageStorage,
     ExplicitVRLittleEndian,
     ImplicitVRLittleEndian,
@@ -38,6 +39,7 @@ from dicom_py_mock_server.services.uid_generator import (
 logger = structlog.get_logger(__name__)
 
 TRANSFER_SYNTAX_MAP = {
+    # Raw / Uncompressed Little Endian
     "RAW": ExplicitVRLittleEndian,
     "EXPLICIT_RAW": ExplicitVRLittleEndian,
     "EXPLICIT_VR_LITTLE_ENDIAN": ExplicitVRLittleEndian,
@@ -45,19 +47,48 @@ TRANSFER_SYNTAX_MAP = {
     "IMPLICIT_RAW": ImplicitVRLittleEndian,
     "IMPLICIT_VR_LITTLE_ENDIAN": ImplicitVRLittleEndian,
     "1.2.840.10008.1.2": ImplicitVRLittleEndian,
+    # JPEG Baseline (Process 1)
     "JPEG": JPEGBaseline8Bit,
     "JPEG_PROCESS_1": JPEGBaseline8Bit,
     "JPEG_BASELINE": JPEGBaseline8Bit,
     "1.2.840.10008.1.2.4.50": JPEGBaseline8Bit,
+    # JPEG 2000 Lossless
     "JPEG2000": JPEG2000Lossless,
+    "JPEG200": JPEG2000Lossless,
     "JPEG2000_LOSSLESS": JPEG2000Lossless,
+    "JPEG200_LOSSLESS": JPEG2000Lossless,
+    "JPEG2000LOSSLESS": JPEG2000Lossless,
+    "JPEG200LOSSLESS": JPEG2000Lossless,
     "1.2.840.10008.1.2.4.90": JPEG2000Lossless,
+    # JPEG 2000 Lossy
     "JPEG2000_LOSSY": JPEG2000,
+    "JPEG200_LOSSY": JPEG2000,
+    "JPEG2000LOSSY": JPEG2000,
+    "JPEG200LOSSY": JPEG2000,
     "1.2.840.10008.1.2.4.91": JPEG2000,
+    # RLE Lossless
     "RLE": RLELossless,
     "RLE_LOSSLESS": RLELossless,
+    "RLELOSSLESS": RLELossless,
     "1.2.840.10008.1.2.5": RLELossless,
 }
+
+
+def resolve_transfer_syntax(syntax_name: str | None) -> UID:
+    """Resolve a transfer syntax name, alias, or UID string to a pydicom UID."""
+    if not syntax_name or not str(syntax_name).strip():
+        return ExplicitVRLittleEndian
+    name = str(syntax_name).strip().strip('"').strip("'")
+    if name in TRANSFER_SYNTAX_MAP:
+        return TRANSFER_SYNTAX_MAP[name]
+    norm = name.upper().replace("-", "_").replace(" ", "_")
+    if norm in TRANSFER_SYNTAX_MAP:
+        return TRANSFER_SYNTAX_MAP[norm]
+    norm_no_under = norm.replace("_", "")
+    if norm_no_under in TRANSFER_SYNTAX_MAP:
+        return TRANSFER_SYNTAX_MAP[norm_no_under]
+    return ExplicitVRLittleEndian
+
 
 MODALITY_STUDY_DESCRIPTIONS: dict[str, list[str]] = {
     "CT": [
@@ -355,8 +386,7 @@ class DicomGeneratorService:
     @classmethod
     def apply_transfer_syntax(cls, ds: FileDataset, syntax_name: str | None = None) -> FileDataset:
         """Convert or set dataset Transfer Syntax UID and encode pixel data accordingly."""
-        target_name = (syntax_name or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).upper().strip()
-        target_uid = TRANSFER_SYNTAX_MAP.get(target_name, ExplicitVRLittleEndian)
+        target_uid = resolve_transfer_syntax(syntax_name or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS"))
 
         current_uid = getattr(ds.file_meta, "TransferSyntaxUID", None)
         if current_uid == target_uid:
@@ -375,28 +405,51 @@ class DicomGeneratorService:
             ds.PixelData = arr.astype(np.uint16).tobytes()
         elif target_uid == JPEGBaseline8Bit:
             # JPEG Process 1 is 8-bit baseline
-            arr = ds.pixel_array if hasattr(ds, "pixel_array") else np.frombuffer(ds.PixelData, dtype=np.uint16)
+            try:
+                arr = ds.pixel_array
+            except Exception:
+                if isinstance(ds.PixelData, bytes):
+                    if getattr(ds, "BitsAllocated", 16) == 8:
+                        arr = np.frombuffer(ds.PixelData, dtype=np.uint8)
+                    else:
+                        arr = np.frombuffer(ds.PixelData, dtype=np.uint16)
+                else:
+                    arr = np.array(ds.PixelData)
+
+            if arr.ndim == 1 and hasattr(ds, "Rows") and hasattr(ds, "Columns"):
+                arr = arr.reshape((ds.Rows, ds.Columns))
+
             if arr.dtype == np.uint8 or arr.max() <= 255:
                 arr8 = arr.astype(np.uint8)
             else:
                 arr8 = (arr >> 4).astype(np.uint8)
 
-            img = Image.fromarray(arr8)
+            img = Image.fromarray(arr8, mode="L")
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=95)
             jpeg_bytes = buf.getvalue()
 
             ds.file_meta.TransferSyntaxUID = JPEGBaseline8Bit
+            ds.PhotometricInterpretation = "MONOCHROME2"
+            ds.SamplesPerPixel = 1
+            ds.PixelRepresentation = 0
             ds.BitsAllocated = 8
             ds.BitsStored = 8
             ds.HighBit = 7
             ds.WindowCenter = 128
             ds.WindowWidth = 256
-            ds.SmallestImagePixelValue = 0
-            ds.LargestImagePixelValue = 255
+            ds.RescaleIntercept = "0"
+            ds.RescaleSlope = "1"
+            ds.add_new(0x00280106, "US", 0)
+            ds.add_new(0x00280107, "US", 255)
+            if (0x0028, 0x0120) in ds:
+                del ds[0x0028, 0x0120]
+            if (0x0028, 0x0006) in ds:
+                del ds[0x0028, 0x0006]
             ds.LossyImageCompression = "01"
             ds.LossyImageCompressionMethod = "ISO_10918_1"
             ds.PixelData = encapsulate([jpeg_bytes])
+
         elif target_uid in (JPEG2000Lossless, JPEG2000, RLELossless):
             try:
                 ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
@@ -420,10 +473,8 @@ class DicomGeneratorService:
         else:
             ds.file_meta.TransferSyntaxUID = target_uid
 
-        # Synchronize dataset VR and endianness encoding flags with the final TransferSyntaxUID
-        is_implicit = ds.file_meta.TransferSyntaxUID == ImplicitVRLittleEndian
-        ds.is_implicit_VR = is_implicit
-        ds.is_little_endian = True
+        # Synchronize internal encoding flags with TransferSyntaxUID for pynetdicom compatibility
+        is_implicit = target_uid == ImplicitVRLittleEndian
         ds._read_implicit = is_implicit
         ds._read_little = True
         return ds
@@ -450,12 +501,13 @@ class DicomGeneratorService:
             {},
             file_meta=file_meta,
             preamble=b"\x00" * 128,
-            is_implicit_VR=False,
-            is_little_endian=True,
         )
+        ds._read_implicit = False
+        ds._read_little = True
 
         # Patient Module
         ds.PatientID = patient_id
+
         ds.PatientName = patient_name
         if request.patient.patient_birth_date:
             ds.PatientBirthDate = request.patient.patient_birth_date
@@ -500,8 +552,7 @@ class DicomGeneratorService:
 
         # Check target transfer syntax for JPEG 8-bit mode
         syntax_to_apply = request.transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
-        target_name = syntax_to_apply.upper().strip()
-        target_uid = TRANSFER_SYNTAX_MAP.get(target_name, ExplicitVRLittleEndian)
+        target_uid = resolve_transfer_syntax(syntax_to_apply)
         is_jpeg_8bit = target_uid == JPEGBaseline8Bit
 
         # Image Pixel Module
@@ -601,8 +652,8 @@ class DicomGeneratorService:
         else:
             ds = copy.deepcopy(template)
 
-        syntax_name = (transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).upper().strip()
-        target_uid = TRANSFER_SYNTAX_MAP.get(syntax_name, ExplicitVRLittleEndian)
+        syntax_name = transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
+        target_uid = resolve_transfer_syntax(syntax_name)
         is_8bit = target_uid == JPEGBaseline8Bit
 
         p_name = patient_name or (str(ds.PatientName) if hasattr(ds, "PatientName") else "MOCK_PATIENT")
@@ -764,6 +815,7 @@ class DicomGeneratorService:
                 "performing_physician_name": perf_phys,
             },
             num_instances=num_instances,
+            transfer_syntax=mwl_record.get("transfer_syntax"),
             burn_in_text=True,
         )
 

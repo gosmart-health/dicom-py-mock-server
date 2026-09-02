@@ -2,6 +2,7 @@
 
 import io
 
+import structlog
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -10,7 +11,9 @@ from dicom_py_mock_server.config import config
 from dicom_py_mock_server.services.dicomweb import DicomWebService
 from dicom_py_mock_server.services.generator import DicomGeneratorService
 
+logger = structlog.get_logger(__name__)
 dicomweb_router = APIRouter()
+
 
 dicomweb_service = DicomWebService(
     mwl_service=mwl_service,
@@ -155,12 +158,26 @@ def qido_search_all_instances(
 @dicomweb_router.get("/studies/{study_instance_uid}/metadata", response_class=JSONResponse)
 @dicomweb_router.get("/api/v1/dicomweb/studies/{study_instance_uid}/metadata", response_class=JSONResponse)
 @dicomweb_router.get("/dicomweb/studies/{study_instance_uid}/metadata", response_class=JSONResponse)
-def wado_get_study_metadata(study_instance_uid: str):
+def wado_get_study_metadata(
+    study_instance_uid: str,
+    accept: str | None = Header(None),
+    transfer_syntax_header: str | None = Header(None, alias="transfer-syntax"),
+    x_transfer_syntax_header: str | None = Header(None, alias="X-Transfer-Syntax"),
+    transfer_syntax: str | None = Query(None, alias="transferSyntax"),
+    transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
+    transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
+):
     """WADO-RS: Retrieve metadata for all instances in a study as DICOM JSON."""
     datasets = dicomweb_service.get_study_datasets(study_instance_uid)
     if not datasets:
         raise HTTPException(status_code=404, detail="Study not found")
-    metadata = dicomweb_service.get_metadata(datasets)
+
+    req_ts = dicomweb_service.parse_transfer_syntax_header(
+        accept_header=accept,
+        query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
+        direct_header=transfer_syntax_header or x_transfer_syntax_header,
+    )
+    metadata = dicomweb_service.get_metadata(datasets, requested_transfer_syntax=req_ts)
     return JSONResponse(content=metadata, media_type="application/dicom+json")
 
 
@@ -171,12 +188,27 @@ def wado_get_study_metadata(study_instance_uid: str):
 @dicomweb_router.get(
     "/dicomweb/studies/{study_instance_uid}/series/{series_instance_uid}/metadata", response_class=JSONResponse
 )
-def wado_get_series_metadata(study_instance_uid: str, series_instance_uid: str):
+def wado_get_series_metadata(
+    study_instance_uid: str,
+    series_instance_uid: str,
+    accept: str | None = Header(None),
+    transfer_syntax_header: str | None = Header(None, alias="transfer-syntax"),
+    x_transfer_syntax_header: str | None = Header(None, alias="X-Transfer-Syntax"),
+    transfer_syntax: str | None = Query(None, alias="transferSyntax"),
+    transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
+    transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
+):
     """WADO-RS: Retrieve metadata for all instances in a series as DICOM JSON."""
     datasets = dicomweb_service.get_series_datasets(study_instance_uid, series_instance_uid)
     if not datasets:
         raise HTTPException(status_code=404, detail="Series not found")
-    metadata = dicomweb_service.get_metadata(datasets)
+
+    req_ts = dicomweb_service.parse_transfer_syntax_header(
+        accept_header=accept,
+        query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
+        direct_header=transfer_syntax_header or x_transfer_syntax_header,
+    )
+    metadata = dicomweb_service.get_metadata(datasets, requested_transfer_syntax=req_ts)
     return JSONResponse(content=metadata, media_type="application/dicom+json")
 
 
@@ -192,12 +224,28 @@ def wado_get_series_metadata(study_instance_uid: str, series_instance_uid: str):
     "/dicomweb/studies/{study_instance_uid}/series/{series_instance_uid}/instances/{sop_instance_uid}/metadata",
     response_class=JSONResponse,
 )
-def wado_get_instance_metadata(study_instance_uid: str, series_instance_uid: str, sop_instance_uid: str):
+def wado_get_instance_metadata(
+    study_instance_uid: str,
+    series_instance_uid: str,
+    sop_instance_uid: str,
+    accept: str | None = Header(None),
+    transfer_syntax_header: str | None = Header(None, alias="transfer-syntax"),
+    x_transfer_syntax_header: str | None = Header(None, alias="X-Transfer-Syntax"),
+    transfer_syntax: str | None = Query(None, alias="transferSyntax"),
+    transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
+    transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
+):
     """WADO-RS: Retrieve metadata for a single instance as DICOM JSON."""
     dataset = dicomweb_service.get_instance_dataset(study_instance_uid, series_instance_uid, sop_instance_uid)
     if not dataset:
         raise HTTPException(status_code=404, detail="Instance not found")
-    metadata = dicomweb_service.get_metadata([dataset])
+
+    req_ts = dicomweb_service.parse_transfer_syntax_header(
+        accept_header=accept,
+        query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
+        direct_header=transfer_syntax_header or x_transfer_syntax_header,
+    )
+    metadata = dicomweb_service.get_metadata([dataset], requested_transfer_syntax=req_ts)
     return JSONResponse(content=metadata, media_type="application/dicom+json")
 
 
@@ -212,14 +260,22 @@ def wado_get_instance_metadata(study_instance_uid: str, series_instance_uid: str
 def wado_retrieve_study(
     study_instance_uid: str,
     accept: str | None = Header(None),
+    transfer_syntax_header: str | None = Header(None, alias="transfer-syntax"),
+    x_transfer_syntax_header: str | None = Header(None, alias="X-Transfer-Syntax"),
     transfer_syntax: str | None = Query(None, alias="transferSyntax"),
+    transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
+    transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
 ):
     """WADO-RS: Retrieve all instances in a study as multipart/related; type=application/dicom."""
     datasets = dicomweb_service.get_study_datasets(study_instance_uid)
     if not datasets:
         raise HTTPException(status_code=404, detail="Study not found")
 
-    req_ts = dicomweb_service.parse_transfer_syntax_header(accept, transfer_syntax)
+    req_ts = dicomweb_service.parse_transfer_syntax_header(
+        accept_header=accept,
+        query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
+        direct_header=transfer_syntax_header or x_transfer_syntax_header,
+    )
     payload, content_type = dicomweb_service.encode_multipart_related(datasets, requested_transfer_syntax=req_ts)
     return Response(content=payload, media_type=content_type)
 
@@ -231,14 +287,22 @@ def wado_retrieve_series(
     study_instance_uid: str,
     series_instance_uid: str,
     accept: str | None = Header(None),
+    transfer_syntax_header: str | None = Header(None, alias="transfer-syntax"),
+    x_transfer_syntax_header: str | None = Header(None, alias="X-Transfer-Syntax"),
     transfer_syntax: str | None = Query(None, alias="transferSyntax"),
+    transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
+    transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
 ):
     """WADO-RS: Retrieve all instances in a series as multipart/related; type=application/dicom."""
     datasets = dicomweb_service.get_series_datasets(study_instance_uid, series_instance_uid)
     if not datasets:
         raise HTTPException(status_code=404, detail="Series not found")
 
-    req_ts = dicomweb_service.parse_transfer_syntax_header(accept, transfer_syntax)
+    req_ts = dicomweb_service.parse_transfer_syntax_header(
+        accept_header=accept,
+        query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
+        direct_header=transfer_syntax_header or x_transfer_syntax_header,
+    )
     payload, content_type = dicomweb_service.encode_multipart_related(datasets, requested_transfer_syntax=req_ts)
     return Response(content=payload, media_type=content_type)
 
@@ -253,14 +317,22 @@ def wado_retrieve_instance(
     series_instance_uid: str,
     sop_instance_uid: str,
     accept: str | None = Header(None),
+    transfer_syntax_header: str | None = Header(None, alias="transfer-syntax"),
+    x_transfer_syntax_header: str | None = Header(None, alias="X-Transfer-Syntax"),
     transfer_syntax: str | None = Query(None, alias="transferSyntax"),
+    transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
+    transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
 ):
     """WADO-RS: Retrieve a single instance as multipart/related or application/dicom."""
     dataset = dicomweb_service.get_instance_dataset(study_instance_uid, series_instance_uid, sop_instance_uid)
     if not dataset:
         raise HTTPException(status_code=404, detail="Instance not found")
 
-    req_ts = dicomweb_service.parse_transfer_syntax_header(accept, transfer_syntax)
+    req_ts = dicomweb_service.parse_transfer_syntax_header(
+        accept_header=accept,
+        query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
+        direct_header=transfer_syntax_header or x_transfer_syntax_header,
+    )
 
     # Check if client explicitly wants a direct non-multipart application/dicom response
     if accept and "multipart" not in accept.lower() and "application/dicom" in accept.lower():
@@ -319,8 +391,14 @@ def wado_retrieve_frames(
     series_instance_uid: str,
     sop_instance_uid: str,
     frame_list: str,
+    accept: str | None = Header(None),
+    transfer_syntax_header: str | None = Header(None, alias="transfer-syntax"),
+    x_transfer_syntax_header: str | None = Header(None, alias="X-Transfer-Syntax"),
+    transfer_syntax: str | None = Query(None, alias="transferSyntax"),
+    transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
+    transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
 ):
-    """WADO-RS: Retrieve raw pixel frame bytes for specified frame numbers (e.g. '1' or '1,2,3')."""
+    """WADO-RS: Retrieve pixel frame bytes for specified frame numbers with dynamic transfer syntax negotiation."""
     dataset = dicomweb_service.get_instance_dataset(study_instance_uid, series_instance_uid, sop_instance_uid)
     if not dataset:
         raise HTTPException(status_code=404, detail="Instance not found")
@@ -330,7 +408,15 @@ def wado_retrieve_frames(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid frame list '{frame_list}'")
 
-    raw_frames = dicomweb_service.get_frame_bytes(dataset, frames)
+    req_ts = dicomweb_service.parse_transfer_syntax_header(
+        accept_header=accept,
+        query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
+        direct_header=transfer_syntax_header or x_transfer_syntax_header,
+    )
+
+    raw_frames, part_content_type = dicomweb_service.get_encoded_frames(
+        dataset, frames, requested_transfer_syntax=req_ts
+    )
     if not raw_frames:
         raise HTTPException(status_code=404, detail="Requested frames not found")
 
@@ -338,7 +424,7 @@ def wado_retrieve_frames(
     parts = []
     for f_data in raw_frames:
         parts.append(
-            f"--{boundary}\r\nContent-Type: application/octet-stream\r\nContent-Length: {len(f_data)}\r\n\r\n".encode(
+            f"--{boundary}\r\nContent-Type: {part_content_type}\r\nContent-Length: {len(f_data)}\r\n\r\n".encode(
                 "utf-8"
             )
             + f_data
@@ -348,7 +434,7 @@ def wado_retrieve_frames(
 
     return Response(
         content=b"".join(parts),
-        media_type=f'multipart/related; type="application/octet-stream"; boundary="{boundary}"',
+        media_type=f'multipart/related; type="{part_content_type}"; boundary="{boundary}"',
     )
 
 
@@ -395,6 +481,8 @@ def wado_uri_retrieve(
     object_uid: str = Query(..., alias="objectUID"),
     content_type: str = Query("application/dicom", alias="contentType"),
     transfer_syntax: str | None = Query(None, alias="transferSyntax"),
+    transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
+    transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
 ):
     """WADO-URI: Legacy DICOM object retrieval endpoint."""
     if request_type.upper() != "WADO":
@@ -409,8 +497,9 @@ def wado_uri_retrieve(
         img_bytes, media_type = dicomweb_service.render_instance(dataset, frame=1, image_format=fmt)
         return Response(content=img_bytes, media_type=media_type)
 
-    if transfer_syntax:
-        dataset = DicomGeneratorService.apply_transfer_syntax(dataset, transfer_syntax)
+    target_ts = transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake
+    if target_ts:
+        dataset = DicomGeneratorService.apply_transfer_syntax(dataset, target_ts)
 
     buf = io.BytesIO()
     dataset.save_as(buf, enforce_file_format=True)

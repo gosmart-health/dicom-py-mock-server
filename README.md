@@ -182,21 +182,29 @@ curl -X GET "http://127.0.0.1:8000/dicomweb/studies?PatientID=GSH*&limit=10" \
 | `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}/frames/{frameList}` | Retrieve raw pixel data for specific frames | `multipart/related; type="application/octet-stream"` |
 
 #### Transfer Syntax Negotiation & Transcoding
-WADO-RS endpoints automatically transcode instances on-the-fly to the requested transfer syntax specified in the `Accept` header or query parameter `transferSyntax`:
+WADO-RS endpoints automatically transcode instances on-the-fly to the requested transfer syntax specified in the `Accept` header (`transfer-syntax="..."`), direct request headers (`transfer-syntax`, `X-Transfer-Syntax`), or query parameters (`transferSyntax`, `transfer-syntax`, `transfer_syntax`). Supported values include friendly aliases (`JPEG200`, `JPEG200_LOSSLESS`, `JPEG2000`, `JPEG2000_LOSSLESS`, `RLE`, `RLE_LOSSLESS`, `RAW`, `JPEG`) as well as standard DICOM Transfer Syntax UIDs:
 
 ```bash
-# Retrieve JPEG 2000 Lossless instances
+# Retrieve JPEG 2000 Lossless instances via Accept header alias
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
+     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="JPEG200"'
+
+# Retrieve JPEG 2000 Lossless instances via UID
 curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
      -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.4.90"'
 
+# Retrieve RLE Lossless instances via query parameter
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345?transferSyntax=RLE"
+
 # Retrieve Explicit VR Little Endian (RAW) instances
 curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
-     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.1"'
+     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="RAW"'
 
 # Retrieve JPEG Baseline 8-bit instances
 curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
      -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.4.50"'
 ```
+
 
 ---
 

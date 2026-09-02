@@ -561,3 +561,51 @@ def test_microdicom_send_jpeg2000_lossless_from_ct_small_template():
         assoc.release()
     except Exception as exc:
         pytest.skip(f"MicroDICOM C-STORE communication interrupted: {exc}")
+
+
+def test_cstore_push_jpeg_8bit_monochrome2():
+    """Verify DIMSE C-STORE push transcodes/outputs 8-bit MONOCHROME2 datasets for JPEG Baseline."""
+    import numpy as np
+    from pydicom.uid import JPEGBaseline8Bit
+
+    mwl_service = MwlGeneratorService(config)
+    _ = mwl_service.add_entry(
+        custom={
+            "patientName": "JPEG^TESTPATIENT",
+            "patientId": "JPG8888",
+            "modality": "CT",
+            "accession": "ACC-JPG-01",
+            "transfer_syntax": "JPEG",
+        }
+    )
+
+    mock_pacs = MockStorageScp(ae_title="JPEG_PACS", port=11117)
+    mock_pacs.start()
+
+    scp_service = DicomScpService(ae_title="GOSMART_SCP", port=11118, mwl_service=mwl_service)
+
+    try:
+        # Move study to mock PACS requesting JPEG baseline
+        res = scp_service.move_study(
+            target_ae_title="JPEG_PACS",
+            target_host="127.0.0.1",
+            target_port=11117,
+            patient_id="JPG8888",
+            accession="ACC-JPG-01",
+        )
+        assert res.get("success") is True
+        assert res["instances_sent"] > 0
+        assert len(mock_pacs.received_datasets) > 0
+
+        for r_ds in mock_pacs.received_datasets:
+            assert r_ds.file_meta.TransferSyntaxUID == JPEGBaseline8Bit
+            assert r_ds.PhotometricInterpretation == "MONOCHROME2"
+            assert r_ds.BitsAllocated == 8
+            assert r_ds.BitsStored == 8
+            assert r_ds.HighBit == 7
+            assert r_ds.SamplesPerPixel == 1
+            assert r_ds.PixelRepresentation == 0
+            assert r_ds.pixel_array.dtype == np.uint8
+            assert r_ds.pixel_array.shape == (r_ds.Rows, r_ds.Columns)
+    finally:
+        mock_pacs.stop()

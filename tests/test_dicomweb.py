@@ -3,6 +3,7 @@
 import io
 import re
 
+import numpy as np
 import pydicom
 import pytest
 from fastapi.testclient import TestClient
@@ -191,27 +192,83 @@ def test_wado_retrieve_study_and_series_multipart(client):
         assert str(ds.SeriesInstanceUID) == series_uid
 
 
+def test_qido_cors_headers(client):
+    """Verify CORS headers are present on QIDO endpoints for browser-based viewers."""
+    # Test OPTIONS preflight
+    resp_options = client.options(
+        "/dicomweb/studies",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp_options.status_code == 200
+    assert resp_options.headers.get("access-control-allow-origin") in ("*", "http://localhost:3000")
+
+    # Test GET request
+    resp_get = client.get("/dicomweb/studies", headers={"Origin": "http://localhost:3000"})
+    assert resp_get.status_code == 200
+    assert resp_get.headers.get("access-control-allow-origin") in ("*", "http://localhost:3000")
+
+
+def test_qido_search_studies_limit_variations(client):
+    """Verify QIDO-RS handles both ?limit=100 and ?limit-100 style query parameters."""
+    resp_eq = client.get("/dicomweb/studies?limit=2")
+    assert resp_eq.status_code == 200
+    assert len(resp_eq.json()) <= 2
+
+    resp_dash = client.get("/dicomweb/studies?limit-2")
+    assert resp_dash.status_code == 200
+    assert len(resp_dash.json()) <= 2
+
+
 def test_wado_retrieve_transfer_syntax_negotiation(client):
     """Verify WADO-RS correctly transcodes datasets to requested transfer syntax across all supported syntaxes."""
     studies = client.get("/dicomweb/studies").json()
     study_uid = studies[0]["0020000D"]["Value"][0]
 
     transfer_syntaxes_to_test = [
-        ("1.2.840.10008.1.2.1", "Explicit VR Little Endian"),
-        ("1.2.840.10008.1.2.4.90", "JPEG 2000 Lossless"),
-        ("1.2.840.10008.1.2.4.50", "JPEG Baseline 8-Bit"),
-        ("1.2.840.10008.1.2.5", "RLE Lossless"),
+        ("1.2.840.10008.1.2.1", "1.2.840.10008.1.2.1", "Explicit VR Little Endian UID"),
+        ("1.2.840.10008.1.2.4.90", "1.2.840.10008.1.2.4.90", "JPEG 2000 Lossless UID"),
+        ("1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.50", "JPEG Baseline 8-Bit UID"),
+        ("1.2.840.10008.1.2.5", "1.2.840.10008.1.2.5", "RLE Lossless UID"),
+        ("RAW", "1.2.840.10008.1.2.1", "RAW Named Syntax"),
+        ("JPEG200", "1.2.840.10008.1.2.4.90", "JPEG200 Alias"),
+        ("JPEG200_LOSSLESS", "1.2.840.10008.1.2.4.90", "JPEG200_LOSSLESS Alias"),
+        ("JPEG2000", "1.2.840.10008.1.2.4.90", "JPEG2000 Named Syntax"),
+        ("JPEG2000_LOSSLESS", "1.2.840.10008.1.2.4.90", "JPEG2000_LOSSLESS Named Syntax"),
+        ("RLE", "1.2.840.10008.1.2.5", "RLE Named Syntax"),
+        ("RLE_LOSSLESS", "1.2.840.10008.1.2.5", "RLE_LOSSLESS Named Syntax"),
     ]
 
-    for ts_uid, ts_label in transfer_syntaxes_to_test:
-        headers = {"Accept": f'multipart/related; type="application/dicom"; transfer-syntax="{ts_uid}"'}
+    for req_syntax, expected_ts_uid, ts_label in transfer_syntaxes_to_test:
+        headers = {"Accept": f'multipart/related; type="application/dicom"; transfer-syntax="{req_syntax}"'}
         resp = client.get(f"/dicomweb/studies/{study_uid}", headers=headers)
-        assert resp.status_code == 200, f"Failed for {ts_label} ({ts_uid})"
+        assert resp.status_code == 200, f"Failed for {ts_label} ({req_syntax})"
         dsets = _extract_multipart_dicom_parts(resp.headers["content-type"], resp.content)
         assert len(dsets) >= 1
         for ds in dsets:
             actual_ts = str(ds.file_meta.TransferSyntaxUID)
-            assert actual_ts == ts_uid, f"Expected {ts_uid} ({ts_label}), got {actual_ts}"
+            assert actual_ts == expected_ts_uid, (
+                f"Expected {expected_ts_uid} for {ts_label} ({req_syntax}), got {actual_ts}"
+            )
+
+    # Test via direct Transfer-Syntax header
+    resp_header = client.get(
+        f"/dicomweb/studies/{study_uid}",
+        headers={"transfer-syntax": "JPEG200"},
+    )
+    assert resp_header.status_code == 200
+    dsets_header = _extract_multipart_dicom_parts(resp_header.headers["content-type"], resp_header.content)
+    assert len(dsets_header) >= 1
+    assert str(dsets_header[0].file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.90"
+
+    # Test via query parameter ?transferSyntax=RLE
+    resp_query = client.get(f"/dicomweb/studies/{study_uid}?transferSyntax=RLE")
+    assert resp_query.status_code == 200
+    dsets_query = _extract_multipart_dicom_parts(resp_query.headers["content-type"], resp_query.content)
+    assert len(dsets_query) >= 1
+    assert str(dsets_query[0].file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.5"
 
 
 def test_wado_single_instance_direct_application_dicom(client):
@@ -234,6 +291,48 @@ def test_wado_single_instance_direct_application_dicom(client):
     ds = pydicom.dcmread(io.BytesIO(resp.content), force=True)
     assert str(ds.SOPInstanceUID) == sop_uid
     assert str(ds.StudyInstanceUID) == study_uid
+
+
+def test_wado_retrieve_jpeg_8bit_monochrome2(client):
+    """Verify WADO-RS and WADO-URI output 8-bit MONOCHROME2 datasets for JPEG baseline."""
+    studies = client.get("/dicomweb/studies").json()
+    study_uid = studies[0]["0020000D"]["Value"][0]
+    series_list = client.get(f"/dicomweb/studies/{study_uid}/series").json()
+    series_uid = series_list[0]["0020000E"]["Value"][0]
+    instances = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances").json()
+    sop_uid = instances[0]["00080018"]["Value"][0]
+
+    # 1. WADO-RS with Accept header transfer-syntax="JPEG"
+    headers = {"Accept": 'multipart/related; type="application/dicom"; transfer-syntax="JPEG"'}
+    resp_rs = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}", headers=headers)
+    assert resp_rs.status_code == 200
+    dsets = _extract_multipart_dicom_parts(resp_rs.headers["content-type"], resp_rs.content)
+    assert len(dsets) == 1
+    ds_rs = dsets[0]
+    assert str(ds_rs.file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.50"
+    assert ds_rs.PhotometricInterpretation == "MONOCHROME2"
+    assert ds_rs.BitsAllocated == 8
+    assert ds_rs.BitsStored == 8
+    assert ds_rs.HighBit == 7
+    assert ds_rs.SamplesPerPixel == 1
+    assert ds_rs.PixelRepresentation == 0
+    assert ds_rs.pixel_array.dtype == np.uint8
+    assert ds_rs.pixel_array.shape == (ds_rs.Rows, ds_rs.Columns)
+
+    # 2. WADO-URI with transferSyntax=JPEG
+    resp_uri = client.get(
+        f"/dicomweb/wado?requestType=WADO&studyUID={study_uid}&seriesUID={series_uid}&objectUID={sop_uid}&transferSyntax=JPEG"
+    )
+    assert resp_uri.status_code == 200
+    ds_uri = pydicom.dcmread(io.BytesIO(resp_uri.content), force=True)
+    assert str(ds_uri.file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.50"
+    assert ds_uri.PhotometricInterpretation == "MONOCHROME2"
+    assert ds_uri.BitsAllocated == 8
+    assert ds_uri.BitsStored == 8
+    assert ds_uri.HighBit == 7
+    assert ds_uri.SamplesPerPixel == 1
+    assert ds_uri.PixelRepresentation == 0
+    assert ds_uri.pixel_array.dtype == np.uint8
 
 
 def test_wado_rendered_jpeg_and_png(client):
@@ -293,3 +392,83 @@ def test_wado_404_and_400_handling(client):
     # 400 for invalid WADO-URI requestType
     resp_400 = client.get("/dicomweb/wado?requestType=INVALID&studyUID=1&seriesUID=2&objectUID=3")
     assert resp_400.status_code == 400
+
+
+def test_wado_retrieve_frames_transfer_syntax_negotiation(client):
+    """Verify WADO-RS frames retrieval dynamically encodes frames to requested transfer syntax."""
+    studies = client.get("/dicomweb/studies").json()
+    study_uid = studies[0]["0020000D"]["Value"][0]
+    series_list = client.get(f"/dicomweb/studies/{study_uid}/series").json()
+    series_uid = series_list[0]["0020000E"]["Value"][0]
+    instances = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances").json()
+    sop_uid = instances[0]["00080018"]["Value"][0]
+
+    # 1. Client requests JPEG Process 1 via complex Accept header
+    jpeg_accept = (
+        'multipart/related; type="image/jpeg"; transfer-syntax="1.2.840.10008.1.2.4.50", '
+        "image/jpeg, application/octet-stream"
+    )
+    resp_jpeg = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": jpeg_accept},
+    )
+    assert resp_jpeg.status_code == 200
+    assert 'type="image/jpeg"' in resp_jpeg.headers["content-type"]
+    assert b"Content-Type: image/jpeg" in resp_jpeg.content
+    assert b"\xff\xd8\xff" in resp_jpeg.content  # JPEG header in body
+
+    # 2. Client requests JPEG 2000 via type="image/jp2"
+    resp_j2k = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="image/jp2"'},
+    )
+    assert resp_j2k.status_code == 200
+    assert 'type="image/jp2"' in resp_j2k.headers["content-type"]
+    assert b"Content-Type: image/jp2" in resp_j2k.content
+
+    # 3. Client requests RLE via type="image/rle"
+    resp_rle = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="image/rle"'},
+    )
+    assert resp_rle.status_code == 200
+    assert 'type="image/rle"' in resp_rle.headers["content-type"]
+    assert b"Content-Type: image/rle" in resp_rle.content
+
+    # 4. Client requests raw octet-stream
+    resp_raw = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="application/octet-stream"'},
+    )
+    assert resp_raw.status_code == 200
+    assert 'type="application/octet-stream"' in resp_raw.headers["content-type"]
+    assert b"Content-Type: application/octet-stream" in resp_raw.content
+
+
+def test_wado_metadata_transfer_syntax_and_pixel_preservation(client):
+    """Verify metadata transcoding negotiation and that get_metadata does not strip pixel data in memory."""
+    studies = client.get("/dicomweb/studies").json()
+    study_uid = studies[0]["0020000D"]["Value"][0]
+    series_list = client.get(f"/dicomweb/studies/{study_uid}/series").json()
+    series_uid = series_list[0]["0020000E"]["Value"][0]
+    instances = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances").json()
+    sop_uid = instances[0]["00080018"]["Value"][0]
+
+    # 1. Metadata query with transferSyntax=1.2.840.10008.1.2.4.50 (JPEG Process 1)
+    meta_jpeg = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/metadata?transferSyntax=1.2.840.10008.1.2.4.50"
+    )
+    assert meta_jpeg.status_code == 200
+    meta_json = meta_jpeg.json()[0]
+    assert meta_json["00280100"]["Value"][0] == 8  # BitsAllocated = 8
+    assert meta_json["00280101"]["Value"][0] == 8  # BitsStored = 8
+    assert meta_json["00280102"]["Value"][0] == 7  # HighBit = 7
+    assert meta_json["00281050"]["Value"][0] == 128.0  # WindowCenter = 128
+
+    # 2. Subsequent frame retrieval on the same instance works without error (PixelData preserved)
+    resp_frame = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="image/jpeg"'},
+    )
+    assert resp_frame.status_code == 200
+    assert b"\xff\xd8\xff" in resp_frame.content

@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.2.1] - 2026-09-02
+
+### Added
+- **Dynamic WADO-RS Transfer Syntax Negotiation**:
+  - Implemented dynamic, per-request transfer syntax negotiation for all 6 supported DICOM transfer syntaxes:
+    - JPEG Baseline Process 1 (`1.2.840.10008.1.2.4.50`)
+    - JPEG 2000 Lossless (`1.2.840.10008.1.2.4.90`)
+    - JPEG 2000 Lossy (`1.2.840.10008.1.2.4.91`)
+    - RLE Lossless (`1.2.840.10008.1.2.5`)
+    - Explicit VR Little Endian (`1.2.840.10008.1.2.1`)
+    - Implicit VR Little Endian (`1.2.840.10008.1.2`)
+  - Enhanced `parse_transfer_syntax_header` to parse standard `transfer-syntax` parameters, media types (`type="image/jpeg"`, `type="image/jp2"`, `type="image/jpx"`, `type="image/rle"`, `type="application/octet-stream"`), direct headers (`transfer-syntax`, `X-Transfer-Syntax`), and query parameters (`?transferSyntax=...`).
+  - Added multi-syntax frame transcoding (`get_encoded_frames`) in `DicomWebService`, encoding frame pixel arrays into JPEG (`image/jpeg`), JPEG 2000 (`image/jp2`), RLE (`image/rle`), or raw uncompressed octet-streams (`application/octet-stream`).
+  - Updated WADO-RS `/frames/{frameList}` endpoint to return multipart frame payloads with appropriate `Content-Type` matching the negotiated transfer syntax.
+  - Added transfer syntax parameter support to WADO-RS metadata endpoints (`/metadata`) to optionally reflect negotiated pixel attributes (such as 8-bit dynamic range for JPEG Baseline) in metadata JSON responses.
+- **WADO Study Download Utility Scripts**:
+  - Added `wado_download_study.py` standalone utility script to download complete DICOM studies via WADO-RS and extract individual `.dcm` instances into a destination directory without external dependencies.
+  - Added `wado_download_study.sh` helper shell script for automated testing.
+- **Enhanced Logging**:
+  - Automatically log caller `method_name` and `func_name` across structured JSON log events.
+  - Log incoming HTTP and DICOMweb request headers (`Accept`) and resolved transfer syntaxes.
+
+### Fixed
+- **Pixel Data Corruption in Metadata Extraction**:
+  - Fixed shallow copy bug in `DicomWebService.get_metadata` where `ds.copy()` mutated the in-memory dataset, inadvertently stripping `PixelData` and causing subsequent frame retrievals to fail. Switched to `copy.deepcopy` to maintain dataset integrity.
+- **WADO-RS Transfer Syntax Enforcement**:
+  - Resolved issue where clients requesting JPEG Process 1 received 12-bit uncompressed frames due to server-wide environment variable defaults. WADO-RS now strictly honors client-requested transfer syntaxes.
+- **SCU Presentation Context Negotiation**:
+  - Cleaned up SCU presentation context syntax negotiation to propose the specific configured target syntax.
+
 ## [0.2.0] - 2026-09-01
 
 ### Added

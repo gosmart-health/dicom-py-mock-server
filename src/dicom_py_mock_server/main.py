@@ -3,7 +3,8 @@
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from dicom_py_mock_server.api import dicomweb_router, mcp_router, router
 from dicom_py_mock_server.api.routes import mwl_service, scp_service
@@ -32,7 +33,8 @@ async def lifespan(app: FastAPI):
 
     # 3. Start DICOM SCP listener (C-ECHO, C-FIND, C-MOVE, C-STORE, MWL)
     try:
-        scp_service.start()
+        if not scp_service.is_running:
+            scp_service.start()
         logger.info(
             "dicom_scp_started_on_startup",
             ae_title=scp_service.ae_title,
@@ -56,6 +58,31 @@ app = FastAPI(
     description="FastAPI service for mock DICOM objects, DICOM SCP, and DICOMweb QIDO/WADO services.",
     lifespan=lifespan,
 )
+
+# Enable CORS for browser-based DICOM viewers and tools
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def log_request_details(request: Request, call_next):
+    """Log incoming HTTP requests with method, path, query, and Accept header."""
+    accept_header = request.headers.get("accept")
+    logger.info(
+        "http_request_received",
+        method=request.method,
+        path=request.url.path,
+        query=str(request.url.query) if request.url.query else None,
+        accept=accept_header,
+    )
+    return await call_next(request)
+
 
 app.include_router(router)
 app.include_router(dicomweb_router)

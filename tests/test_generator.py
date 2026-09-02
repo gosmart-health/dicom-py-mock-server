@@ -95,13 +95,15 @@ def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
     assert ds_raw.pixel_array.max() == 4095
     assert ds_raw.SmallestImagePixelValue == 0
     assert ds_raw.LargestImagePixelValue == 4095
-    assert ds_raw.is_implicit_VR is False
     assert ds_raw.original_encoding == (False, True)
 
     # 2. JPEG Process 1 (JPEGBaseline8Bit)
     req_jpeg = RawImageGeneratorRequest(transfer_syntax="JPEG")
     ds_jpeg = generator.create_raw_dicom_file(req_jpeg)
     assert ds_jpeg.file_meta.TransferSyntaxUID == JPEGBaseline8Bit
+    assert ds_jpeg.PhotometricInterpretation == "MONOCHROME2"
+    assert ds_jpeg.SamplesPerPixel == 1
+    assert ds_jpeg.PixelRepresentation == 0
     assert ds_jpeg.pixel_array.shape == (512, 512)
     assert ds_jpeg.pixel_array.dtype == np.uint8
     assert ds_jpeg.pixel_array.max() == 255
@@ -111,7 +113,6 @@ def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
     assert ds_jpeg.SmallestImagePixelValue == 0
     assert ds_jpeg.LargestImagePixelValue == 255
     assert ds_jpeg.LossyImageCompression == "01"
-    assert ds_jpeg.is_implicit_VR is False
     assert ds_jpeg.original_encoding == (False, True)
 
     # 3. JPEG 2000 Lossless (JPEG2000Lossless)
@@ -122,7 +123,6 @@ def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
     assert ds_j2k.pixel_array.dtype == np.uint16
     assert ds_j2k.pixel_array.max() == 4095
     assert ds_j2k.LossyImageCompression == "00"
-    assert ds_j2k.is_implicit_VR is False
     assert ds_j2k.original_encoding == (False, True)
     # Ensure SOP Instance UID was preserved
     assert ds_j2k.file_meta.MediaStorageSOPInstanceUID == ds_j2k.SOPInstanceUID
@@ -135,7 +135,6 @@ def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
     assert ds_j2k_lossy.pixel_array.dtype == np.uint16
     assert ds_j2k_lossy.pixel_array.max() == 4095
     assert ds_j2k_lossy.LossyImageCompression == "01"
-    assert ds_j2k_lossy.is_implicit_VR is False
     assert ds_j2k_lossy.original_encoding == (False, True)
 
     # 5. RLE Lossless (RLELossless)
@@ -146,7 +145,6 @@ def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
     assert ds_rle.pixel_array.dtype == np.uint16
     assert ds_rle.pixel_array.max() == 4095
     assert ds_rle.LossyImageCompression == "00"
-    assert ds_rle.is_implicit_VR is False
     assert ds_rle.original_encoding == (False, True)
     assert ds_rle.file_meta.MediaStorageSOPInstanceUID == ds_rle.SOPInstanceUID
 
