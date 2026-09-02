@@ -166,9 +166,15 @@ def wado_get_study_metadata(
     transfer_syntax: str | None = Query(None, alias="transferSyntax"),
     transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
     transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
+    limit: int | None = Query(None, alias="limit", ge=1),
+    slices: int | None = Query(None, alias="slices", ge=1),
+    count: int | None = Query(None, alias="count", ge=1),
+    num_instances: int | None = Query(None, alias="numInstances", ge=1),
+    num_instances_snake: int | None = Query(None, alias="num_instances", ge=1),
 ):
     """WADO-RS: Retrieve metadata for all instances in a study as DICOM JSON."""
-    datasets = dicomweb_service.get_study_datasets(study_instance_uid)
+    req_slices = limit or slices or count or num_instances or num_instances_snake
+    datasets = dicomweb_service.get_study_datasets(study_instance_uid, num_instances=req_slices)
     if not datasets:
         raise HTTPException(status_code=404, detail="Study not found")
 
@@ -197,9 +203,15 @@ def wado_get_series_metadata(
     transfer_syntax: str | None = Query(None, alias="transferSyntax"),
     transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
     transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
+    limit: int | None = Query(None, alias="limit", ge=1),
+    slices: int | None = Query(None, alias="slices", ge=1),
+    count: int | None = Query(None, alias="count", ge=1),
+    num_instances: int | None = Query(None, alias="numInstances", ge=1),
+    num_instances_snake: int | None = Query(None, alias="num_instances", ge=1),
 ):
     """WADO-RS: Retrieve metadata for all instances in a series as DICOM JSON."""
-    datasets = dicomweb_service.get_series_datasets(study_instance_uid, series_instance_uid)
+    req_slices = limit or slices or count or num_instances or num_instances_snake
+    datasets = dicomweb_service.get_series_datasets(study_instance_uid, series_instance_uid, num_instances=req_slices)
     if not datasets:
         raise HTTPException(status_code=404, detail="Series not found")
 
@@ -265,9 +277,15 @@ def wado_retrieve_study(
     transfer_syntax: str | None = Query(None, alias="transferSyntax"),
     transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
     transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
+    limit: int | None = Query(None, alias="limit", ge=1),
+    slices: int | None = Query(None, alias="slices", ge=1),
+    count: int | None = Query(None, alias="count", ge=1),
+    num_instances: int | None = Query(None, alias="numInstances", ge=1),
+    num_instances_snake: int | None = Query(None, alias="num_instances", ge=1),
 ):
     """WADO-RS: Retrieve all instances in a study as multipart/related; type=application/dicom."""
-    datasets = dicomweb_service.get_study_datasets(study_instance_uid)
+    req_slices = limit or slices or count or num_instances or num_instances_snake
+    datasets = dicomweb_service.get_study_datasets(study_instance_uid, num_instances=req_slices)
     if not datasets:
         raise HTTPException(status_code=404, detail="Study not found")
 
@@ -292,9 +310,15 @@ def wado_retrieve_series(
     transfer_syntax: str | None = Query(None, alias="transferSyntax"),
     transfer_syntax_hyphen: str | None = Query(None, alias="transfer-syntax"),
     transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
+    limit: int | None = Query(None, alias="limit", ge=1),
+    slices: int | None = Query(None, alias="slices", ge=1),
+    count: int | None = Query(None, alias="count", ge=1),
+    num_instances: int | None = Query(None, alias="numInstances", ge=1),
+    num_instances_snake: int | None = Query(None, alias="num_instances", ge=1),
 ):
     """WADO-RS: Retrieve all instances in a series as multipart/related; type=application/dicom."""
-    datasets = dicomweb_service.get_series_datasets(study_instance_uid, series_instance_uid)
+    req_slices = limit or slices or count or num_instances or num_instances_snake
+    datasets = dicomweb_service.get_series_datasets(study_instance_uid, series_instance_uid, num_instances=req_slices)
     if not datasets:
         raise HTTPException(status_code=404, detail="Series not found")
 

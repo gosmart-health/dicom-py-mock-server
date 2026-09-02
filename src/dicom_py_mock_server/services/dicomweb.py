@@ -411,15 +411,20 @@ class DicomWebService:
 
         return result
 
-    def get_study_datasets(self, study_uid: str) -> list[Dataset]:
-        """Get all full instance datasets for a StudyInstanceUID."""
+    def get_study_datasets(self, study_uid: str, num_instances: int | None = None) -> list[Dataset]:
+        """Get all full instance datasets for a StudyInstanceUID.
+
+        If num_instances is specified, limits or configures the number of slices to generate/retrieve (up to 1024).
+        Otherwise, follows the actual number of slices generated for the study without arbitrary clamping.
+        """
         datasets: list[Dataset] = []
 
         # 1. Search in MWL active entries
         if self.mwl_service:
             matched_entries = self.mwl_service.find_entries(study_uid=study_uid)
             for entry in matched_entries:
-                inst_list = DicomGeneratorService.create_instances_from_mwl(entry)
+                entry_instances = num_instances or entry.get("num_instances")
+                inst_list = DicomGeneratorService.create_instances_from_mwl(entry, num_instances=entry_instances)
                 datasets.extend(inst_list)
 
         # 2. Check stored files on disk
@@ -428,12 +433,18 @@ class DicomWebService:
                 ds for ds in self._read_stored_datasets() if str(getattr(ds, "StudyInstanceUID", "")) == str(study_uid)
             ]
 
+        if num_instances is not None and len(datasets) > num_instances:
+            datasets = datasets[:num_instances]
+
         return datasets
 
-    def get_series_datasets(self, study_uid: str, series_uid: str) -> list[Dataset]:
+    def get_series_datasets(self, study_uid: str, series_uid: str, num_instances: int | None = None) -> list[Dataset]:
         """Get all full instance datasets for a StudyInstanceUID and SeriesInstanceUID."""
-        all_study_ds = self.get_study_datasets(study_uid)
-        return [ds for ds in all_study_ds if str(getattr(ds, "SeriesInstanceUID", "")) == str(series_uid)]
+        all_study_ds = self.get_study_datasets(study_uid, num_instances=num_instances)
+        matched = [ds for ds in all_study_ds if str(getattr(ds, "SeriesInstanceUID", "")) == str(series_uid)]
+        if num_instances is not None and len(matched) > num_instances:
+            matched = matched[:num_instances]
+        return matched
 
     def get_instance_dataset(self, study_uid: str, series_uid: str | None, instance_uid: str) -> Dataset | None:
         """Get single instance dataset matching SOPInstanceUID."""

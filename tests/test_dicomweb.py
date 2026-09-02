@@ -472,3 +472,32 @@ def test_wado_metadata_transfer_syntax_and_pixel_preservation(client):
     )
     assert resp_frame.status_code == 200
     assert b"\xff\xd8\xff" in resp_frame.content
+
+
+def test_wado_retrieve_slices_above_100_and_follows_actual_count(client):
+    """Verify WADO-RS retrieves exact generated slice counts >100 (up to 1024) without fixed 100 limit."""
+    from dicom_py_mock_server.models.dicom import MockDicomRequest
+
+    # 1. Pydantic validation allows up to 1024 slices and rejects 1025
+    req_1024 = MockDicomRequest(num_instances=1024)
+    assert req_1024.num_instances == 1024
+
+    with pytest.raises(Exception):
+        MockDicomRequest(num_instances=1025)
+
+    # 2. Add an MWL entry with 120 slices (exceeding old 100 limit)
+    entry_120 = mwl_service.add_entry(custom={"num_instances": 120, "study_uid": "2.25.999999999120"})
+    study_uid_120 = entry_120["study_uid"]
+
+    # Retrieve study via WADO-RS without query limit -> should return all 120 instances
+    resp = client.get(f"/dicomweb/studies/{study_uid_120}")
+    assert resp.status_code == 200
+    dsets = _extract_multipart_dicom_parts(resp.headers["content-type"], resp.content)
+    assert len(dsets) == 120
+    assert dsets[0].NumberOfStudyRelatedInstances == 120
+
+    # Retrieve study via WADO-RS with query parameter ?slices=15 -> should return 15 instances
+    resp_limit = client.get(f"/dicomweb/studies/{study_uid_120}?slices=15")
+    assert resp_limit.status_code == 200
+    dsets_limit = _extract_multipart_dicom_parts(resp_limit.headers["content-type"], resp_limit.content)
+    assert len(dsets_limit) == 15

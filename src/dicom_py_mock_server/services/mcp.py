@@ -116,7 +116,7 @@ class McpService:
                                 "performing_physician_name": {"type": "string"},
                             },
                         },
-                        "num_instances": {"type": "integer", "default": 1, "minimum": 1, "maximum": 100},
+                        "num_instances": {"type": "integer", "default": 1, "minimum": 1, "maximum": 1024},
                         "rows": {"type": "integer", "default": 512, "minimum": 16, "maximum": 2048},
                         "columns": {"type": "integer", "default": 512, "minimum": 16, "maximum": 2048},
                         "transfer_syntax": {"type": "string"},
