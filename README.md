@@ -112,6 +112,7 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_MIN_SLICES` | `MIN_SLICES` | `8` | Minimum slice count for synthetic series generation during C-MOVE. |
 | `GOSMART_MS_MAX_SLICES` | `MAX_SLICES` | `24` | Maximum slice count for synthetic series volume generation. |
 | `GOSMART_MS_TRANSFER_SYNTAX` | `TRANSFER_SYNTAX` | `JPEG2000_LOSSLESS` | Default DICOM Transfer Syntax (`RAW`, `JPEG`, `JPEG2000`, `JPEG2000_LOSSLESS`, `RLE`). |
+| `GOSMART_MS_STRESS` | `STRESS` | `false` | Enable high-throughput stress mode (single compressed frame computation, demographics burned in, slice number overlay omitted, negotiated transfer syntax reuse). |
 | `GOSMART_MS_MOVE_DESTINATIONS` | `MOVE_DESTINATIONS` | `{}` | JSON string mapping C-MOVE destination AE Titles to target host/port objects. |
 | `GOSMART_MS_PATIENT_SUFFIX` | `PATIENT_SUFFIX` | `_GSH` | Suffix appended to synthetic patient last name to avoid PACS collisions (empty strings permitted). |
 | `GOSMART_MS_PN_SUFFIX` | `PN_SUFFIX` | `_GSH` | Suffix appended to generated physician names (Referring, Performing, Reading) to avoid PACS collisions (empty strings permitted). |
@@ -120,7 +121,7 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_NAMESPACE_UUID` | `GOSMART_MS_DICOM_NAMESPACE_UUID`, `NAMESPACE_UUID` | `6ba7b810-9dad-11d1-80b4-00c04fd430c8` | Persistent UUID namespace used for deterministic ITU-T X.667 DICOM UID generation. |
 | `GOSMART_MS_UID_VERSION` | `GOSMART_MS_DICOM_UID_VERSION`, `UID_VERSION` | `5` | UUID version for deterministic DICOM UID generation (`5` for SHA-1, `3` for MD5). |
 | `GOSMART_MS_APP_NAME` | `APP_NAME` | `DICOM Mock Server` | Application display name. |
-| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.1.1` | Application version string. |
+| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.2.2` | Application version string. |
 
 ---
 
@@ -214,6 +215,18 @@ curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
 curl -X GET "http://127.0.0.1:8000/dicomweb/wado?requestType=WADO&studyUID=2.25.123&seriesUID=2.25.456&objectUID=2.25.789&contentType=application/dicom" \
      -o instance.dcm
 ```
+
+---
+
+## High-Throughput Stress Mode (`GOSMART_MS_STRESS`)
+
+For load testing, high-frequency retrieval, or stress testing PACS/viewers, enable **Stress Mode** with `GOSMART_MS_STRESS=true`:
+* **Single Frame Compression**: The compressed pixel frame is computed once per study/series rather than re-encoding per slice/instance.
+* **Selective Demographics Overlay**: Burns patient and study demographics (`Patient Name`, `Patient ID`, `Study Date Study Time`) into the background image matrix, but omits the per-slice overlay line (`Image: <number>`).
+* **Transfer Syntax Selection**:
+  - **DIMSE Associations**: The single frame is compressed once directly in the association's negotiated transfer syntax.
+  - **WADO-RS**: The transfer syntax of the first image/series/study request establishes the transfer syntax used to deliver the study or series.
+* **Standards Compliance**: While pixel data is efficiently reused, each instance retains a unique `SOPInstanceUID` and sequential `InstanceNumber`.
 
 ---
 

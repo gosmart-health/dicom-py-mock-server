@@ -16,7 +16,7 @@ class AppConfig(BaseSettings):
     )
 
     app_name: str = "DICOM Mock Server"
-    app_version: str = "0.2.1"
+    app_version: str = "0.2.2"
     host: str = "127.0.0.1"
     port: int = 8000
     scp_ae_title: str = Field(
@@ -98,6 +98,13 @@ class AppConfig(BaseSettings):
         default="JPEG2000_LOSSLESS",
         validation_alias=AliasChoices("GOSMART_MS_TRANSFER_SYNTAX", "TRANSFER_SYNTAX"),
         description="Default DICOM Transfer Syntax for generated images (RAW, JPEG, JPEG2000, JPEG2000_LOSSLESS, RLE)",
+    )
+    stress: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("GOSMART_MS_STRESS", "STRESS"),
+        description=(
+            "Enable high-performance stress mode (single frame compression, demographics overlay only, no slice number)"
+        ),
     )
     move_destinations: dict[str, dict[str, Any]] = Field(
         default_factory=dict,

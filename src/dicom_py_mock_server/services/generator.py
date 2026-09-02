@@ -348,6 +348,7 @@ class DicomGeneratorService:
         is_8bit: bool = False,
         background_val: int | None = None,
         text_val: int | None = None,
+        include_slice_overlay: bool | None = None,
     ) -> np.ndarray:
         """Burn metadata strings into image matrix from top-left on top of precomputed background."""
         base_arr = cls.create_precomputed_background(rows, cols, is_8bit=is_8bit).copy()
@@ -364,8 +365,12 @@ class DicomGeneratorService:
             f"Patient Name: {patient_name}",
             f"Patient ID: {patient_id}",
             f"Study Date: {study_date} {study_time}",
-            f"Image: {image_number}",
         ]
+        should_overlay = (
+            include_slice_overlay if include_slice_overlay is not None else not getattr(config, "stress", False)
+        )
+        if should_overlay:
+            labels.append(f"Image: {image_number}")
 
         if text_val is None:
             text_val = 255 if is_8bit else 4095
@@ -480,7 +485,13 @@ class DicomGeneratorService:
         return ds
 
     @classmethod
-    def create_dicom_file(cls, request: MockDicomRequest, instance_number: int = 1) -> FileDataset:
+    def create_dicom_file(
+        cls,
+        request: MockDicomRequest,
+        instance_number: int = 1,
+        stress: bool | None = None,
+        include_slice_overlay: bool | None = None,
+    ) -> FileDataset:
         """Create a single pydicom FileDataset populated with metadata and pixel data."""
         patient_id = request.patient.patient_id
         patient_name = request.patient.patient_name
@@ -583,6 +594,17 @@ class DicomGeneratorService:
             ds.SmallestImagePixelValue = 0
             ds.LargestImagePixelValue = 4095
 
+        is_stress = (
+            stress
+            if stress is not None
+            else (request.stress if request.stress is not None else getattr(config, "stress", False))
+        )
+        slice_overlay = (
+            include_slice_overlay
+            if include_slice_overlay is not None
+            else (request.include_slice_overlay if request.include_slice_overlay is not None else not is_stress)
+        )
+
         if request.burn_in_text:
             pixel_matrix = cls.burn_metadata_text(
                 rows=rows,
@@ -593,6 +615,7 @@ class DicomGeneratorService:
                 study_time=study_time,
                 image_number=instance_number,
                 is_8bit=is_jpeg_8bit,
+                include_slice_overlay=slice_overlay,
             )
         else:
             pixel_matrix = cls.create_precomputed_background(rows, cols, is_8bit=is_jpeg_8bit).copy()
@@ -615,8 +638,15 @@ class DicomGeneratorService:
             columns=raw_req.columns,
             transfer_syntax=raw_req.transfer_syntax,
             burn_in_text=True,
+            stress=raw_req.stress,
+            include_slice_overlay=raw_req.include_slice_overlay,
         )
-        return cls.create_dicom_file(mock_req, instance_number=raw_req.image_number)
+        return cls.create_dicom_file(
+            mock_req,
+            instance_number=raw_req.image_number,
+            stress=raw_req.stress,
+            include_slice_overlay=raw_req.include_slice_overlay,
+        )
 
     @classmethod
     def create_dicom_from_template(
@@ -638,6 +668,8 @@ class DicomGeneratorService:
         study_description: str | None = None,
         accession_number: str | None = None,
         modality: str | None = None,
+        stress: bool | None = None,
+        include_slice_overlay: bool | None = None,
     ) -> FileDataset:
         """Create a synthetic DICOM dataset based on a base template DICOM file/dataset.
 
@@ -667,7 +699,9 @@ class DicomGeneratorService:
         ds.StudyTime = s_time
         ds.Rows = rows
         ds.Columns = cols
-        ds.InstitutionName = institution_name or getattr(config, "institution_name", "GO SMART CLINIC")
+
+        if institution_name:
+            ds.InstitutionName = institution_name
         if referring_physician_name:
             ds.ReferringPhysicianName = referring_physician_name
         if performing_physician_name:
@@ -691,6 +725,7 @@ class DicomGeneratorService:
                 study_time=s_time,
                 image_number=image_number,
                 is_8bit=is_8bit,
+                include_slice_overlay=include_slice_overlay,
             )
         else:
             pixel_matrix = cls.create_precomputed_background(rows, cols, is_8bit=is_8bit).copy()
@@ -727,10 +762,28 @@ class DicomGeneratorService:
 
     @classmethod
     def create_instances_from_mwl(
-        cls, mwl_record: dict[str, Any], num_instances: int | None = None
+        cls,
+        mwl_record: dict[str, Any],
+        num_instances: int | None = None,
+        transfer_syntax: str | None = None,
+        stress: bool | None = None,
     ) -> list[FileDataset]:
         """Synthesize DICOM image FileDatasets on the fly matching an MWL record."""
         import random
+
+        target_syntax = (
+            transfer_syntax
+            or mwl_record.get("transfer_syntax")
+            or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
+        )
+        is_stress = (
+            stress
+            if stress is not None
+            else (
+                mwl_record.get("stress") if mwl_record.get("stress") is not None else getattr(config, "stress", False)
+            )
+        )
+        slice_overlay = not is_stress
 
         if num_instances is None:
             num_instances = mwl_record.get("num_instances")
@@ -815,8 +868,10 @@ class DicomGeneratorService:
                 "performing_physician_name": perf_phys,
             },
             num_instances=num_instances,
-            transfer_syntax=mwl_record.get("transfer_syntax"),
+            transfer_syntax=target_syntax,
             burn_in_text=True,
+            stress=is_stress,
+            include_slice_overlay=slice_overlay,
         )
 
         template_ds = mwl_record.get("template_dataset")
@@ -841,10 +896,75 @@ class DicomGeneratorService:
 
         if template_ds:
             datasets = []
+            if is_stress and num_instances > 1:
+                ds1 = cls.create_dicom_from_template(
+                    template=template_ds,
+                    transfer_syntax=target_syntax,
+                    patient_name=patient_name,
+                    patient_id=patient_id,
+                    study_date=study_date,
+                    study_time=study_time,
+                    image_number=1,
+                    burn_in_text=True,
+                    rows=rows,
+                    cols=cols,
+                    institution_name=inst_name,
+                    referring_physician_name=ref_phys,
+                    performing_physician_name=perf_phys,
+                    reading_physician_name=read_phys,
+                    study_description=study_desc,
+                    accession_number=accession,
+                    modality=modality,
+                    stress=True,
+                    include_slice_overlay=False,
+                )
+                ds1.PatientID = patient_id
+                ds1.PatientName = patient_name
+                if patient_dob:
+                    ds1.PatientBirthDate = patient_dob
+                if patient_sex:
+                    ds1.PatientSex = patient_sex
+                ds1.StudyInstanceUID = study_uid
+                ds1.StudyDate = study_date
+                ds1.StudyTime = study_time
+                ds1.AccessionNumber = accession
+                ds1.StudyDescription = study_desc
+                if inst_name:
+                    ds1.InstitutionName = inst_name
+                if ref_phys:
+                    ds1.ReferringPhysicianName = ref_phys
+                if read_phys:
+                    ds1.NameOfPhysiciansReadingStudy = read_phys
+                ds1.SeriesInstanceUID = series_uid
+                ds1.Modality = modality
+                ds1.SeriesNumber = series_number
+                ds1.SeriesDescription = series_desc
+                if perf_phys:
+                    ds1.PerformingPhysicianName = perf_phys
+                sop_inst_uid = generate_sop_instance_uid(series_uid, 1)
+                ds1.SOPInstanceUID = sop_inst_uid
+                if getattr(ds1, "file_meta", None):
+                    ds1.file_meta.MediaStorageSOPInstanceUID = sop_inst_uid
+                ds1.InstanceNumber = 1
+                ds1.NumberOfSeriesRelatedInstances = num_instances
+                ds1.NumberOfStudyRelatedSeries = 1
+                ds1.NumberOfStudyRelatedInstances = num_instances
+                datasets.append(ds1)
+
+                for i in range(2, num_instances + 1):
+                    ds = copy.deepcopy(ds1)
+                    sop_inst_uid = generate_sop_instance_uid(series_uid, i)
+                    ds.SOPInstanceUID = sop_inst_uid
+                    if getattr(ds, "file_meta", None):
+                        ds.file_meta.MediaStorageSOPInstanceUID = sop_inst_uid
+                    ds.InstanceNumber = i
+                    datasets.append(ds)
+                return datasets
+
             for i in range(1, num_instances + 1):
                 ds = cls.create_dicom_from_template(
                     template=template_ds,
-                    transfer_syntax=mwl_record.get("transfer_syntax"),
+                    transfer_syntax=target_syntax,
                     patient_name=patient_name,
                     patient_id=patient_id,
                     study_date=study_date,
@@ -860,6 +980,8 @@ class DicomGeneratorService:
                     study_description=study_desc,
                     accession_number=accession,
                     modality=modality,
+                    stress=is_stress,
+                    include_slice_overlay=slice_overlay,
                 )
                 ds.PatientID = patient_id
                 ds.PatientName = patient_name
@@ -900,15 +1022,50 @@ class DicomGeneratorService:
             return datasets
 
         datasets = []
+        if is_stress and num_instances > 1:
+            ds1 = cls.create_dicom_file(
+                mock_req,
+                instance_number=1,
+                stress=True,
+                include_slice_overlay=False,
+            )
+            datasets.append(ds1)
+            for i in range(2, num_instances + 1):
+                ds = copy.deepcopy(ds1)
+                sop_inst_uid = generate_sop_instance_uid(series_uid, i)
+                ds.SOPInstanceUID = sop_inst_uid
+                if getattr(ds, "file_meta", None):
+                    ds.file_meta.MediaStorageSOPInstanceUID = sop_inst_uid
+                ds.InstanceNumber = i
+                datasets.append(ds)
+            return datasets
+
         for i in range(1, num_instances + 1):
-            ds = cls.create_dicom_file(mock_req, instance_number=i)
+            ds = cls.create_dicom_file(
+                mock_req,
+                instance_number=i,
+                stress=is_stress,
+                include_slice_overlay=slice_overlay,
+            )
             datasets.append(ds)
         return datasets
 
-    def generate_and_save(self, request: MockDicomRequest, target_dir: str) -> MockDicomResponse:
+    def generate_and_save(
+        self,
+        request: MockDicomRequest,
+        target_dir: str,
+        stress: bool | None = None,
+    ) -> MockDicomResponse:
         """Generate a batch of DICOM files and save them to target_dir."""
         out_path = Path(target_dir)
         out_path.mkdir(parents=True, exist_ok=True)
+
+        is_stress = (
+            stress
+            if stress is not None
+            else (request.stress if request.stress is not None else getattr(config, "stress", False))
+        )
+        slice_overlay = not is_stress if request.include_slice_overlay is None else request.include_slice_overlay
 
         patient_id = request.patient.patient_id
         patient_name = request.patient.patient_name
@@ -922,11 +1079,38 @@ class DicomGeneratorService:
 
         saved_files: list[str] = []
 
-        for i in range(1, request.num_instances + 1):
-            ds = self.create_dicom_file(request, instance_number=i)
-            filename = out_path / f"instance_{i:04d}_{ds.SOPInstanceUID}.dcm"
-            ds.save_as(filename, enforce_file_format=True)
-            saved_files.append(str(filename.resolve()))
+        if is_stress and request.num_instances > 1:
+            ds1 = self.create_dicom_file(
+                request,
+                instance_number=1,
+                stress=True,
+                include_slice_overlay=slice_overlay,
+            )
+            fn1 = out_path / f"instance_{1:04d}_{ds1.SOPInstanceUID}.dcm"
+            ds1.save_as(fn1, enforce_file_format=True)
+            saved_files.append(str(fn1.resolve()))
+
+            for i in range(2, request.num_instances + 1):
+                ds = copy.deepcopy(ds1)
+                sop_uid = generate_sop_instance_uid(series_uid, i)
+                ds.SOPInstanceUID = sop_uid
+                if getattr(ds, "file_meta", None):
+                    ds.file_meta.MediaStorageSOPInstanceUID = sop_uid
+                ds.InstanceNumber = i
+                fn = out_path / f"instance_{i:04d}_{sop_uid}.dcm"
+                ds.save_as(fn, enforce_file_format=True)
+                saved_files.append(str(fn.resolve()))
+        else:
+            for i in range(1, request.num_instances + 1):
+                ds = self.create_dicom_file(
+                    request,
+                    instance_number=i,
+                    stress=is_stress,
+                    include_slice_overlay=slice_overlay,
+                )
+                filename = out_path / f"instance_{i:04d}_{ds.SOPInstanceUID}.dcm"
+                ds.save_as(filename, enforce_file_format=True)
+                saved_files.append(str(filename.resolve()))
 
         logger.info(
             "dicom_generation_completed",

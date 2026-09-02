@@ -76,6 +76,10 @@ class MockDicomRequest(BaseModel):
     columns: int = Field(default=512, ge=16, le=2048, description="Image Columns")
     transfer_syntax: str | None = Field(default=None, description="Transfer syntax (RAW, JPEG, JPEG2000, RLE)")
     burn_in_text: bool = Field(default=True, description="Burn patient/study metadata strings into image pixels")
+    stress: bool | None = Field(default=None, description="Enable stress mode (single frame compression)")
+    include_slice_overlay: bool | None = Field(
+        default=None, description="Explicitly control burning 'Image: <number>' into pixels"
+    )
 
 
 class RawImageGeneratorRequest(BaseModel):
@@ -89,6 +93,10 @@ class RawImageGeneratorRequest(BaseModel):
     rows: int = Field(default=512, ge=16, le=2048, description="Image Rows")
     columns: int = Field(default=512, ge=16, le=2048, description="Image Columns")
     transfer_syntax: str | None = Field(default=None, description="Transfer syntax (RAW, JPEG, JPEG2000, RLE)")
+    stress: bool | None = Field(default=None, description="Enable stress mode (single frame compression)")
+    include_slice_overlay: bool | None = Field(
+        default=None, description="Explicitly control burning 'Image: <number>' into pixels"
+    )
 
 
 class MockDicomResponse(BaseModel):

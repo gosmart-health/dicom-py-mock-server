@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.2.2] - 2026-09-02
+
+### Added
+- **High-Throughput Stress Mode (`GOSMART_MS_STRESS`)**:
+  - Implemented server-wide stress mode controlled via `GOSMART_MS_STRESS=true/false` (or alias `STRESS`, defaults to `false`).
+  - **Single Frame Compression Precomputation**: In stress mode, image matrix rendering and compression (OpenJPEG JPEG 2000, Pillow JPEG Baseline, pylibjpeg RLE) are executed only once per study or series. Subsequent instances clone the precomputed compressed frame payload, avoiding repetitive CPU-heavy encoding and yielding >3x to >10x generation speedup.
+  - **Selective Demographics Overlay**: Burns patient and study demographics (`Patient Name`, `Patient ID`, `Study Date Study Time`) into the base matrix image, while omitting the per-slice overlay line (`Image: <number>`) to preserve identical pixel data across instances.
+  - **DIMSE Association Transfer Syntax Negotiation**: Storage presentation context transfer syntax negotiated at association start is passed directly to the generator, computing the single compressed frame natively in the negotiated syntax for C-MOVE and C-STORE push workflows.
+  - **WADO-RS First-Request Transfer Syntax Caching**: In WADO-RS, the transfer syntax from the first image request sets the cached transfer syntax and compressed frame for the study, which is reused for subsequent study, series, or instance requests.
+  - **Standards Compliance & Deterministic UIDs**: Each synthesized instance retains a unique `SOPInstanceUID`, `MediaStorageSOPInstanceUID`, and sequential `InstanceNumber`, maintaining strict DICOM Part 10 conformance.
+  - **Request-Level Overrides**: Added `stress: bool | None` and `include_slice_overlay: bool | None` options to `MockDicomRequest` and `RawImageGeneratorRequest` for granular per-request control.
+  - **Cache Management**: Added `clear_stress_cache()` to `DicomWebService` for clearing cached study transfer syntaxes and datasets between test cycles.
+  - **Automated Stress Test Suite**: Added `tests/test_stress_mode.py` with 8 dedicated test cases validating environment variable parsing, demographics text vs omitted slice overlays, single-frame byte identity, WADO stickiness, and performance speedup.
+
 ## [0.2.1] - 2026-09-02
 
 ### Added

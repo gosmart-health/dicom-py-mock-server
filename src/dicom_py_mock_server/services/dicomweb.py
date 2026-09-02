@@ -31,6 +31,13 @@ class DicomWebService:
         self.mwl_service = mwl_service
         self.generator_service = generator_service or DicomGeneratorService()
         self.storage_dir = Path(storage_dir or config.storage_dir)
+        self._study_transfer_syntaxes: dict[str, str] = {}
+        self._stress_study_cache: dict[str, list[Dataset]] = {}
+
+    def clear_stress_cache(self) -> None:
+        """Clear cached transfer syntaxes and study instances for stress mode."""
+        self._study_transfer_syntaxes.clear()
+        self._stress_study_cache.clear()
 
     def _get_stored_files(self) -> list[Path]:
         """Get all stored .dcm files on disk."""
@@ -411,12 +418,36 @@ class DicomWebService:
 
         return result
 
-    def get_study_datasets(self, study_uid: str, num_instances: int | None = None) -> list[Dataset]:
+    def get_study_datasets(
+        self,
+        study_uid: str,
+        num_instances: int | None = None,
+        requested_transfer_syntax: str | None = None,
+        stress: bool | None = None,
+    ) -> list[Dataset]:
         """Get all full instance datasets for a StudyInstanceUID.
 
         If num_instances is specified, limits or configures the number of slices to generate/retrieve (up to 1024).
         Otherwise, follows the actual number of slices generated for the study without arbitrary clamping.
+        In stress mode, uses the transfer syntax from the first image request and reuses the single compressed frame.
         """
+        is_stress = stress if stress is not None else getattr(config, "stress", False)
+
+        if is_stress:
+            if study_uid in self._study_transfer_syntaxes:
+                effective_ts = self._study_transfer_syntaxes[study_uid]
+            else:
+                effective_ts = requested_transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
+                self._study_transfer_syntaxes[study_uid] = effective_ts
+
+            if study_uid in self._stress_study_cache:
+                cached = self._stress_study_cache[study_uid]
+                if num_instances is not None and len(cached) > num_instances:
+                    return cached[:num_instances]
+                return cached
+        else:
+            effective_ts = requested_transfer_syntax
+
         datasets: list[Dataset] = []
 
         # 1. Search in MWL active entries
@@ -424,7 +455,12 @@ class DicomWebService:
             matched_entries = self.mwl_service.find_entries(study_uid=study_uid)
             for entry in matched_entries:
                 entry_instances = num_instances or entry.get("num_instances")
-                inst_list = DicomGeneratorService.create_instances_from_mwl(entry, num_instances=entry_instances)
+                inst_list = DicomGeneratorService.create_instances_from_mwl(
+                    entry,
+                    num_instances=entry_instances,
+                    transfer_syntax=effective_ts,
+                    stress=is_stress,
+                )
                 datasets.extend(inst_list)
 
         # 2. Check stored files on disk
@@ -433,22 +469,48 @@ class DicomWebService:
                 ds for ds in self._read_stored_datasets() if str(getattr(ds, "StudyInstanceUID", "")) == str(study_uid)
             ]
 
+        if is_stress and datasets:
+            self._stress_study_cache[study_uid] = datasets
+
         if num_instances is not None and len(datasets) > num_instances:
             datasets = datasets[:num_instances]
 
         return datasets
 
-    def get_series_datasets(self, study_uid: str, series_uid: str, num_instances: int | None = None) -> list[Dataset]:
+    def get_series_datasets(
+        self,
+        study_uid: str,
+        series_uid: str,
+        num_instances: int | None = None,
+        requested_transfer_syntax: str | None = None,
+        stress: bool | None = None,
+    ) -> list[Dataset]:
         """Get all full instance datasets for a StudyInstanceUID and SeriesInstanceUID."""
-        all_study_ds = self.get_study_datasets(study_uid, num_instances=num_instances)
+        all_study_ds = self.get_study_datasets(
+            study_uid,
+            num_instances=num_instances,
+            requested_transfer_syntax=requested_transfer_syntax,
+            stress=stress,
+        )
         matched = [ds for ds in all_study_ds if str(getattr(ds, "SeriesInstanceUID", "")) == str(series_uid)]
         if num_instances is not None and len(matched) > num_instances:
             matched = matched[:num_instances]
         return matched
 
-    def get_instance_dataset(self, study_uid: str, series_uid: str | None, instance_uid: str) -> Dataset | None:
+    def get_instance_dataset(
+        self,
+        study_uid: str,
+        series_uid: str | None,
+        instance_uid: str,
+        requested_transfer_syntax: str | None = None,
+        stress: bool | None = None,
+    ) -> Dataset | None:
         """Get single instance dataset matching SOPInstanceUID."""
-        all_study_ds = self.get_study_datasets(study_uid)
+        all_study_ds = self.get_study_datasets(
+            study_uid,
+            requested_transfer_syntax=requested_transfer_syntax,
+            stress=stress,
+        )
         for ds in all_study_ds:
             if str(getattr(ds, "SOPInstanceUID", "")) == str(instance_uid):
                 if series_uid and str(getattr(ds, "SeriesInstanceUID", "")) != str(series_uid):
@@ -489,9 +551,16 @@ class DicomWebService:
 
         parts: list[bytes] = []
 
+        is_stress = getattr(config, "stress", False)
+        study_uid = str(getattr(datasets[0], "StudyInstanceUID", "")) if datasets else ""
+        if is_stress and study_uid in self._study_transfer_syntaxes:
+            effective_target_ts = self._study_transfer_syntaxes[study_uid]
+        else:
+            effective_target_ts = requested_transfer_syntax
+
         for ds in datasets:
-            target_ts = requested_transfer_syntax
-            if target_ts:
+            target_ts = effective_target_ts
+            if target_ts and getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None) != target_ts:
                 ds = DicomGeneratorService.apply_transfer_syntax(ds, target_ts)
 
             # Get transfer syntax from dataset file_meta
