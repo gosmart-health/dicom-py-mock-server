@@ -40,13 +40,15 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
   - Verify WADO-RS retrieve endpoints return multipart DICOM streams correctly transcoded to requested transfer syntaxes (`Explicit VR Little Endian`, `JPEG Baseline`, `JPEG 2000 Lossless`, `RLE Lossless`).
   - Verify WADO-RS rendered image views return valid JPEG and PNG binary streams with valid magic bytes.
   - Verify WADO-URI legacy single-object retrieval for both DICOM datasets and rendered previews.
+  - Verify WADO-RS Stress Mode caches the first image request's transfer syntax and reuses the single precomputed compressed frame for subsequent study/series requests.
 
 ### 2.3 DICOM Protocol Interop & System Testing (Level 3)
-* **Scope:** `pynetdicom` Application Entity background server initialization, presentation context negotiation, Query/Retrieve (C-FIND, C-MOVE, C-GET), Modality Worklist (MWL C-FIND), C-STORE, C-STORE CSV audit logging per association, headless CI/CD operation, and stress testing.
+* **Scope:** `pynetdicom` Application Entity background server initialization, presentation context negotiation, Query/Retrieve (C-FIND, C-MOVE, C-GET), Modality Worklist (MWL C-FIND), C-STORE, C-STORE CSV audit logging per association, headless CI/CD operation, and stress testing (`GOSMART_MS_STRESS`).
 * **Verification Methods:**
   - Validate C-ECHO verification, C-FIND query, C-MOVE/C-GET retrieve, and MWL C-FIND service context handlers.
   - Verify C-STORE association audit CSV generation for SCU move/push, C-MOVE retrieve, and incoming Storage SCP operations across statuses (`Accepted`, `Rejected`, `No Connection`, `Dropped`).
   - Execute headless CI/CD automated test suite without manual UI interactions.
+  - Verify High-Throughput Stress Mode (`GOSMART_MS_STRESS=true`): single frame compressed once per study/series, patient demographics burned in, slice number overlay omitted, negotiated transfer syntax applied, and all instances retain unique SOPInstanceUIDs and sequential InstanceNumbers.
   - Run high-concurrency stress tests verifying ephemeral on-the-fly DICOM generation does not saturate local disk storage.
 
 ---

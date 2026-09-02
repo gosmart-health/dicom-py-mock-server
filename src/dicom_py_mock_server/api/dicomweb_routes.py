@@ -285,15 +285,17 @@ def wado_retrieve_study(
 ):
     """WADO-RS: Retrieve all instances in a study as multipart/related; type=application/dicom."""
     req_slices = limit or slices or count or num_instances or num_instances_snake
-    datasets = dicomweb_service.get_study_datasets(study_instance_uid, num_instances=req_slices)
-    if not datasets:
-        raise HTTPException(status_code=404, detail="Study not found")
-
     req_ts = dicomweb_service.parse_transfer_syntax_header(
         accept_header=accept,
         query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
         direct_header=transfer_syntax_header or x_transfer_syntax_header,
     )
+    datasets = dicomweb_service.get_study_datasets(
+        study_instance_uid, num_instances=req_slices, requested_transfer_syntax=req_ts
+    )
+    if not datasets:
+        raise HTTPException(status_code=404, detail="Study not found")
+
     payload, content_type = dicomweb_service.encode_multipart_related(datasets, requested_transfer_syntax=req_ts)
     return Response(content=payload, media_type=content_type)
 
@@ -318,15 +320,17 @@ def wado_retrieve_series(
 ):
     """WADO-RS: Retrieve all instances in a series as multipart/related; type=application/dicom."""
     req_slices = limit or slices or count or num_instances or num_instances_snake
-    datasets = dicomweb_service.get_series_datasets(study_instance_uid, series_instance_uid, num_instances=req_slices)
-    if not datasets:
-        raise HTTPException(status_code=404, detail="Series not found")
-
     req_ts = dicomweb_service.parse_transfer_syntax_header(
         accept_header=accept,
         query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
         direct_header=transfer_syntax_header or x_transfer_syntax_header,
     )
+    datasets = dicomweb_service.get_series_datasets(
+        study_instance_uid, series_instance_uid, num_instances=req_slices, requested_transfer_syntax=req_ts
+    )
+    if not datasets:
+        raise HTTPException(status_code=404, detail="Series not found")
+
     payload, content_type = dicomweb_service.encode_multipart_related(datasets, requested_transfer_syntax=req_ts)
     return Response(content=payload, media_type=content_type)
 
@@ -348,15 +352,16 @@ def wado_retrieve_instance(
     transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
 ):
     """WADO-RS: Retrieve a single instance as multipart/related or application/dicom."""
-    dataset = dicomweb_service.get_instance_dataset(study_instance_uid, series_instance_uid, sop_instance_uid)
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Instance not found")
-
     req_ts = dicomweb_service.parse_transfer_syntax_header(
         accept_header=accept,
         query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
         direct_header=transfer_syntax_header or x_transfer_syntax_header,
     )
+    dataset = dicomweb_service.get_instance_dataset(
+        study_instance_uid, series_instance_uid, sop_instance_uid, requested_transfer_syntax=req_ts
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     # Check if client explicitly wants a direct non-multipart application/dicom response
     if accept and "multipart" not in accept.lower() and "application/dicom" in accept.lower():

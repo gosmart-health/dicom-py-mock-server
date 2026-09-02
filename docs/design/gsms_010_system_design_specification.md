@@ -113,6 +113,14 @@ graph TD
     - Legacy single-object retrieval (`GET /dicomweb/wado?requestType=WADO&studyUID=...&seriesUID=...&objectUID=...&contentType=...&transferSyntax=...`).
   - **Dual Data Sourcing**: Integrates seamlessly across in-memory synthesized MWL datasets and stored `.dcm` files on disk.
 
+### 3.9 High-Throughput Stress Mode Subsystem
+* **`GOSMART_MS_STRESS` Execution Lifecycle**:
+  - **Single Frame Compression**: When stress mode is enabled (`GOSMART_MS_STRESS=true`), image generation renders the background matrix and patient/study demographics overlay (`Patient Name`, `Patient ID`, `Study Date Study Time`) once and applies transfer syntax compression once per study/series.
+  - **Slice Number Overlay Omission**: The per-slice overlay line (`Image: <number>`) is omitted, ensuring that pixel data across all slices is structurally identical while demographics remain burned in.
+  - **DIMSE Association Handling**: Storage presentation context transfer syntax negotiated at association start is used to compress the frame once, avoiding per-slice re-encoding during C-MOVE or C-STORE push.
+  - **WADO-RS Transfer Syntax Caching**: In WADO-RS, the transfer syntax from the first image request establishes the study's cached transfer syntax and compressed frame, which is reused for delivering the remainder of the study or series.
+  - **DICOM Compliance**: Instance-level identifiers (`SOPInstanceUID`, sequential `InstanceNumber`, and `MediaStorageSOPInstanceUID`) remain unique per DICOM Part 10 standards.
+
 ---
 
 ## 4. Concurrency & Safety Contracts
