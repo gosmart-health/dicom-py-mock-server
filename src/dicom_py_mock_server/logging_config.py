@@ -22,6 +22,21 @@ class PydicomDeprecationFilter(logging.Filter):
         return True
 
 
+def extract_method_and_callsite(
+    logger: logging.Logger | None, name: str, event_dict: structlog.types.EventDict
+) -> structlog.types.EventDict:
+    """Ensure method/function name and line number are captured across all log events."""
+    record = event_dict.get("_record")
+    if record:
+        if "func_name" not in event_dict:
+            event_dict["func_name"] = record.funcName
+        if "lineno" not in event_dict:
+            event_dict["lineno"] = record.lineno
+    if "func_name" in event_dict and "method_name" not in event_dict:
+        event_dict["method_name"] = event_dict["func_name"]
+    return event_dict
+
+
 def setup_logging(cfg: AppConfig | None = None) -> None:
     """Initialize structlog and standard library logging with 7-day auto-rotation.
 
@@ -46,6 +61,13 @@ def setup_logging(cfg: AppConfig | None = None) -> None:
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
+        structlog.processors.CallsiteParameterAdder(
+            parameters={
+                structlog.processors.CallsiteParameter.FUNC_NAME,
+                structlog.processors.CallsiteParameter.LINENO,
+            }
+        ),
+        extract_method_and_callsite,
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
@@ -65,6 +87,7 @@ def setup_logging(cfg: AppConfig | None = None) -> None:
     foreign_pre_chain: list[Processor] = [
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
+        extract_method_and_callsite,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.format_exc_info,
     ]
