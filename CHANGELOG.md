@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.2.3] - 2026-09-04
+
+### Added
+- **Flexible Delimiter Support in DICOMweb `Accept` Headers**:
+  - Enhanced `DicomWebService.parse_transfer_syntax_header` to support both standard semicolon-delimited parameters (per DICOM PS3.18 / HTTP RFC 9110, e.g., `multipart/related; type="application/dicom"; transfer-syntax=...`) and comma-delimited parameters (e.g., `multipart/related, type="application/dicom", transfer-syntax=...`).
+  - Added support for multi-valued transfer syntax candidate lists separated by either semicolons (`;`) or commas (`,`) within `transfer-syntax="..."` parameter values (e.g., `transfer-syntax="1.2.840.10008.1.2.4.90;1.2.840.10008.1.2.4.50"` or `transfer-syntax="1.2.840.10008.1.2.4.90, 1.2.840.10008.1.2.4.50"`).
+  - Added support for semicolon- and comma-separated transfer syntax lists in direct request headers (`transfer-syntax`, `X-Transfer-Syntax`), query parameters (`?transferSyntax=UID1;UID2` / `?transferSyntax=UID1,UID2`), and direct `Accept` header values (e.g., `JPEG2000; RAW` or `JPEG2000, RAW`).
+  - Added internal helper `_extract_candidates_from_list` for consistent tokenization and stripping of delimiter-separated syntax candidates.
+  - Added automated test suite `test_wado_accept_header_semicolon_and_comma_separation` in `tests/test_dicomweb.py` covering standard semicolon, comma, and mixed delimiter headers, candidate lists, wildcard fallbacks, and end-to-end WADO-RS retrieval transcoding.
+
+### Changed
+- **De-Identification Documentation**:
+  - Updated `README.md` to reference the [GoSmart.Health DICOM RS Transformer](https://github.com/gosmart-health/dicom-rs-transformer) for full standard-compliant DICOM de-identification workflows alongside the mock server.
+
 ## [0.2.2] - 2026-09-02
 
 ### Added

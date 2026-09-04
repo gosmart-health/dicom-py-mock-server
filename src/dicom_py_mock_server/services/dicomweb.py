@@ -74,44 +74,77 @@ class DicomWebService:
         return v_str.upper() == q_str.upper()
 
     @staticmethod
+    def _extract_candidates_from_list(val_str: str | None) -> list[str]:
+        """Split a comma- or semicolon-separated string into non-empty stripped tokens."""
+        if not val_str:
+            return []
+        tokens = [t.strip().strip('"').strip("'") for t in re.split(r"[,;]", val_str) if t.strip()]
+        return [t for t in tokens if t and t != "*"]
+
+    @staticmethod
     def parse_transfer_syntax_header(
         accept_header: str | None = None,
         query_param: str | None = None,
         direct_header: str | None = None,
     ) -> str | None:
-        """Extract requested transfer syntax UID or name from headers or query parameters."""
+        """Extract requested transfer syntax UID or name from headers or query parameters.
+
+        Supports both standard semicolon-separated parameters (e.g. `multipart/related;
+        type=\"application/dicom\"; transfer-syntax=...`) and comma-separated items/parameters,
+        as well as lists of acceptable syntaxes.
+        """
         resolved: str | None = None
         if direct_header and str(direct_header).strip():
-            val = str(direct_header).strip().strip('"').strip("'")
-            if val != "*":
-                resolved = val
+            candidates = DicomWebService._extract_candidates_from_list(str(direct_header))
+            for cand in candidates:
+                if cand in TRANSFER_SYNTAX_MAP or cand.upper() in TRANSFER_SYNTAX_MAP:
+                    resolved = cand
+                    break
+            if not resolved and candidates:
+                resolved = candidates[0]
 
         if not resolved and query_param and str(query_param).strip():
-            val = str(query_param).strip().strip('"').strip("'")
-            if val != "*":
-                resolved = val
+            candidates = DicomWebService._extract_candidates_from_list(str(query_param))
+            for cand in candidates:
+                if cand in TRANSFER_SYNTAX_MAP or cand.upper() in TRANSFER_SYNTAX_MAP:
+                    resolved = cand
+                    break
+            if not resolved and candidates:
+                resolved = candidates[0]
 
         if not resolved and accept_header:
-            # 1. Look for transfer-syntax="1.2.840.10008.1.2.4.90" or transfer-syntax=JPEG200
-            match = re.search(r'transfer-syntax\s*=\s*"?([^";,\s]+)"?', accept_header, re.IGNORECASE)
-            if match:
-                ts = match.group(1).strip()
-                if ts != "*":
-                    resolved = ts
+            # 1. Look for transfer-syntax parameter(s), supporting both semicolon and comma delimiters
+            ts_matches = re.finditer(r'transfer-syntax\s*=\s*(?:"([^"]+)"|([^\s;,]+))', accept_header, re.IGNORECASE)
+            for m in ts_matches:
+                raw_ts = m.group(1) if m.group(1) is not None else m.group(2)
+                for ts_token in DicomWebService._extract_candidates_from_list(raw_ts):
+                    if ts_token:
+                        resolved = ts_token
+                        break
+                if resolved:
+                    break
 
-            # 2. Check for type="image/jpeg", type="image/jp2", type="image/rle", type="application/octet-stream"
+            # 2. Check for type parameter(s) (e.g. image/jpeg, image/jp2, image/rle, application/octet-stream)
             if not resolved:
-                type_match = re.search(r'type\s*=\s*"?([^";,\s]+)"?', accept_header, re.IGNORECASE)
-                if type_match:
-                    media_type = type_match.group(1).strip().lower()
-                    if media_type in ("image/jpeg", "image/jpg"):
-                        resolved = "1.2.840.10008.1.2.4.50"
-                    elif media_type in ("image/jp2", "image/jpx", "image/j2c"):
-                        resolved = "1.2.840.10008.1.2.4.90"
-                    elif media_type in ("image/rle", "image/dicom-rle"):
-                        resolved = "1.2.840.10008.1.2.5"
-                    elif media_type == "application/octet-stream":
-                        resolved = "1.2.840.10008.1.2.1"
+                type_matches = re.finditer(r'type\s*=\s*(?:"([^"]+)"|([^\s;,]+))', accept_header, re.IGNORECASE)
+                for tm in type_matches:
+                    raw_type = tm.group(1) if tm.group(1) is not None else tm.group(2)
+                    for media_type_token in DicomWebService._extract_candidates_from_list(raw_type):
+                        media_type = media_type_token.lower()
+                        if media_type in ("image/jpeg", "image/jpg"):
+                            resolved = "1.2.840.10008.1.2.4.50"
+                            break
+                        elif media_type in ("image/jp2", "image/jpx", "image/j2c"):
+                            resolved = "1.2.840.10008.1.2.4.90"
+                            break
+                        elif media_type in ("image/rle", "image/dicom-rle"):
+                            resolved = "1.2.840.10008.1.2.5"
+                            break
+                        elif media_type == "application/octet-stream":
+                            resolved = "1.2.840.10008.1.2.1"
+                            break
+                    if resolved:
+                        break
 
             # 3. Check direct media types in Accept (e.g. image/jpeg, image/jp2, image/rle, application/octet-stream)
             if not resolved:
@@ -125,10 +158,11 @@ class DicomWebService:
                 elif "application/octet-stream" in accept_lower and "application/dicom" not in accept_lower:
                     resolved = "1.2.840.10008.1.2.1"
                 else:
-                    # Check if accept header itself directly specifies a known syntax or UID
-                    raw_accept = accept_header.strip().strip('"').strip("'")
-                    if raw_accept.upper() in TRANSFER_SYNTAX_MAP or raw_accept in TRANSFER_SYNTAX_MAP:
-                        resolved = raw_accept
+                    # Check each comma- or semicolon-separated token in the Accept header directly
+                    for token in DicomWebService._extract_candidates_from_list(accept_header):
+                        if token.upper() in TRANSFER_SYNTAX_MAP or token in TRANSFER_SYNTAX_MAP:
+                            resolved = token
+                            break
 
         logger.info(
             "dicomweb_transfer_syntax_parsed",

@@ -15,6 +15,7 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 > - The generator **does NOT perform de-identification** on template DICOM files.
 > - Patient Name, Patient ID, Patient Sex, Study Date and Time, all DICOM UIDs (Study/Series/SOP Instance UIDs), and image pixel data will be generated and replaced.
 > - **All other DICOM elements are passed through "as is"**, including any pre-existing private data elements, vendor-specific attributes, and secondary metadata present in template files. Users must ensure templates do not contain sensitive PHI or non-de-identified patient information prior to loading.
+>- A full standard compliant DICOM de-identification process is available using [GoSmart.Health DICOM RS Transformer](https://github.com/gosmart-health/dicom-rs-transformer)
 
 ---
 

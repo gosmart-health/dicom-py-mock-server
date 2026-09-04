@@ -501,3 +501,131 @@ def test_wado_retrieve_slices_above_100_and_follows_actual_count(client):
     assert resp_limit.status_code == 200
     dsets_limit = _extract_multipart_dicom_parts(resp_limit.headers["content-type"], resp_limit.content)
     assert len(dsets_limit) == 15
+
+
+def test_wado_accept_header_semicolon_and_comma_separation(client):
+    """Verify parse_transfer_syntax_header and WADO-RS endpoints support both semicolon- and comma-separated items."""
+    from dicom_py_mock_server.services.dicomweb import DicomWebService
+
+    # 1. Direct parse_transfer_syntax_header tests
+    # 1a. Standard semicolon-separated parameters
+    assert (
+        DicomWebService.parse_transfer_syntax_header(
+            accept_header='multipart/related; type="application/dicom"; transfer-syntax=1.2.840.10008.1.2.4.90'
+        )
+        == "1.2.840.10008.1.2.4.90"
+    )
+    assert (
+        DicomWebService.parse_transfer_syntax_header(
+            accept_header='multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.4.50"'
+        )
+        == "1.2.840.10008.1.2.4.50"
+    )
+
+    # 1b. Comma-separated parameters
+    assert (
+        DicomWebService.parse_transfer_syntax_header(
+            accept_header='multipart/related, type="application/dicom", transfer-syntax=1.2.840.10008.1.2.4.90'
+        )
+        == "1.2.840.10008.1.2.4.90"
+    )
+    assert (
+        DicomWebService.parse_transfer_syntax_header(
+            accept_header='multipart/related, type="application/dicom", transfer-syntax="1.2.840.10008.1.2.4.50"'
+        )
+        == "1.2.840.10008.1.2.4.50"
+    )
+
+    # 1c. Mixed semicolon and comma delimiters
+    assert (
+        DicomWebService.parse_transfer_syntax_header(
+            accept_header='multipart/related; type="application/dicom", transfer-syntax="JPEG200"'
+        )
+        == "JPEG200"
+    )
+
+    # 1d. Multi-item transfer-syntax value (semicolon vs comma)
+    assert (
+        DicomWebService.parse_transfer_syntax_header(
+            accept_header=(
+                'multipart/related; type="application/dicom"; '
+                'transfer-syntax="1.2.840.10008.1.2.4.90;1.2.840.10008.1.2.4.50"'
+            )
+        )
+        == "1.2.840.10008.1.2.4.90"
+    )
+    assert (
+        DicomWebService.parse_transfer_syntax_header(
+            accept_header=(
+                'multipart/related; type="application/dicom"; '
+                'transfer-syntax="1.2.840.10008.1.2.4.90, 1.2.840.10008.1.2.4.50"'
+            )
+        )
+        == "1.2.840.10008.1.2.4.90"
+    )
+
+    # 1e. Wildcard first followed by specific transfer syntax (semicolon and comma)
+    assert (
+        DicomWebService.parse_transfer_syntax_header(
+            accept_header=(
+                'multipart/related; type="application/dicom"; '
+                'transfer-syntax=*; transfer-syntax="1.2.840.10008.1.2.4.90"'
+            )
+        )
+        == "1.2.840.10008.1.2.4.90"
+    )
+    assert (
+        DicomWebService.parse_transfer_syntax_header(
+            accept_header=(
+                'multipart/related; type="application/dicom"; transfer-syntax=*, '
+                'multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.4.90"'
+            )
+        )
+        == "1.2.840.10008.1.2.4.90"
+    )
+
+    # 1f. Direct named syntax or UID list in Accept header (semicolon and comma)
+    assert DicomWebService.parse_transfer_syntax_header(accept_header="JPEG2000; RAW") == "JPEG2000"
+    assert DicomWebService.parse_transfer_syntax_header(accept_header="JPEG2000, RAW") == "JPEG2000"
+    assert (
+        DicomWebService.parse_transfer_syntax_header(accept_header="1.2.840.10008.1.2.4.90; 1.2.840.10008.1.2.1")
+        == "1.2.840.10008.1.2.4.90"
+    )
+    assert (
+        DicomWebService.parse_transfer_syntax_header(accept_header="1.2.840.10008.1.2.4.90, 1.2.840.10008.1.2.1")
+        == "1.2.840.10008.1.2.4.90"
+    )
+
+    # 1g. Query parameter and direct header lists (semicolon and comma)
+    assert (
+        DicomWebService.parse_transfer_syntax_header(query_param="1.2.840.10008.1.2.4.90;1.2.840.10008.1.2.1")
+        == "1.2.840.10008.1.2.4.90"
+    )
+    assert (
+        DicomWebService.parse_transfer_syntax_header(query_param="1.2.840.10008.1.2.4.90,1.2.840.10008.1.2.1")
+        == "1.2.840.10008.1.2.4.90"
+    )
+    assert DicomWebService.parse_transfer_syntax_header(direct_header="JPEG200;RAW") == "JPEG200"
+    assert DicomWebService.parse_transfer_syntax_header(direct_header="JPEG200,RAW") == "JPEG200"
+
+    # 2. End-to-end WADO-RS endpoint retrieval with comma-separated and semicolon-separated headers
+    studies = client.get("/dicomweb/studies").json()
+    study_uid = studies[0]["0020000D"]["Value"][0]
+
+    # Semicolon-separated Accept header
+    resp_semi = client.get(
+        f"/dicomweb/studies/{study_uid}",
+        headers={"Accept": 'multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.4.50"'},
+    )
+    assert resp_semi.status_code == 200
+    dsets_semi = _extract_multipart_dicom_parts(resp_semi.headers["content-type"], resp_semi.content)
+    assert str(dsets_semi[0].file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.50"
+
+    # Comma-separated Accept header
+    resp_comma = client.get(
+        f"/dicomweb/studies/{study_uid}",
+        headers={"Accept": 'multipart/related, type="application/dicom", transfer-syntax="1.2.840.10008.1.2.4.50"'},
+    )
+    assert resp_comma.status_code == 200
+    dsets_comma = _extract_multipart_dicom_parts(resp_comma.headers["content-type"], resp_comma.content)
+    assert str(dsets_comma[0].file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.50"
