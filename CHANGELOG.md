@@ -18,7 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enforced folder modality purity: subfolders containing datasets with mixed modalities raise a descriptive `ValueError`.
   - Added automatic non-image object exclusion: non-pixel objects, Presentation States (`PR`), Structured Reports (`SR`), and private raw objects (`XX_*`) are safely excluded from image slice series.
   - Added series grouping and deterministic slice sorting: DICOM instances within each template series are grouped by `SeriesInstanceUID` and sorted by `InstanceNumber`, `SliceLocation`, and image position `z` coordinate.
-  - Added `TemplateSeriesDataset` model in `models/template.py` encapsulating modality, series UID, description, slice count, and slice file paths.
+- **Template Study Description Preservation in Non-Synthetic Mode**:
+  - In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), preserved the original `StudyDescription` loaded from template datasets (such as `"dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"` in `templates/MR`) across Modality Worklist (MWL) entries (`json_entry`, `dataset`, `entry_record`), C-FIND query responses, and synthesized DICOM SOP instances (`create_instances_from_mwl`).
+  - Prohibited swapping native template Study Descriptions with mockup/random descriptions from `MODALITY_STUDY_DESCRIPTIONS` when running in non-synthetic mode.
+  - For templates lacking an original `StudyDescription` (e.g. `templates/Toshiba_Aquilion`), prevented injecting mockup study descriptions, keeping `StudyDescription` unset or empty as in the source template.
+  - Supported explicit `custom["studyDescription"]` overrides in MWL requests while defaulting to the template dataset's native value.
+  - In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), maintained standard synthetic generation of modality-aligned study descriptions when omitted.
+  - Enhanced multi-slice scanning across all slices in `MwlGeneratorService._load_templates` to capture any present `StudyDescription` into `TemplateSeriesDataset.study_description`.
+  - Added `study_instance_uid` and `study_description` fields to `TemplateSeriesDataset.to_dict()`.
 - **Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE`)**:
   - Implemented configurable synthetic mode via `GOSMART_MS_SYNTHETIC_MODE=true/false` (or alias `SYNTHETIC_MODE`, default `false`).
   - **Non-Synthetic Mode (`false`, default)**:
@@ -30,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Synthetic Mode (`true`)**:
     - Generates synthetic slice volumes conforming to `min_slices`/`max_slices` configuration (or custom count requests).
     - Rotates slices cyclically across the template series (`slice_index = (i - 1) % M`).
+    - Generates modality-aligned synthetic study descriptions when omitted.
     - Compatible with high-throughput stress mode (`GOSMART_MS_STRESS=true`): computes and compresses frame 0 once and clones the compressed payload for all remaining instances.
 - **Transfer Syntax Conversion Logging & Performance Optimizations**:
   - Added structured logging for transfer syntax conversions in `DicomGeneratorService.apply_transfer_syntax` and `create_instances_from_mwl`, explicitly reporting `original_transfer_syntax`, `ending_transfer_syntax`, `original_transfer_syntax_uid`, and `ending_transfer_syntax_uid`.
@@ -43,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added cache management methods `clear_cache(study_uid=None)` with backwards-compatible alias `clear_stress_cache()`.
   - Added automated test case `test_wado_study_cache_and_transcoder_reuse` verifying zero repeated transcoding invocations across instance queries.
 - **Automated Multi-Slice Template Test Suite**:
-  - Added `tests/test_template_datasets.py` with 7 test cases verifying root file rejection, mixed modality rejection, non-image object filtering, series grouping & slice sorting, non-synthetic exact delivery with sequential assignment, synthetic cyclic rotation with stress cloning, and transfer syntax conversion logging with direct passthrough verification.
+  - Added `tests/test_template_datasets.py` with 9 test cases verifying root file rejection, mixed modality rejection, non-image object filtering, series grouping & slice sorting, non-synthetic exact delivery with sequential assignment, synthetic cyclic rotation with stress cloning, transfer syntax conversion logging with direct passthrough verification, non-synthetic Study Description preservation without mockup swapping, and repository template behavior (MR preservation vs CT mockup omission).
 
 ## [0.2.3] - 2026-09-04
 
