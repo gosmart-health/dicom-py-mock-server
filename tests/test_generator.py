@@ -1,6 +1,7 @@
 """Tests for DICOM generator service using pydicom."""
 
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pydicom
@@ -150,16 +151,17 @@ def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
 
 
 def test_template_sop_synthesis():
-    """Test generating DICOM SOP instances using ./templates/CT_small.dcm as base template."""
-    template_ds = pydicom.dcmread("templates/CT_small.dcm")
+    """Test generating DICOM SOP instances using Toshiba_Aquilion as base template."""
+    ct_file = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    template_ds = pydicom.dcmread(ct_file, force=True)
     assert template_ds.Modality == "CT"
-    assert template_ds.Rows == 128
-    assert template_ds.Columns == 128
+    assert template_ds.Rows == 512
+    assert template_ds.Columns == 512
 
     generator = DicomGeneratorService()
     request = MockDicomRequest(
         patient=PatientModel(patient_id="TEMPLATE-PAT-001", patient_name="Template^Synthesized"),
-        study=StudyModel(study_description="Synthesized from CT_small template"),
+        study=StudyModel(study_description="Synthesized from Toshiba template"),
         series=SeriesModel(modality=str(template_ds.Modality)),
         num_instances=2,
         rows=int(template_ds.Rows),
@@ -176,19 +178,19 @@ def test_template_sop_synthesis():
         assert ds.PatientID == "TEMPLATE-PAT-001"
         assert ds.PatientName == "Template^Synthesized"
         assert ds.Modality == "CT"
-        assert ds.Rows == 128
-        assert ds.Columns == 128
+        assert ds.Rows == 512
+        assert ds.Columns == 512
 
 
 def test_template_sop_mwl():
-    """Test instance synthesis matching MWL record created with CT_small.dcm template."""
+    """Test instance synthesis matching MWL record created with template."""
     from dicom_py_mock_server.config import AppConfig
     from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
 
     mwl_service = MwlGeneratorService(AppConfig(templates_path="./templates"))
-    assert mwl_service.get_template_modalities() == ["CT"]
+    assert set(mwl_service.get_template_modalities()) == {"CT", "MR"}
 
-    record = mwl_service.add_entry()
+    record = mwl_service.add_entry(custom={"modality": "CT"})
     assert record["modality"] == "CT"
 
     datasets = DicomGeneratorService.create_instances_from_mwl(record, num_instances=3)
@@ -367,9 +369,10 @@ def test_template_jpeg2000_lossless_generation():
     out_dir = Path("test_output")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "jpeg_2000_lossless.dcm"
+    ct_sample = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
 
     ds = DicomGeneratorService.create_dicom_from_template(
-        template="templates/CT_small.dcm",
+        template=ct_sample,
         transfer_syntax="JPEG2000_LOSSLESS",
         patient_name="JPEG2000^TEST",
         patient_id="J2K-PAT-001",
@@ -393,7 +396,7 @@ def test_template_jpeg2000_lossless_generation():
 
 
 def test_template_all_supported_compressions_generation():
-    """Generate Part-10 files for all supported transfer syntaxes based on templates/CT_small.dcm.
+    """Generate Part-10 files for all supported transfer syntaxes based on template.
 
     Saves files to test_output/ directory without deleting them post-run.
     """
@@ -401,6 +404,7 @@ def test_template_all_supported_compressions_generation():
 
     out_dir = Path("test_output")
     out_dir.mkdir(parents=True, exist_ok=True)
+    ct_sample = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
 
     cases = [
         ("jpeg_2000_lossless.dcm", "JPEG2000_LOSSLESS", JPEG2000Lossless, np.uint16),
@@ -415,7 +419,7 @@ def test_template_all_supported_compressions_generation():
         out_file = out_dir / filename
 
         ds = DicomGeneratorService.create_dicom_from_template(
-            template="templates/CT_small.dcm",
+            template=ct_sample,
             transfer_syntax=syntax_key,
             patient_name=f"SYNTAX^{syntax_key}",
             patient_id=f"ID-{syntax_key}",

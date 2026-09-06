@@ -349,11 +349,36 @@ class DicomGeneratorService:
         background_val: int | None = None,
         text_val: int | None = None,
         include_slice_overlay: bool | None = None,
+        base_image: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Burn metadata strings into image matrix from top-left on top of precomputed background."""
-        base_arr = cls.create_precomputed_background(rows, cols, is_8bit=is_8bit).copy()
+        """Burn metadata strings into image matrix from top-left.
 
-        img = Image.fromarray(base_arr)
+        If base_image is provided, draws annotations directly on top of base_image.
+        Otherwise, renders on top of precomputed gradient background.
+        """
+        if base_image is not None:
+            base_arr = base_image.copy()
+            orig_dtype = base_arr.dtype
+            if orig_dtype == np.uint8 or is_8bit:
+                img = Image.fromarray(base_arr.astype(np.uint8), mode="L")
+                if text_val is None:
+                    text_val = 255
+            elif orig_dtype in (np.int16, np.int32, np.uint16):
+                img = Image.fromarray(base_arr.astype(np.int32), mode="I")
+                if text_val is None:
+                    max_val = int(base_arr.max()) if base_arr.size > 0 else 0
+                    text_val = max_val if max_val > 0 else (2000 if orig_dtype == np.int16 else 4095)
+            else:
+                img = Image.fromarray(base_arr)
+                if text_val is None:
+                    text_val = 255 if is_8bit else 4095
+        else:
+            base_arr = cls.create_precomputed_background(rows, cols, is_8bit=is_8bit).copy()
+            orig_dtype = np.uint8 if is_8bit else np.uint16
+            img = Image.fromarray(base_arr)
+            if text_val is None:
+                text_val = 255 if is_8bit else 4095
+
         draw = ImageDraw.Draw(img)
 
         try:
@@ -372,9 +397,6 @@ class DicomGeneratorService:
         if should_overlay:
             labels.append(f"Image: {image_number}")
 
-        if text_val is None:
-            text_val = 255 if is_8bit else 4095
-
         x = 16
         y = 16
         for line in labels:
@@ -386,7 +408,7 @@ class DicomGeneratorService:
                 line_height = 18
             y += max(line_height, 18) + 6
 
-        return np.array(img, dtype=np.uint8 if is_8bit else np.uint16)
+        return np.array(img).astype(orig_dtype)
 
     @classmethod
     def apply_transfer_syntax(cls, ds: FileDataset, syntax_name: str | None = None) -> FileDataset:
@@ -406,8 +428,16 @@ class DicomGeneratorService:
         if target_uid in (ExplicitVRLittleEndian, ImplicitVRLittleEndian):
             ds.file_meta.TransferSyntaxUID = target_uid
             ds.LossyImageCompression = "00"
-            arr = ds.pixel_array if hasattr(ds, "pixel_array") else np.frombuffer(ds.PixelData, dtype=np.uint16)
-            ds.PixelData = arr.astype(np.uint16).tobytes()
+            if hasattr(ds, "pixel_array"):
+                arr = ds.pixel_array
+                if getattr(ds, "BitsAllocated", 16) == 8:
+                    ds.PixelData = arr.astype(np.uint8).tobytes()
+                elif getattr(ds, "PixelRepresentation", 0) == 1:
+                    ds.PixelData = arr.astype(np.int16).tobytes()
+                else:
+                    ds.PixelData = arr.astype(np.uint16).tobytes()
+            elif isinstance(ds.PixelData, bytes):
+                pass
         elif target_uid == JPEGBaseline8Bit:
             # JPEG Process 1 is 8-bit baseline
             try:
@@ -670,6 +700,7 @@ class DicomGeneratorService:
         modality: str | None = None,
         stress: bool | None = None,
         include_slice_overlay: bool | None = None,
+        preserve_pixel_data: bool = False,
     ) -> FileDataset:
         """Create a synthetic DICOM dataset based on a base template DICOM file/dataset.
 
@@ -678,11 +709,20 @@ class DicomGeneratorService:
         and encodes with the requested transfer syntax.
         """
         import pydicom
+        from pydicom.dataset import FileMetaDataset
+        from pydicom.uid import ExplicitVRLittleEndian, ImplicitVRLittleEndian
 
         if isinstance(template, (str, Path)):
-            ds = pydicom.dcmread(template)
+            ds = pydicom.dcmread(template, force=True)
         else:
             ds = copy.deepcopy(template)
+
+        if not hasattr(ds, "file_meta") or not getattr(ds.file_meta, "TransferSyntaxUID", None):
+            if not hasattr(ds, "file_meta"):
+                ds.file_meta = FileMetaDataset()
+            ds.file_meta.TransferSyntaxUID = (
+                ImplicitVRLittleEndian if getattr(ds, "is_implicit_VR", True) else ExplicitVRLittleEndian
+            )
 
         syntax_name = transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
         target_uid = resolve_transfer_syntax(syntax_name)
@@ -697,8 +737,6 @@ class DicomGeneratorService:
         ds.PatientID = p_id
         ds.StudyDate = s_date
         ds.StudyTime = s_time
-        ds.Rows = rows
-        ds.Columns = cols
 
         if institution_name:
             ds.InstitutionName = institution_name
@@ -715,48 +753,75 @@ class DicomGeneratorService:
         if modality:
             ds.Modality = modality
 
-        if burn_in_text:
-            pixel_matrix = cls.burn_metadata_text(
-                rows=rows,
-                cols=cols,
-                patient_name=p_name,
-                patient_id=p_id,
-                study_date=s_date,
-                study_time=s_time,
-                image_number=image_number,
-                is_8bit=is_8bit,
-                include_slice_overlay=include_slice_overlay,
-            )
+        if preserve_pixel_data and hasattr(ds, "PixelData") and ds.PixelData:
+            orig_pixel_array = ds.pixel_array
+            rows = orig_pixel_array.shape[0]
+            cols = orig_pixel_array.shape[1]
+            ds.Rows = rows
+            ds.Columns = cols
+            if burn_in_text:
+                pixel_matrix = cls.burn_metadata_text(
+                    rows=rows,
+                    cols=cols,
+                    patient_name=p_name,
+                    patient_id=p_id,
+                    study_date=s_date,
+                    study_time=s_time,
+                    image_number=image_number,
+                    is_8bit=(orig_pixel_array.dtype == np.uint8),
+                    base_image=orig_pixel_array,
+                    include_slice_overlay=include_slice_overlay,
+                )
+            else:
+                pixel_matrix = orig_pixel_array
         else:
-            pixel_matrix = cls.create_precomputed_background(rows, cols, is_8bit=is_8bit).copy()
+            ds.Rows = rows
+            ds.Columns = cols
+            if burn_in_text:
+                pixel_matrix = cls.burn_metadata_text(
+                    rows=rows,
+                    cols=cols,
+                    patient_name=p_name,
+                    patient_id=p_id,
+                    study_date=s_date,
+                    study_time=s_time,
+                    image_number=image_number,
+                    is_8bit=is_8bit,
+                    include_slice_overlay=include_slice_overlay,
+                )
+            else:
+                pixel_matrix = cls.create_precomputed_background(rows, cols, is_8bit=is_8bit).copy()
 
-        ds.PixelRepresentation = 0
-        ds.SamplesPerPixel = 1
-        ds.PhotometricInterpretation = "MONOCHROME2"
-        ds.RescaleIntercept = "0"
-        ds.RescaleSlope = "1"
+            ds.PixelRepresentation = 0
+            ds.SamplesPerPixel = 1
+            ds.PhotometricInterpretation = "MONOCHROME2"
+            ds.RescaleIntercept = "0"
+            ds.RescaleSlope = "1"
 
-        if is_8bit:
-            ds.BitsAllocated = 8
-            ds.BitsStored = 8
-            ds.HighBit = 7
-            ds.WindowCenter = 128
-            ds.WindowWidth = 256
-            ds.add_new(0x00280106, "US", 0)
-            ds.add_new(0x00280107, "US", 255)
-        else:
-            ds.BitsAllocated = 16
-            ds.BitsStored = 12
-            ds.HighBit = 11
-            ds.WindowCenter = 2048
-            ds.WindowWidth = 4096
-            ds.add_new(0x00280106, "US", 0)
-            ds.add_new(0x00280107, "US", 4095)
+            if is_8bit:
+                ds.BitsAllocated = 8
+                ds.BitsStored = 8
+                ds.HighBit = 7
+                ds.WindowCenter = 128
+                ds.WindowWidth = 256
+                ds.add_new(0x00280106, "US", 0)
+                ds.add_new(0x00280107, "US", 255)
+            else:
+                ds.BitsAllocated = 16
+                ds.BitsStored = 12
+                ds.HighBit = 11
+                ds.WindowCenter = 2048
+                ds.WindowWidth = 4096
+                ds.add_new(0x00280106, "US", 0)
+                ds.add_new(0x00280107, "US", 4095)
 
-        if (0x0028, 0x0120) in ds:
-            del ds[0x0028, 0x0120]
+            if (0x0028, 0x0120) in ds:
+                del ds[0x0028, 0x0120]
 
         ds.PixelData = pixel_matrix.tobytes()
+        ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+        ds.is_little_endian = True
+        ds.is_implicit_VR = False
         ds = cls.apply_transfer_syntax(ds, syntax_name)
         return ds
 
@@ -785,10 +850,16 @@ class DicomGeneratorService:
         )
         slice_overlay = not is_stress
 
+        template_series = mwl_record.get("template_series")
+        template_ds = mwl_record.get("template_dataset")
+
         if num_instances is None:
             num_instances = mwl_record.get("num_instances")
         if num_instances is None:
-            num_instances = random.randint(getattr(config, "min_slices", 8), getattr(config, "max_slices", 24))
+            if not getattr(config, "synthetic_mode", False) and template_series:
+                num_instances = template_series.slice_count
+            else:
+                num_instances = random.randint(getattr(config, "min_slices", 8), getattr(config, "max_slices", 24))
         json_e = mwl_record.get("json_entry", {})
         patient_id = mwl_record.get("patient_id") or f"{getattr(config, 'id_prefix', 'GSH-')}MOCK_PATIENT_ID"
         patient_name = mwl_record.get("patient_name") or f"MOCK{getattr(config, 'patient_suffix', '_GSH')}^PATIENT"
@@ -874,31 +945,41 @@ class DicomGeneratorService:
             include_slice_overlay=slice_overlay,
         )
 
-        template_ds = mwl_record.get("template_dataset")
-        if not template_ds:
+        slices = []
+        if template_series and template_series.slices:
+            slices = template_series.slices
+        elif template_ds:
+            slices = [template_ds]
+        else:
             templates_dir = Path(getattr(config, "templates_path", "./templates"))
             if templates_dir.exists() and templates_dir.is_dir():
-                for p in templates_dir.rglob("*"):
-                    if p.is_file() and p.suffix.lower() in (".dcm", ".dicom"):
+                for p in sorted(templates_dir.rglob("*")):
+                    if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in (".dcm", ".dicom"):
                         try:
                             import pydicom
 
                             temp_read = pydicom.dcmread(p, force=True)
                             temp_mod = str(getattr(temp_read, "Modality", "")).strip().upper()
-                            if temp_mod == modality:
-                                template_ds = temp_read
+                            if temp_mod == modality and hasattr(temp_read, "PixelData") and temp_read.PixelData:
+                                slices.append(temp_read)
                                 break
                         except Exception:
                             pass
 
-        rows = int(mwl_record.get("rows") or 512)
-        cols = int(mwl_record.get("columns") or mwl_record.get("cols") or 512)
+        rows = int(mwl_record.get("rows") or (slices[0].Rows if slices and hasattr(slices[0], "Rows") else 512))
+        cols = int(
+            mwl_record.get("columns")
+            or mwl_record.get("cols")
+            or (slices[0].Columns if slices and hasattr(slices[0], "Columns") else 512)
+        )
 
-        if template_ds:
+        if slices:
+            m_count = len(slices)
             datasets = []
             if is_stress and num_instances > 1:
+                first_slice = slices[0]
                 ds1 = cls.create_dicom_from_template(
-                    template=template_ds,
+                    template=first_slice,
                     transfer_syntax=target_syntax,
                     patient_name=patient_name,
                     patient_id=patient_id,
@@ -906,8 +987,8 @@ class DicomGeneratorService:
                     study_time=study_time,
                     image_number=1,
                     burn_in_text=True,
-                    rows=rows,
-                    cols=cols,
+                    rows=int(getattr(first_slice, "Rows", rows)),
+                    cols=int(getattr(first_slice, "Columns", cols)),
                     institution_name=inst_name,
                     referring_physician_name=ref_phys,
                     performing_physician_name=perf_phys,
@@ -917,6 +998,7 @@ class DicomGeneratorService:
                     modality=modality,
                     stress=True,
                     include_slice_overlay=False,
+                    preserve_pixel_data=True,
                 )
                 ds1.PatientID = patient_id
                 ds1.PatientName = patient_name
@@ -962,8 +1044,9 @@ class DicomGeneratorService:
                 return datasets
 
             for i in range(1, num_instances + 1):
+                slice_ds = slices[(i - 1) % m_count]
                 ds = cls.create_dicom_from_template(
-                    template=template_ds,
+                    template=slice_ds,
                     transfer_syntax=target_syntax,
                     patient_name=patient_name,
                     patient_id=patient_id,
@@ -971,8 +1054,8 @@ class DicomGeneratorService:
                     study_time=study_time,
                     image_number=i,
                     burn_in_text=True,
-                    rows=rows,
-                    cols=cols,
+                    rows=int(getattr(slice_ds, "Rows", rows)),
+                    cols=int(getattr(slice_ds, "Columns", cols)),
                     institution_name=inst_name,
                     referring_physician_name=ref_phys,
                     performing_physician_name=perf_phys,
@@ -982,6 +1065,7 @@ class DicomGeneratorService:
                     modality=modality,
                     stress=is_stress,
                     include_slice_overlay=slice_overlay,
+                    preserve_pixel_data=True,
                 )
                 ds.PatientID = patient_id
                 ds.PatientName = patient_name

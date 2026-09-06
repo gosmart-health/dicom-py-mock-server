@@ -80,7 +80,7 @@ def test_mwl_status_endpoint():
     assert "base_rate_per_hr" in data
     assert "current_rate_per_hr" in data
     assert "template_modalities" in data
-    assert data["template_modalities"] == ["CT"]
+    assert set(data["template_modalities"]) == {"CT", "MR"}
 
 
 def test_mwl_generate_endpoint():

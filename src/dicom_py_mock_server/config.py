@@ -16,7 +16,7 @@ class AppConfig(BaseSettings):
     )
 
     app_name: str = "DICOM Mock Server"
-    app_version: str = "0.2.3"
+    app_version: str = "0.2.4"
     host: str = "127.0.0.1"
     port: int = 8000
     scp_ae_title: str = Field(
@@ -105,6 +105,11 @@ class AppConfig(BaseSettings):
         description=(
             "Enable high-performance stress mode (single frame compression, demographics overlay only, no slice number)"
         ),
+    )
+    synthetic_mode: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("GOSMART_MS_SYNTHETIC_MODE", "SYNTHETIC_MODE"),
+        description="Enable synthetic slice rotation mode (rotates template slices to match min/max slice limits)",
     )
     move_destinations: dict[str, dict[str, Any]] = Field(
         default_factory=dict,

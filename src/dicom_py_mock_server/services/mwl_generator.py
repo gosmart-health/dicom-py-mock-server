@@ -3,6 +3,7 @@
 import asyncio
 import json
 import random
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from pydicom.uid import CTImageStorage
 
 from dicom_py_mock_server.config import AppConfig
 from dicom_py_mock_server.config import config as global_config
+from dicom_py_mock_server.models.template import TemplateSeriesDataset
 from dicom_py_mock_server.services.generator import get_random_study_description
 from dicom_py_mock_server.services.person_generator import PersonGenerator
 from dicom_py_mock_server.services.uid_generator import (
@@ -110,6 +112,8 @@ class MwlGeneratorService:
         )
         self.template_modalities: dict[str, dict[str, Any]] = {}
         self.dicom_templates: dict[str, list[Dataset]] = {}
+        self.template_datasets_by_modality: dict[str, list[TemplateSeriesDataset]] = defaultdict(list)
+        self._modality_template_indices: dict[str, int] = defaultdict(int)
         self.departments: list[dict[str, Any]] = []
 
         # Initial pools of 3 physician names for each role
@@ -127,17 +131,18 @@ class MwlGeneratorService:
         self._load_templates()
 
     def _load_templates(self) -> None:
-        """Load template modalities and DICOM/JSON templates into memory from templates_path.
+        """Load template modalities and multi-slice DICOM templates into memory from templates_path.
 
-        If at least one template file (.dcm, .dicom, or .json) is found in templates_path,
-        the default fallback modalities are NOT loaded, ensuring MWL generation only uses
-        modalities present in loaded templates.
+        Users must organize multi-slice templates in subfolders under templates_path.
+        Standalone files at the root of templates_path are disallowed and trigger an error.
+        Non-image objects (e.g. SR, PR, CT dose reports, non-PixelData objects) are excluded.
+        Folders containing mixed modalities throw a ValueError and halt loading.
         """
         self.departments = [d for d in DEFAULT_DEPARTMENTS if d.get("active", True)]
         self.template_modalities = {}
         self.dicom_templates = {}
-
-        loaded_file_templates: dict[str, dict[str, Any]] = {}
+        self.template_datasets_by_modality = defaultdict(list)
+        self._modality_template_indices = defaultdict(int)
 
         path_obj = Path(self.config.templates_path)
         if path_obj.is_absolute():
@@ -152,68 +157,210 @@ class MwlGeneratorService:
 
         templates_dir = None
         for p in candidate_paths:
-            if p.exists() and p.is_dir() and any(p.rglob("*")):
+            if p.exists() and p.is_dir():
                 templates_dir = p
                 break
 
-        if templates_dir:
-            for file_path in templates_dir.rglob("*"):
-                if not file_path.is_file():
+        if not templates_dir:
+            logger.error("templates_path_not_found", templates_path=str(self.config.templates_path))
+            return
+
+        # 1. Check for standalone non-hidden files in root directory
+        standalone_files = [f for f in templates_dir.iterdir() if f.is_file() and not f.name.startswith(".")]
+        if standalone_files:
+            logger.error(
+                "standalone_template_files_not_permitted",
+                files=[f.name for f in standalone_files],
+                templates_dir=str(templates_dir),
+            )
+            raise ValueError(
+                f"Standalone files in root template directory '{templates_dir}' are not permitted. "
+                f"Please organize DICOM series into descriptive subfolders (e.g., templates/ct_head/)."
+            )
+
+        # 2. Iterate through subdirectories
+        sub_dirs = sorted([d for d in templates_dir.iterdir() if d.is_dir() and not d.name.startswith(".")])
+        for sub_dir in sub_dirs:
+            folder_images: list[tuple[Path, Dataset, str]] = []
+            for file_path in sorted(sub_dir.rglob("*")):
+                if not file_path.is_file() or file_path.name.startswith("."):
                     continue
-                ext = file_path.suffix.lower()
-                if ext in (".dcm", ".dicom"):
-                    try:
-                        ds = pydicom.dcmread(file_path, force=True)
-                        modality = ""
-                        if "Modality" in ds and ds.Modality:
-                            modality = str(ds.Modality).strip().upper()
-                        if not modality:
-                            stem = file_path.stem.upper()
-                            modality = stem.split("_")[0] if "_" in stem else stem
 
-                        if modality not in self.dicom_templates:
-                            self.dicom_templates[modality] = []
-                        self.dicom_templates[modality].append(ds)
-
-                        loaded_file_templates[modality] = {
-                            "modality": modality,
-                            "source": str(file_path),
-                            "format": "dicom",
-                            "dataset": ds,
-                        }
-                        logger.info("loaded_dicom_template_file", modality=modality, path=str(file_path))
-                    except Exception as exc:
-                        logger.warning("failed_to_load_dicom_template_file", path=str(file_path), error=str(exc))
-                elif ext == ".json":
+                # Handle JSON templates if any (for backward compatibility)
+                if file_path.suffix.lower() == ".json":
                     try:
                         data = json.loads(file_path.read_text(encoding="utf-8"))
                         modality = str(data.get("modality") or file_path.stem).strip().upper()
-                        loaded_file_templates[modality] = {
+                        self.template_modalities[modality] = {
                             "modality": modality,
                             "source": str(file_path),
                             "format": "json",
                             "data": data,
                         }
-                        logger.info("loaded_mwl_template_file", modality=modality, path=str(file_path))
-                    except Exception as exc:
-                        logger.warning("failed_to_load_template_file", path=str(file_path), error=str(exc))
+                    except Exception:
+                        pass
+                    continue
 
-        if loaded_file_templates:
-            # Only use modalities from loaded template files
-            self.template_modalities = loaded_file_templates
-        else:
-            self.template_modalities = {}
-            logger.error("no_template_files_found_in_templates_path", templates_path=str(self.config.templates_path))
+                # Attempt to read as DICOM
+                try:
+                    ds = pydicom.dcmread(file_path, force=True)
+                except Exception as exc:
+                    logger.debug("skipping_non_dicom_file", path=str(file_path), error=str(exc))
+                    continue
+
+                # Ensure dataset has file_meta TransferSyntaxUID for decoding
+                if not hasattr(ds, "file_meta") or not getattr(ds.file_meta, "TransferSyntaxUID", None):
+                    if not hasattr(ds, "file_meta"):
+                        from pydicom.dataset import FileMetaDataset
+
+                        ds.file_meta = FileMetaDataset()
+                    from pydicom.uid import ExplicitVRLittleEndian, ImplicitVRLittleEndian
+
+                    ds.file_meta.TransferSyntaxUID = (
+                        ImplicitVRLittleEndian if getattr(ds, "is_implicit_VR", True) else ExplicitVRLittleEndian
+                    )
+
+                # Filter non-image objects:
+                # - Must have PixelData attribute
+                # - Must not be PR, SR, KO, DOC, Dose SR
+                if not hasattr(ds, "PixelData") or not ds.PixelData:
+                    logger.info(
+                        "skipped_non_image_template_file",
+                        folder=sub_dir.name,
+                        file=file_path.name,
+                        reason="missing_pixel_data",
+                    )
+                    continue
+
+                mod = str(getattr(ds, "Modality", "")).strip().upper()
+                sop_uid = str(getattr(ds, "SOPClassUID", ""))
+                sop_name = str(getattr(getattr(ds, "SOPClassUID", None), "name", ""))
+                if (
+                    mod in ("PR", "SR", "KO", "DOC")
+                    or "Presentation" in sop_name
+                    or sop_uid.startswith("1.2.840.10008.5.1.4.1.1.88.")
+                    or sop_uid.startswith("1.2.840.10008.5.1.4.1.1.11.")
+                ):
+                    logger.info(
+                        "skipped_non_image_template_file",
+                        folder=sub_dir.name,
+                        file=file_path.name,
+                        modality=mod,
+                        sop_class=sop_uid,
+                    )
+                    continue
+
+                if not mod:
+                    mod = "CT"
+
+                folder_images.append((file_path, ds, mod))
+
+            if not folder_images:
+                continue
+
+            # Modality purity validation: all images in folder must have the same modality
+            distinct_modalities = {mod for _, _, mod in folder_images}
+            if len(distinct_modalities) > 1:
+                err_msg = (
+                    f"Mixed modalities detected in template folder '{sub_dir.name}': "
+                    f"{sorted(distinct_modalities)}. All files in a template folder must belong to the same modality."
+                )
+                logger.error(
+                    "mixed_modalities_in_template_folder",
+                    folder=sub_dir.name,
+                    modalities=sorted(distinct_modalities),
+                )
+                raise ValueError(err_msg)
+
+            folder_modality = next(iter(distinct_modalities))
+
+            # Group images by SeriesInstanceUID (supporting multi-series studies in a folder)
+            series_groups: dict[str, list[Dataset]] = defaultdict(list)
+            for _, ds, _ in folder_images:
+                series_uid = str(getattr(ds, "SeriesInstanceUID", "default"))
+                series_groups[series_uid].append(ds)
+
+            # Sort function for slices
+            def slice_sort_key(s: Dataset) -> tuple:
+                try:
+                    in_num = int(getattr(s, "InstanceNumber", 0) or 0)
+                except (ValueError, TypeError):
+                    in_num = 0
+                try:
+                    sl_loc = float(getattr(s, "SliceLocation", 0.0) or 0.0)
+                except (ValueError, TypeError):
+                    sl_loc = 0.0
+                ipp = getattr(s, "ImagePositionPatient", None)
+                z_val = 0.0
+                if ipp and len(ipp) >= 3:
+                    try:
+                        z_val = float(ipp[2])
+                    except (ValueError, TypeError):
+                        z_val = 0.0
+                return (in_num, sl_loc, z_val)
+
+            for _series_uid, slices in series_groups.items():
+                sorted_slices = sorted(slices, key=slice_sort_key)
+                sample = sorted_slices[0]
+                s_num = getattr(sample, "SeriesNumber", None)
+                try:
+                    s_num = int(s_num) if s_num is not None else None
+                except (ValueError, TypeError):
+                    s_num = None
+
+                series_name = (
+                    f"{sub_dir.name}_{s_num}" if len(series_groups) > 1 and s_num is not None else sub_dir.name
+                )
+                template_series = TemplateSeriesDataset(
+                    name=series_name,
+                    modality=folder_modality,
+                    slices=sorted_slices,
+                    source_dir=sub_dir,
+                    series_instance_uid=str(getattr(sample, "SeriesInstanceUID", "")) or None,
+                    series_number=s_num,
+                    series_description=str(getattr(sample, "SeriesDescription", "")) or None,
+                    study_instance_uid=str(getattr(sample, "StudyInstanceUID", "")) or None,
+                    study_description=str(getattr(sample, "StudyDescription", "")) or None,
+                    rows=int(getattr(sample, "Rows", 512)),
+                    columns=int(getattr(sample, "Columns", 512)),
+                )
+                self.template_datasets_by_modality[folder_modality].append(template_series)
+                if folder_modality not in self.dicom_templates:
+                    self.dicom_templates[folder_modality] = []
+                self.dicom_templates[folder_modality].append(sorted_slices[0])
+                self.template_modalities[folder_modality] = {
+                    "modality": folder_modality,
+                    "source": str(sub_dir),
+                    "format": "dicom_series",
+                    "slice_count": len(sorted_slices),
+                }
+
+                logger.info(
+                    "loaded_template_series",
+                    folder=sub_dir.name,
+                    modality=folder_modality,
+                    series_number=s_num,
+                    slice_count=len(sorted_slices),
+                )
 
         logger.info(
             "mwl_template_modalities_loaded",
             loaded_modalities=list(self.template_modalities.keys()),
-            has_dicom_templates=bool(self.dicom_templates),
+            datasets_per_modality={m: len(ds) for m, ds in self.template_datasets_by_modality.items()},
         )
 
     def get_template_modalities(self) -> list[str]:
         """Get the list of currently loaded in-memory template modalities."""
+        if self.template_datasets_by_modality:
+            return sorted(self.template_datasets_by_modality.keys())
         return sorted(self.template_modalities.keys())
+
+    def get_template_datasets_by_modality(self, modality: str) -> list[TemplateSeriesDataset]:
+        """Get in-memory loaded multi-slice template datasets for a specific modality."""
+        mod_upper = modality.upper()
+        if mod_upper in self.template_datasets_by_modality:
+            return self.template_datasets_by_modality[mod_upper]
+        return [ts for datasets in self.template_datasets_by_modality.values() for ts in datasets]
 
     def get_dicom_templates_by_modality(self, modality: str) -> list[Dataset]:
         """Get in-memory loaded DICOM template datasets for a specific modality.
@@ -512,14 +659,38 @@ class MwlGeneratorService:
 
         dataset = self.json_to_dataset(json_entry)
 
-        # Determine randomized instance count between min_slices and max_slices
+        modality_val = json_entry["00080060"]["Value"][0]
+        templates_for_mod = self.template_datasets_by_modality.get(modality_val, [])
+        if not templates_for_mod and self.template_datasets_by_modality:
+            all_templates = [ts for sub in self.template_datasets_by_modality.values() for ts in sub]
+            selected_template_series = all_templates[0] if all_templates else None
+        elif templates_for_mod:
+            # Sequential round-robin selection per modality
+            idx = self._modality_template_indices[modality_val] % len(templates_for_mod)
+            self._modality_template_indices[modality_val] += 1
+            selected_template_series = templates_for_mod[idx]
+        else:
+            selected_template_series = None
+
+        # Determine instance count
         custom_instances = custom.get("num_instances") or custom.get("numInstances") if custom else None
         if custom_instances is not None:
             num_instances = int(custom_instances)
+        elif getattr(self.config, "synthetic_mode", False):
+            # Synthetic mode honors min_slices and max_slices
+            num_instances = random.randint(self.config.min_slices, self.config.max_slices)
+        elif selected_template_series is not None:
+            # Non-synthetic mode: send whole images in series for exact number
+            num_instances = selected_template_series.slice_count
         else:
             num_instances = random.randint(self.config.min_slices, self.config.max_slices)
 
-        custom_sn = (custom.get("seriesNumber") or custom.get("series_number") or 1) if custom else 1
+        default_sn = (
+            selected_template_series.series_number
+            if selected_template_series and selected_template_series.series_number is not None
+            else 1
+        )
+        custom_sn = (custom.get("seriesNumber") or custom.get("series_number") or default_sn) if custom else default_sn
         custom_suid = (custom.get("seriesUid") or custom.get("series_uid")) if custom else None
         custom_sdesc = (custom.get("seriesDescription") or custom.get("series_description")) if custom else None
 
@@ -530,22 +701,29 @@ class MwlGeneratorService:
         read_val = json_entry.get("00081060", {}).get("Value", [""])[0]
         read_name = read_val.get("Alphabetic", "") if isinstance(read_val, dict) else read_val
         inst_name = json_entry.get("00080080", {}).get("Value", [""])[0]
-        templates_for_mod = self.get_dicom_templates_by_modality(json_entry["00080060"]["Value"][0])
-        dicom_template = random.choice(templates_for_mod) if templates_for_mod else None
+        dicom_template = (
+            selected_template_series.slices[0] if selected_template_series and selected_template_series.slices else None
+        )
 
         entry_record = {
             "json_entry": json_entry,
             "dataset": dataset,
+            "template_series": selected_template_series,
             "template_dataset": dicom_template,
             "created_at": scheduled_at or now,
             "patient_id": json_entry["00100020"]["Value"][0],
             "patient_name": json_entry["00100010"]["Value"][0].get("Alphabetic", ""),
             "accession": json_entry["00080050"]["Value"][0],
-            "modality": json_entry["00080060"]["Value"][0],
+            "modality": modality_val,
             "study_uid": json_entry["0020000D"]["Value"][0],
             "series_uid": custom_suid or generate_series_uid(json_entry["0020000D"]["Value"][0], custom_sn),
             "series_number": int(custom_sn),
-            "series_description": custom_sdesc or f"{json_entry['00080060']['Value'][0]} Series",
+            "series_description": custom_sdesc
+            or (
+                selected_template_series.series_description
+                if selected_template_series and selected_template_series.series_description
+                else f"{modality_val} Series"
+            ),
             "referring_physician": ref_name,
             "performing_physician": perf_name,
             "reading_physician": read_name,

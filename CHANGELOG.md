@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.2.4] - 2026-09-06
+
+### Added
+- **Multi-Slice CT & MR Template Loading**:
+  - Added multi-slice DICOM template loading from dedicated subfolders under `templates/` (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`).
+  - Implemented strict folder structure validation: standalone files directly in `templates/` root are strictly rejected with `ValueError` to prevent ambiguity.
+  - Implemented dynamic modality discovery from DICOM tag `(0008, 0060)` rather than directory names.
+  - Enforced folder modality purity: subfolders containing datasets with mixed modalities raise a descriptive `ValueError`.
+  - Added automatic non-image object exclusion: non-pixel objects, Presentation States (`PR`), Structured Reports (`SR`), and private raw objects (`XX_*`) are safely excluded from image slice series.
+  - Added series grouping and deterministic slice sorting: DICOM instances within each template series are grouped by `SeriesInstanceUID` and sorted by `InstanceNumber`, `SliceLocation`, and image position `z` coordinate.
+  - Added `TemplateSeriesDataset` model in `models/template.py` encapsulating modality, series UID, description, slice count, and slice file paths.
+- **Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE`)**:
+  - Implemented configurable synthetic mode via `GOSMART_MS_SYNTHETIC_MODE=true/false` (or alias `SYNTHETIC_MODE`, default `false`).
+  - **Non-Synthetic Mode (`false`, default)**:
+    - Delivers complete series with the exact slice count matching the selected template series.
+    - Sequentially rotates through template series per modality in round-robin fashion for Modality Worklist (MWL) entries.
+    - Selects modalities randomly from available template modalities.
+    - Preserves native template slice pixel data and image geometry; if burn-in text overlay is enabled, text is drawn directly on top of the original slice pixel matrix.
+  - **Synthetic Mode (`true`)**:
+    - Generates synthetic slice volumes conforming to `min_slices`/`max_slices` configuration (or custom count requests).
+    - Rotates slices cyclically across the template series (`slice_index = (i - 1) % M`).
+    - Compatible with high-throughput stress mode (`GOSMART_MS_STRESS=true`): computes and compresses frame 0 once and clones the compressed payload for all remaining instances.
+- **Automated Multi-Slice Template Test Suite**:
+  - Added `tests/test_template_datasets.py` with 6 test cases verifying root file rejection, mixed modality rejection, non-image object filtering, series grouping & slice sorting, non-synthetic exact delivery with sequential assignment, and synthetic cyclic rotation with stress cloning.
+
 ## [0.2.3] - 2026-09-04
 
 ### Added

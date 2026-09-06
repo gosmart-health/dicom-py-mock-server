@@ -26,7 +26,7 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 3. **DICOM SCP Services**: Built-in DICOM C-FIND, C-MOVE/GET, and MWL (Modality Worklist) SCP network listeners.
 4. **Modality Worklist (MWL) Synthesis**: Automated business-hours MWL entry creation and retention window management.
 5. **MCP Integration Provisioning**: Exposes server capabilities to AI Assistants (AGY, Claude Desktop, Cursor, etc.) over Server-Sent Events (SSE) transport.
-6. **Template SOP Compression & PACS Verification**: Synthesize valid DICOM Part-10 files directly from templates (such as `templates/CT_small.dcm`) with burned metadata text, precomputed background test patterns, and supported compression syntaxes (`JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, `IMPLICIT_VR_LITTLE_ENDIAN`) saved to `test_output/` for PACS viewer inspection.
+6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice DICOM datasets from subdirectories under `templates/` (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`) with dynamic modality detection and folder purity validation. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), the server delivers exact series slice counts with round-robin template picking and pixel preservation. In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), slices rotate cyclically conforming to configurable slice ranges. Supported compression syntaxes include `JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, and `IMPLICIT_VR_LITTLE_ENDIAN`.
 
 ---
 
@@ -100,7 +100,7 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_SCP_PORT` | `SCP_PORT` | `11112` | DICOM SCP listening port (C-ECHO, C-FIND, C-MOVE, C-STORE, MWL). |
 | `GOSMART_MS_STORAGE_DIR` | `STORAGE_DIR` | `./data/dicom_storage` | Local directory path to store generated DICOM files. |
 | `GORMART_MS_CSV_PATH` | `GOSMART_MS_CSV_PATH`, `CSV_PATH` | `./csv` | Local directory path to store C-STORE association audit CSV files (`yyyymmddhhmmss_<AE_Title>.csv`). |
-| `GOSMART_TEMPLATES_PATH` | `GOSMART_MS_TEMPLATES_PATH`, `TEMPLATES_PATH` | `./templates` | Directory containing DICOM (`.dcm`, `.dicom`) or JSON templates for synthesis. |
+| `GOSMART_TEMPLATES_PATH` | `GOSMART_MS_TEMPLATES_PATH`, `TEMPLATES_PATH` | `./templates` | Directory containing modality subfolders with multi-slice DICOM (`.dcm`, `.dicom`) templates. |
 | `GOSMART_MS_LOG_LEVEL` | `LOG_LEVEL` | `INFO` | Logging verbosity level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). |
 | `GOSMART_MS_LOG_PATH` | `GOSMART_MS_LOG_FILE`, `LOG_PATH`, `LOG_FILE` | `./logs` | Directory or file path for rotated log files (`dicom_mock_server.log`). |
 | `GOSMART_MS_LOG_ROTATION_DAYS` | `LOG_ROTATION_DAYS` | `7` | Log file auto-rotation interval in days (`TimedRotatingFileHandler`). |
@@ -110,8 +110,9 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_MWL_RATE_PER_HR` | `MWL_RATE_PER_HR` | `12.0` | Base MWL creation rate per hour during business hours (9 AM - 5 PM local; 5% rate off-hours). |
 | `GOSMART_MS_MCP_ENABLED` | `MCP_ENABLED` | `true` | Enable Model Context Protocol (MCP) SSE integration endpoints. |
 | `GOSMART_MS_MCP_SSE_PATH` | `MCP_SSE_PATH` | `/sse` | Base HTTP endpoint path for MCP SSE streams. |
-| `GOSMART_MS_MIN_SLICES` | `MIN_SLICES` | `8` | Minimum slice count for synthetic series generation during C-MOVE. |
-| `GOSMART_MS_MAX_SLICES` | `MAX_SLICES` | `24` | Maximum slice count for synthetic series volume generation. |
+| `GOSMART_MS_SYNTHETIC_MODE` | `SYNTHETIC_MODE` | `false` | Enable synthetic slice volume generation (slice range bounds and cyclic rotation) instead of non-synthetic mode (exact template slice counts). |
+| `GOSMART_MS_MIN_SLICES` | `MIN_SLICES` | `8` | Minimum slice count for synthetic series generation (used when `SYNTHETIC_MODE=true`). |
+| `GOSMART_MS_MAX_SLICES` | `MAX_SLICES` | `24` | Maximum slice count for synthetic series volume generation (used when `SYNTHETIC_MODE=true`). |
 | `GOSMART_MS_TRANSFER_SYNTAX` | `TRANSFER_SYNTAX` | `JPEG2000_LOSSLESS` | Default DICOM Transfer Syntax (`RAW`, `JPEG`, `JPEG2000`, `JPEG2000_LOSSLESS`, `RLE`). |
 | `GOSMART_MS_STRESS` | `STRESS` | `false` | Enable high-throughput stress mode (single compressed frame computation, demographics burned in, slice number overlay omitted, negotiated transfer syntax reuse). |
 | `GOSMART_MS_MOVE_DESTINATIONS` | `MOVE_DESTINATIONS` | `{}` | JSON string mapping C-MOVE destination AE Titles to target host/port objects. |
@@ -122,7 +123,7 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_NAMESPACE_UUID` | `GOSMART_MS_DICOM_NAMESPACE_UUID`, `NAMESPACE_UUID` | `6ba7b810-9dad-11d1-80b4-00c04fd430c8` | Persistent UUID namespace used for deterministic ITU-T X.667 DICOM UID generation. |
 | `GOSMART_MS_UID_VERSION` | `GOSMART_MS_DICOM_UID_VERSION`, `UID_VERSION` | `5` | UUID version for deterministic DICOM UID generation (`5` for SHA-1, `3` for MD5). |
 | `GOSMART_MS_APP_NAME` | `APP_NAME` | `DICOM Mock Server` | Application display name. |
-| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.2.2` | Application version string. |
+| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.2.4` | Application version string. |
 
 ---
 
@@ -216,6 +217,41 @@ curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
 curl -X GET "http://127.0.0.1:8000/dicomweb/wado?requestType=WADO&studyUID=2.25.123&seriesUID=2.25.456&objectUID=2.25.789&contentType=application/dicom" \
      -o instance.dcm
 ```
+
+---
+
+## Multi-Slice Templates & Synthetic Mode
+
+The server supports loading multi-slice DICOM image datasets from dedicated subfolders under `templates/`:
+
+```
+templates/
+├── Toshiba_Aquilion/          # Multi-slice CT series folder
+│   ├── slice_001.dcm
+│   ├── slice_002.dcm
+│   └── ... (197 slices)
+└── MR/                        # Multi-slice MR series folder
+    ├── mr_001.dcm
+    ├── mr_002.dcm
+    └── ... (multiple MR series)
+```
+
+### 1. Template Subfolder Rules & Modality Purity
+- **No Standalone Root Files**: Standalone DICOM files placed directly in the `templates/` root directory are strictly prohibited and will raise a `ValueError` on startup. All template images must be housed within a subfolder.
+- **Dynamic Modality Discovery**: The server dynamically detects the modality from the DICOM `Modality` tag `(0008, 0060)` within the datasets rather than parsing folder names.
+- **Folder Modality Purity**: All DICOM instances within a subfolder must share the same modality. Mixing different modalities (e.g. CT and MR in the same folder) raises a `ValueError`.
+- **Non-Image Object Exclusion**: Objects without pixel data, Presentation States (`PR`), Structured Reports (`SR`), and proprietary non-image objects (e.g., Philips private `XX_*` objects) are automatically filtered out.
+- **Series Grouping & Slice Ordering**: Slices are grouped by `SeriesInstanceUID` and sorted deterministically by `(InstanceNumber, SliceLocation, ImagePositionPatient[2])`.
+
+### 2. Non-Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE=false`, Default)
+- **Exact Slice Delivery**: The server delivers the complete DICOM series for the exact slice count present in the selected template series.
+- **Round-Robin Template Selection**: Available modalities are selected randomly. When multiple template series exist for a modality (e.g. two CT series or multiple MR series), the server sequentially cycles through them in round-robin order for subsequent MWL entries.
+- **Pixel Data Preservation**: Original pixel data and geometry from each slice are preserved. When `burn_in_text=True` is enabled, patient demographics and slice indicators are rendered directly on top of the original slice pixel matrix.
+
+### 3. Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE=true`)
+- **Configurable Slice Ranges**: Honors `GOSMART_MS_MIN_SLICES` and `GOSMART_MS_MAX_SLICES` (or custom per-request slice counts).
+- **Cyclic Slice Rotation**: When the requested slice count differs from the template slice count, slices cycle sequentially (`slice_index = (i - 1) % M`).
+- **Stress Mode Compatibility**: When combined with `GOSMART_MS_STRESS=true`, the first slice is computed and compressed once, and the precomputed compressed payload is reused across all remaining instances in the series.
 
 ---
 
