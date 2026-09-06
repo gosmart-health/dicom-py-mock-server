@@ -25,6 +25,7 @@ def _create_mock_dicom_slice(
     has_pixel_data: bool = True,
     rows: int = 64,
     cols: int = 64,
+    study_description: str | None = None,
 ) -> FileDataset:
     file_meta = FileMetaDataset()
     file_meta.MediaStorageSOPClassUID = sop_class_uid
@@ -42,6 +43,8 @@ def _create_mock_dicom_slice(
     ds.ImagePositionPatient = [0.0, 0.0, float(slice_location)]
     ds.Rows = rows
     ds.Columns = cols
+    if study_description is not None:
+        ds.StudyDescription = study_description
     if has_pixel_data:
         arr = (np.ones((rows, cols), dtype=np.uint16) * instance_number * 100).astype(np.uint16)
         ds.PixelData = arr.tobytes()
@@ -240,10 +243,14 @@ def test_non_synthetic_mode_sequential_mwl_and_exact_slice_delivery(tmp_path):
     datasets_e1 = DicomGeneratorService.create_instances_from_mwl(e1)
     assert len(datasets_e1) == 5
     assert [int(d.InstanceNumber) for d in datasets_e1] == [1, 2, 3, 4, 5]
+    # Verify non-synthetic mode preserves clean original pixels without burned-in annotations
+    assert np.all(datasets_e1[0].pixel_array == 100)
+    assert np.all(datasets_e1[1].pixel_array == 200)
 
     datasets_e2 = DicomGeneratorService.create_instances_from_mwl(e2)
     assert len(datasets_e2) == 3
     assert [int(d.InstanceNumber) for d in datasets_e2] == [1, 2, 3]
+    assert np.all(datasets_e2[0].pixel_array == 100)
 
 
 def test_synthetic_mode_cyclic_rotation_and_stress(tmp_path):
@@ -284,3 +291,142 @@ def test_synthetic_mode_cyclic_rotation_and_stress(tmp_path):
     for d in datasets_stress[1:]:
         assert d.PixelData == datasets_stress[0].PixelData
         assert int(d.NumberOfSeriesRelatedInstances) == 5
+
+
+def test_transfer_syntax_conversion_and_logging(tmp_path):
+    """Verify that original and ending transfer syntaxes are logged during conversion and passthrough works."""
+    from structlog.testing import capture_logs
+
+    ct_dir = tmp_path / "ct_ts_test"
+    ct_dir.mkdir()
+    _create_mock_dicom_slice(
+        ct_dir / "slice1.dcm",
+        modality="CT",
+        series_uid="1.2.999",
+        instance_number=1,
+    )
+
+    cfg = AppConfig(templates_path=str(tmp_path), synthetic_mode=False)
+    service = MwlGeneratorService(app_config=cfg)
+    entry = service.add_entry(custom={"modality": "CT"})
+
+    # 1. Conversion from ExplicitVRLittleEndian to JPEG2000_LOSSLESS
+    with capture_logs() as cap:
+        ds_converted = DicomGeneratorService.create_instances_from_mwl(
+            entry,
+            num_instances=1,
+            transfer_syntax="JPEG2000_LOSSLESS",
+        )
+        assert len(ds_converted) == 1
+        assert ds_converted[0].file_meta.TransferSyntaxUID.name == "JPEG 2000 Image Compression (Lossless Only)"
+
+        events = [log.get("event") for log in cap]
+        assert "generating_template_series_instances" in events
+        assert "transfer_syntax_conversion" in events
+        assert "generated_template_series_instances" in events
+
+        conv_log = next(log for log in cap if log.get("event") == "transfer_syntax_conversion")
+        assert conv_log.get("original_transfer_syntax") == "Explicit VR Little Endian"
+        assert conv_log.get("ending_transfer_syntax") == "JPEG 2000 Image Compression (Lossless Only)"
+        assert conv_log.get("original_transfer_syntax_uid") == "1.2.840.10008.1.2.1"
+        assert conv_log.get("ending_transfer_syntax_uid") == "1.2.840.10008.1.2.4.90"
+
+    # 2. Passthrough when transfer syntaxes match
+    with capture_logs() as cap:
+        ds_raw = DicomGeneratorService.create_instances_from_mwl(
+            entry,
+            num_instances=1,
+            transfer_syntax="RAW",
+        )
+        assert len(ds_raw) == 1
+        assert ds_raw[0].file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
+
+        gen_log = next(log for log in cap if log.get("event") == "generating_template_series_instances")
+        assert gen_log.get("requires_conversion") is False
+        assert gen_log.get("original_transfer_syntax") == "Explicit VR Little Endian"
+        assert gen_log.get("ending_transfer_syntax") == "Explicit VR Little Endian"
+
+
+def test_non_synthetic_preserves_template_study_description_and_does_not_swap_with_mockups(tmp_path):
+    """Verify that under non-synthetic mode, the Study Description originally in the template is preserved."""
+    from dicom_py_mock_server.services.generator import MODALITY_STUDY_DESCRIPTIONS
+
+    ct_dir = tmp_path / "ct_custom_study"
+    ct_dir.mkdir()
+    expected_desc = "Clinical Protocol 4D Cardiac Reconstruction"
+
+    for i in range(1, 4):
+        _create_mock_dicom_slice(
+            ct_dir / f"slice_{i}.dcm",
+            modality="CT",
+            series_uid="1.2.840.10008.5.1",
+            series_number=1,
+            instance_number=i,
+            slice_location=float(i * 5),
+            study_description=expected_desc,
+        )
+
+    cfg = AppConfig(templates_path=str(tmp_path), synthetic_mode=False)
+    service = MwlGeneratorService(app_config=cfg)
+
+    entry = service.add_entry(custom={"modality": "CT"})
+    assert entry is not None
+    # Verify MWL record has the exact template study description
+    assert entry["study_description"] == expected_desc
+    assert entry["json_entry"]["00081030"]["Value"][0] == expected_desc
+    assert entry["dataset"].StudyDescription == expected_desc
+    assert entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["CT"]
+
+    # Verify generated instances have the exact template study description
+    datasets = DicomGeneratorService.create_instances_from_mwl(entry)
+    assert len(datasets) == 3
+    for ds in datasets:
+        assert ds.StudyDescription == expected_desc
+        assert ds.StudyDescription not in MODALITY_STUDY_DESCRIPTIONS["CT"]
+
+
+def test_non_synthetic_mode_repo_templates_mr_and_ct_study_description():
+    """Verify real repository templates in non-synthetic mode: MR preserves original, CT does not inject mockups."""
+    from dicom_py_mock_server.services.generator import MODALITY_STUDY_DESCRIPTIONS
+
+    cfg = AppConfig(templates_path="./templates", synthetic_mode=False)
+    service = MwlGeneratorService(app_config=cfg)
+
+    # 1. MR template contains original StudyDescription "dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"
+    mr_entry = service.add_entry(custom={"modality": "MR"})
+    expected_mr_desc = "dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"
+    assert mr_entry["study_description"] == expected_mr_desc
+    assert mr_entry["json_entry"]["00081030"]["Value"][0] == expected_mr_desc
+    assert mr_entry["dataset"].StudyDescription == expected_mr_desc
+
+    mr_instances = DicomGeneratorService.create_instances_from_mwl(mr_entry, num_instances=3)
+    assert len(mr_instances) == 3
+    for ds in mr_instances:
+        assert ds.StudyDescription == expected_mr_desc
+        assert ds.StudyDescription not in MODALITY_STUDY_DESCRIPTIONS["MR"]
+
+    # 2. CT template (Toshiba Aquilion) had NO original StudyDescription; do not swap with mockups
+    ct_entry = service.add_entry(custom={"modality": "CT"})
+    assert ct_entry["study_description"] is None or ct_entry["study_description"] == ""
+    assert ct_entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["CT"]
+
+    ct_instances = DicomGeneratorService.create_instances_from_mwl(ct_entry, num_instances=2)
+    assert len(ct_instances) == 2
+    for ds in ct_instances:
+        assert not getattr(ds, "StudyDescription", None)
+
+    # 3. Custom study description override is honored in non-synthetic mode
+    override_entry = service.add_entry(custom={"modality": "MR", "studyDescription": "Explicit User Override"})
+    assert override_entry["study_description"] == "Explicit User Override"
+    override_instances = DicomGeneratorService.create_instances_from_mwl(override_entry, num_instances=2)
+    for ds in override_instances:
+        assert ds.StudyDescription == "Explicit User Override"
+
+    # 4. In synthetic mode, mockups are used
+    synth_cfg = AppConfig(templates_path="./templates", synthetic_mode=True)
+    synth_service = MwlGeneratorService(app_config=synth_cfg)
+    synth_entry = synth_service.add_entry(custom={"modality": "MR"})
+    assert synth_entry["study_description"] in MODALITY_STUDY_DESCRIPTIONS["MR"]
+    synth_instances = DicomGeneratorService.create_instances_from_mwl(synth_entry, num_instances=2)
+    for ds in synth_instances:
+        assert ds.StudyDescription in MODALITY_STUDY_DESCRIPTIONS["MR"]

@@ -416,8 +416,35 @@ class DicomGeneratorService:
         target_uid = resolve_transfer_syntax(syntax_name or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS"))
 
         current_uid = getattr(ds.file_meta, "TransferSyntaxUID", None)
+        if not current_uid:
+            current_uid = ImplicitVRLittleEndian if getattr(ds, "is_implicit_VR", True) else ExplicitVRLittleEndian
+            if hasattr(ds, "file_meta"):
+                ds.file_meta.TransferSyntaxUID = current_uid
+
+        orig_name = getattr(current_uid, "name", str(current_uid))
+        target_name = getattr(target_uid, "name", str(target_uid))
+
         if current_uid == target_uid:
+            logger.debug(
+                "transfer_syntax_matched",
+                original_transfer_syntax=orig_name,
+                ending_transfer_syntax=target_name,
+                original_transfer_syntax_uid=str(current_uid),
+                ending_transfer_syntax_uid=str(target_uid),
+            )
             return ds
+
+        modality = str(getattr(ds, "Modality", ""))
+        instance_number = getattr(ds, "InstanceNumber", None)
+        logger.info(
+            "transfer_syntax_conversion",
+            original_transfer_syntax=orig_name,
+            ending_transfer_syntax=target_name,
+            original_transfer_syntax_uid=str(current_uid),
+            ending_transfer_syntax_uid=str(target_uid),
+            modality=modality,
+            instance_number=instance_number,
+        )
 
         if current_uid not in (ExplicitVRLittleEndian, ImplicitVRLittleEndian, None):
             try:
@@ -428,16 +455,17 @@ class DicomGeneratorService:
         if target_uid in (ExplicitVRLittleEndian, ImplicitVRLittleEndian):
             ds.file_meta.TransferSyntaxUID = target_uid
             ds.LossyImageCompression = "00"
-            if hasattr(ds, "pixel_array"):
-                arr = ds.pixel_array
-                if getattr(ds, "BitsAllocated", 16) == 8:
-                    ds.PixelData = arr.astype(np.uint8).tobytes()
-                elif getattr(ds, "PixelRepresentation", 0) == 1:
-                    ds.PixelData = arr.astype(np.int16).tobytes()
-                else:
-                    ds.PixelData = arr.astype(np.uint16).tobytes()
-            elif isinstance(ds.PixelData, bytes):
-                pass
+            if not isinstance(getattr(ds, "PixelData", None), (bytes, bytearray)):
+                try:
+                    arr = ds.pixel_array
+                    if getattr(ds, "BitsAllocated", 16) == 8:
+                        ds.PixelData = arr.astype(np.uint8).tobytes()
+                    elif getattr(ds, "PixelRepresentation", 0) == 1:
+                        ds.PixelData = arr.astype(np.int16).tobytes()
+                    else:
+                        ds.PixelData = arr.astype(np.uint16).tobytes()
+                except Exception:
+                    pass
         elif target_uid == JPEGBaseline8Bit:
             # JPEG Process 1 is 8-bit baseline
             try:
@@ -635,7 +663,10 @@ class DicomGeneratorService:
             else (request.include_slice_overlay if request.include_slice_overlay is not None else not is_stress)
         )
 
-        if request.burn_in_text:
+        is_synthetic = getattr(config, "synthetic_mode", False)
+        should_burn = request.burn_in_text if request.burn_in_text is not None else is_synthetic
+
+        if should_burn:
             pixel_matrix = cls.burn_metadata_text(
                 rows=rows,
                 cols=cols,
@@ -688,7 +719,7 @@ class DicomGeneratorService:
         study_date: str | None = None,
         study_time: str | None = None,
         image_number: int = 1,
-        burn_in_text: bool = True,
+        burn_in_text: bool | None = None,
         rows: int = 512,
         cols: int = 512,
         institution_name: str | None = None,
@@ -753,31 +784,38 @@ class DicomGeneratorService:
         if modality:
             ds.Modality = modality
 
+        is_synthetic = getattr(config, "synthetic_mode", False)
+        should_burn = is_synthetic if burn_in_text is None else burn_in_text
+
         if preserve_pixel_data and hasattr(ds, "PixelData") and ds.PixelData:
+            if not should_burn:
+                if getattr(ds.file_meta, "TransferSyntaxUID", None) == target_uid:
+                    # Direct passthrough: pixels and transfer syntax already match
+                    return ds
+                # Transfer syntax differs: convert directly on ds without unpacking/repacking pixel array
+                return cls.apply_transfer_syntax(ds, syntax_name)
+
             orig_pixel_array = ds.pixel_array
             rows = orig_pixel_array.shape[0]
             cols = orig_pixel_array.shape[1]
             ds.Rows = rows
             ds.Columns = cols
-            if burn_in_text:
-                pixel_matrix = cls.burn_metadata_text(
-                    rows=rows,
-                    cols=cols,
-                    patient_name=p_name,
-                    patient_id=p_id,
-                    study_date=s_date,
-                    study_time=s_time,
-                    image_number=image_number,
-                    is_8bit=(orig_pixel_array.dtype == np.uint8),
-                    base_image=orig_pixel_array,
-                    include_slice_overlay=include_slice_overlay,
-                )
-            else:
-                pixel_matrix = orig_pixel_array
+            pixel_matrix = cls.burn_metadata_text(
+                rows=rows,
+                cols=cols,
+                patient_name=p_name,
+                patient_id=p_id,
+                study_date=s_date,
+                study_time=s_time,
+                image_number=image_number,
+                is_8bit=(orig_pixel_array.dtype == np.uint8),
+                base_image=orig_pixel_array,
+                include_slice_overlay=include_slice_overlay,
+            )
         else:
             ds.Rows = rows
             ds.Columns = cols
-            if burn_in_text:
+            if should_burn:
                 pixel_matrix = cls.burn_metadata_text(
                     rows=rows,
                     cols=cols,
@@ -849,6 +887,8 @@ class DicomGeneratorService:
             )
         )
         slice_overlay = not is_stress
+        is_synthetic = getattr(config, "synthetic_mode", False)
+        burn_in = mwl_record.get("burn_in_text") if mwl_record.get("burn_in_text") is not None else is_synthetic
 
         template_series = mwl_record.get("template_series")
         template_ds = mwl_record.get("template_dataset")
@@ -870,7 +910,24 @@ class DicomGeneratorService:
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
         study_date = sps_seq.get("00400002", {}).get("Value", [time.strftime("%Y%m%d")])[0]
         study_time = sps_seq.get("00400003", {}).get("Value", [time.strftime("%H%M%S")])[0]
-        study_desc = json_e.get("00081030", {}).get("Value", [None])[0] or get_random_study_description(modality)
+        if not is_synthetic:
+            if mwl_record.get("study_description") is not None:
+                study_desc = mwl_record["study_description"]
+            elif template_series and template_series.study_description is not None:
+                study_desc = template_series.study_description
+            elif template_ds and hasattr(template_ds, "StudyDescription") and template_ds.StudyDescription:
+                study_desc = str(template_ds.StudyDescription).strip() or None
+            elif "00081030" in json_e and json_e["00081030"].get("Value"):
+                val = json_e["00081030"]["Value"][0]
+                study_desc = val if val else None
+            else:
+                study_desc = None
+        else:
+            study_desc = (
+                mwl_record.get("study_description")
+                or json_e.get("00081030", {}).get("Value", [None])[0]
+                or get_random_study_description(modality)
+            )
         patient_sex = json_e.get("00100040", {}).get("Value", ["U"])[0]
         patient_dob = json_e.get("00100030", {}).get("Value", [""])[0]
 
@@ -940,7 +997,7 @@ class DicomGeneratorService:
             },
             num_instances=num_instances,
             transfer_syntax=target_syntax,
-            burn_in_text=True,
+            burn_in_text=burn_in,
             stress=is_stress,
             include_slice_overlay=slice_overlay,
         )
@@ -974,8 +1031,34 @@ class DicomGeneratorService:
         )
 
         if slices:
+            if not is_synthetic and study_desc is None:
+                for s in slices:
+                    val = getattr(s, "StudyDescription", None)
+                    if val is not None and str(val).strip():
+                        study_desc = str(val).strip()
+                        break
             m_count = len(slices)
             datasets = []
+            template_ts = getattr(getattr(slices[0], "file_meta", None), "TransferSyntaxUID", None)
+            if not template_ts:
+                template_ts = (
+                    ImplicitVRLittleEndian if getattr(slices[0], "is_implicit_VR", True) else ExplicitVRLittleEndian
+                )
+            target_ts = resolve_transfer_syntax(target_syntax)
+            orig_ts_name = getattr(template_ts, "name", str(template_ts))
+            target_ts_name = getattr(target_ts, "name", str(target_ts))
+            t_start_series = time.perf_counter()
+
+            logger.info(
+                "generating_template_series_instances",
+                modality=modality,
+                slice_count=num_instances,
+                original_transfer_syntax=orig_ts_name,
+                ending_transfer_syntax=target_ts_name,
+                original_transfer_syntax_uid=str(template_ts),
+                ending_transfer_syntax_uid=str(target_ts),
+                requires_conversion=(template_ts != target_ts),
+            )
             if is_stress and num_instances > 1:
                 first_slice = slices[0]
                 ds1 = cls.create_dicom_from_template(
@@ -986,7 +1069,7 @@ class DicomGeneratorService:
                     study_date=study_date,
                     study_time=study_time,
                     image_number=1,
-                    burn_in_text=True,
+                    burn_in_text=burn_in,
                     rows=int(getattr(first_slice, "Rows", rows)),
                     cols=int(getattr(first_slice, "Columns", cols)),
                     institution_name=inst_name,
@@ -1010,7 +1093,13 @@ class DicomGeneratorService:
                 ds1.StudyDate = study_date
                 ds1.StudyTime = study_time
                 ds1.AccessionNumber = accession
-                ds1.StudyDescription = study_desc
+                if study_desc is not None:
+                    ds1.StudyDescription = study_desc
+                elif not is_synthetic:
+                    if hasattr(first_slice, "StudyDescription") and first_slice.StudyDescription:
+                        ds1.StudyDescription = str(first_slice.StudyDescription)
+                    elif hasattr(ds1, "StudyDescription"):
+                        del ds1.StudyDescription
                 if inst_name:
                     ds1.InstitutionName = inst_name
                 if ref_phys:
@@ -1041,6 +1130,16 @@ class DicomGeneratorService:
                         ds.file_meta.MediaStorageSOPInstanceUID = sop_inst_uid
                     ds.InstanceNumber = i
                     datasets.append(ds)
+                logger.info(
+                    "generated_template_series_instances",
+                    modality=modality,
+                    instances_count=len(datasets),
+                    original_transfer_syntax=orig_ts_name,
+                    ending_transfer_syntax=target_ts_name,
+                    original_transfer_syntax_uid=str(template_ts),
+                    ending_transfer_syntax_uid=str(target_ts),
+                    duration_seconds=round(time.perf_counter() - t_start_series, 2),
+                )
                 return datasets
 
             for i in range(1, num_instances + 1):
@@ -1053,7 +1152,7 @@ class DicomGeneratorService:
                     study_date=study_date,
                     study_time=study_time,
                     image_number=i,
-                    burn_in_text=True,
+                    burn_in_text=burn_in,
                     rows=int(getattr(slice_ds, "Rows", rows)),
                     cols=int(getattr(slice_ds, "Columns", cols)),
                     institution_name=inst_name,
@@ -1078,7 +1177,13 @@ class DicomGeneratorService:
                 ds.StudyDate = study_date
                 ds.StudyTime = study_time
                 ds.AccessionNumber = accession
-                ds.StudyDescription = study_desc
+                if study_desc is not None:
+                    ds.StudyDescription = study_desc
+                elif not is_synthetic:
+                    if hasattr(slice_ds, "StudyDescription") and slice_ds.StudyDescription:
+                        ds.StudyDescription = str(slice_ds.StudyDescription)
+                    elif hasattr(ds, "StudyDescription"):
+                        del ds.StudyDescription
                 if inst_name:
                     ds.InstitutionName = inst_name
                 if ref_phys:
@@ -1103,6 +1208,16 @@ class DicomGeneratorService:
                 ds.NumberOfStudyRelatedSeries = 1
                 ds.NumberOfStudyRelatedInstances = num_instances
                 datasets.append(ds)
+            logger.info(
+                "generated_template_series_instances",
+                modality=modality,
+                instances_count=len(datasets),
+                original_transfer_syntax=orig_ts_name,
+                ending_transfer_syntax=target_ts_name,
+                original_transfer_syntax_uid=str(template_ts),
+                ending_transfer_syntax_uid=str(target_ts),
+                duration_seconds=round(time.perf_counter() - t_start_series, 2),
+            )
             return datasets
 
         datasets = []

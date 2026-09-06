@@ -306,11 +306,33 @@ def test_mwl_generator_randomized_instance_counts():
 
 
 def test_mwl_generator_modality_aligned_study_descriptions():
-    """Verify MWL entries generate modality-appropriate study descriptions."""
+    """Verify MWL entries generate modality-appropriate study descriptions in synthetic mode."""
+    from dicom_py_mock_server.config import AppConfig
     from dicom_py_mock_server.services.generator import MODALITY_STUDY_DESCRIPTIONS
 
-    service = MwlGeneratorService()
+    service = MwlGeneratorService(AppConfig(synthetic_mode=True))
     for modality in ["CT", "MR", "US", "DX", "CR", "MG", "NM", "PT", "XA", "RF", "OT"]:
         entry = service.generate_json(custom={"modality": modality})
         desc = entry["00081030"]["Value"][0]
         assert desc in MODALITY_STUDY_DESCRIPTIONS[modality]
+
+
+def test_mwl_generator_non_synthetic_preserves_template_study_description():
+    """Verify that in non-synthetic mode, original template Study Description is preserved
+    and not swapped with mockups.
+    """
+    from dicom_py_mock_server.config import AppConfig
+    from dicom_py_mock_server.services.generator import MODALITY_STUDY_DESCRIPTIONS
+
+    service = MwlGeneratorService(AppConfig(synthetic_mode=False))
+
+    # MR template has original StudyDescription "dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"
+    mr_entry = service.add_entry(custom={"modality": "MR"})
+    assert mr_entry["study_description"] == "dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"
+    assert mr_entry["json_entry"]["00081030"]["Value"][0] == "dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"
+    assert mr_entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["MR"]
+
+    # CT template (Toshiba Aquilion) had no StudyDescription originally; should not be swapped with mockup
+    ct_entry = service.add_entry(custom={"modality": "CT"})
+    assert ct_entry["study_description"] is None or ct_entry["study_description"] == ""
+    assert ct_entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["CT"]

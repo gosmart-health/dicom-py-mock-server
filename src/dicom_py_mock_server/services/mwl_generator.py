@@ -311,6 +311,13 @@ class MwlGeneratorService:
                 series_name = (
                     f"{sub_dir.name}_{s_num}" if len(series_groups) > 1 and s_num is not None else sub_dir.name
                 )
+                orig_study_desc = None
+                for s in sorted_slices:
+                    val = getattr(s, "StudyDescription", None)
+                    if val is not None and str(val).strip():
+                        orig_study_desc = str(val).strip()
+                        break
+
                 template_series = TemplateSeriesDataset(
                     name=series_name,
                     modality=folder_modality,
@@ -320,7 +327,7 @@ class MwlGeneratorService:
                     series_number=s_num,
                     series_description=str(getattr(sample, "SeriesDescription", "")) or None,
                     study_instance_uid=str(getattr(sample, "StudyInstanceUID", "")) or None,
-                    study_description=str(getattr(sample, "StudyDescription", "")) or None,
+                    study_description=orig_study_desc,
                     rows=int(getattr(sample, "Rows", 512)),
                     columns=int(getattr(sample, "Columns", 512)),
                 )
@@ -394,6 +401,7 @@ class MwlGeneratorService:
         self,
         custom: dict[str, Any] | None = None,
         scheduled_at: datetime | None = None,
+        template_series: TemplateSeriesDataset | None = None,
     ) -> dict[str, Any] | None:
         """Generate a single MWL DICOM Web JSON entry matching mwlEntryGenerator.ts format.
 
@@ -411,6 +419,8 @@ class MwlGeneratorService:
         # Determine modality
         if custom and "modality" in custom:
             modality = str(custom["modality"]).strip().upper()
+        elif template_series:
+            modality = template_series.modality
         else:
             available_modalities = self.get_template_modalities()
             if available_modalities:
@@ -418,8 +428,20 @@ class MwlGeneratorService:
             else:
                 modality = "CT"
 
-        # Modality-aligned description and department
-        description = get_random_study_description(modality)
+        if template_series is None and modality in self.template_datasets_by_modality:
+            series_list = self.template_datasets_by_modality[modality]
+            if series_list:
+                template_series = series_list[0]
+
+        is_synthetic = getattr(self.config, "synthetic_mode", False)
+        if is_synthetic:
+            description = get_random_study_description(modality)
+        else:
+            if template_series:
+                description = template_series.study_description or ""
+            else:
+                description = get_random_study_description(modality)
+
         department_name = MODALITY_TO_DEPARTMENT.get(modality.upper(), "RAD")
 
         # Patient demographics
@@ -472,7 +494,9 @@ class MwlGeneratorService:
             modality = custom.get("modality") or modality
             accession = custom.get("accession") or accession
             custom_study_uid = custom.get("studyUid") or custom.get("study_uid")
-            description = custom.get("studyDescription") or custom.get("reason") or description
+            custom_desc = custom.get("studyDescription") or custom.get("study_description") or custom.get("reason")
+            if custom_desc is not None:
+                description = custom_desc
             department_name = custom.get("department") or department_name
             referring_name = custom.get("referringPhysician") or custom.get("referring_physician") or referring_name
             performing_name = (
@@ -496,6 +520,8 @@ class MwlGeneratorService:
         series_uid = generate_series_uid(study_uid, 1)
         sop_instance_uid = generate_sop_instance_uid(series_uid, 1)
 
+        desc_val = [description] if description else [""]
+
         json_entry = {
             "00080005": {"vr": "CS", "Value": ["ISO_IR 192"]},
             "00080018": {"vr": "UI", "Value": [sop_instance_uid]},
@@ -503,7 +529,7 @@ class MwlGeneratorService:
             "00080060": {"vr": "CS", "Value": [modality]},
             "00080080": {"vr": "LO", "Value": [institution]},
             "00080090": {"vr": "PN", "Value": [{"Alphabetic": referring_name}]},
-            "00081030": {"vr": "LO", "Value": [description]},
+            "00081030": {"vr": "LO", "Value": desc_val},
             "00081040": {"vr": "LO", "Value": [department_name]},
             "00081050": {"vr": "PN", "Value": [{"Alphabetic": performing_name}]},
             "00081060": {"vr": "PN", "Value": [{"Alphabetic": reading_name}]},
@@ -518,14 +544,14 @@ class MwlGeneratorService:
             "001021B0": {"vr": "LT", "Value": ""},
             "0020000D": {"vr": "UI", "Value": [study_uid]},
             "00321032": {"vr": "PN", "Value": [{"Alphabetic": referring_name}]},
-            "00321060": {"vr": "LO", "Value": [description]},
+            "00321060": {"vr": "LO", "Value": desc_val},
             "00321064": {
                 "vr": "SQ",
                 "Value": [
                     {
                         "00080100": {"vr": "SH", "Value": ["18804247"]},
                         "00080102": {"vr": "SH", "Value": ""},
-                        "00080104": {"vr": "LO", "Value": [description]},
+                        "00080104": {"vr": "LO", "Value": desc_val},
                     }
                 ],
             },
@@ -540,14 +566,14 @@ class MwlGeneratorService:
                         "00400002": {"vr": "DA", "Value": [start_date]},
                         "00400003": {"vr": "TM", "Value": [start_time]},
                         "00400006": {"vr": "PN", "Value": [{"Alphabetic": performing_name}]},
-                        "00400007": {"vr": "LO", "Value": [description]},
+                        "00400007": {"vr": "LO", "Value": desc_val},
                         "00400008": {
                             "vr": "SQ",
                             "Value": [
                                 {
                                     "00080100": {"vr": "SH", "Value": ["18804247"]},
                                     "00080102": {"vr": "SH", "Value": None},
-                                    "00080104": {"vr": "LO", "Value": [description]},
+                                    "00080104": {"vr": "LO", "Value": desc_val},
                                 }
                             ],
                         },
@@ -652,14 +678,17 @@ class MwlGeneratorService:
     ) -> dict[str, Any] | None:
         """Generate and add a new MWL entry to the active MWL list."""
         now = datetime.now()
-        json_entry = self.generate_json(custom=custom, scheduled_at=scheduled_at)
-        if not json_entry:
-            logger.error("cannot_add_mwl_entry_due_to_missing_template", custom=custom)
-            return None
 
-        dataset = self.json_to_dataset(json_entry)
+        # Determine modality
+        if custom and "modality" in custom:
+            modality_val = str(custom["modality"]).strip().upper()
+        else:
+            available_modalities = self.get_template_modalities()
+            if available_modalities:
+                modality_val = random.choice(available_modalities)
+            else:
+                modality_val = "CT"
 
-        modality_val = json_entry["00080060"]["Value"][0]
         templates_for_mod = self.template_datasets_by_modality.get(modality_val, [])
         if not templates_for_mod and self.template_datasets_by_modality:
             all_templates = [ts for sub in self.template_datasets_by_modality.values() for ts in sub]
@@ -671,6 +700,17 @@ class MwlGeneratorService:
             selected_template_series = templates_for_mod[idx]
         else:
             selected_template_series = None
+
+        json_entry = self.generate_json(
+            custom=custom,
+            scheduled_at=scheduled_at,
+            template_series=selected_template_series,
+        )
+        if not json_entry:
+            logger.error("cannot_add_mwl_entry_due_to_missing_template", custom=custom)
+            return None
+
+        dataset = self.json_to_dataset(json_entry)
 
         # Determine instance count
         custom_instances = custom.get("num_instances") or custom.get("numInstances") if custom else None
@@ -704,6 +744,7 @@ class MwlGeneratorService:
         dicom_template = (
             selected_template_series.slices[0] if selected_template_series and selected_template_series.slices else None
         )
+        study_desc_val = json_entry.get("00081030", {}).get("Value", [None])[0] or None
 
         entry_record = {
             "json_entry": json_entry,
@@ -716,6 +757,7 @@ class MwlGeneratorService:
             "accession": json_entry["00080050"]["Value"][0],
             "modality": modality_val,
             "study_uid": json_entry["0020000D"]["Value"][0],
+            "study_description": study_desc_val,
             "series_uid": custom_suid or generate_series_uid(json_entry["0020000D"]["Value"][0], custom_sn),
             "series_number": int(custom_sn),
             "series_description": custom_sdesc
@@ -877,8 +919,14 @@ class MwlGeneratorService:
         ds.StudyDate = sps_seq.get("00400002", {}).get("Value", [""])[0]
         ds.StudyTime = sps_seq.get("00400003", {}).get("Value", [""])[0]
 
-        if "00081030" in json_e and json_e["00081030"].get("Value"):
-            ds.StudyDescription = json_e["00081030"]["Value"][0]
+        study_desc = entry.get("study_description")
+        if study_desc is None and "00081030" in json_e and json_e["00081030"].get("Value"):
+            val = json_e["00081030"]["Value"][0]
+            study_desc = val if val else None
+        if study_desc:
+            ds.StudyDescription = study_desc
+        elif study_desc == "":
+            ds.StudyDescription = ""
 
         modality = entry.get("modality", "CT")
         ds.ModalitiesInStudy = modality

@@ -24,14 +24,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Non-Synthetic Mode (`false`, default)**:
     - Delivers complete series with the exact slice count matching the selected template series.
     - Sequentially rotates through template series per modality in round-robin fashion for Modality Worklist (MWL) entries.
-    - Selects modalities randomly from available template modalities.
-    - Preserves native template slice pixel data and image geometry; if burn-in text overlay is enabled, text is drawn directly on top of the original slice pixel matrix.
+    - Preserves the Study Description originally present in the template dataset without swapping with mock up values.
+    - Preserves native template slice pixel data and image geometry without burned-in annotations.
+    - Only in synthetic mode (`synthetic_mode=true`) are patient demographics and slice indicators burned into the image pixels.
   - **Synthetic Mode (`true`)**:
     - Generates synthetic slice volumes conforming to `min_slices`/`max_slices` configuration (or custom count requests).
     - Rotates slices cyclically across the template series (`slice_index = (i - 1) % M`).
     - Compatible with high-throughput stress mode (`GOSMART_MS_STRESS=true`): computes and compresses frame 0 once and clones the compressed payload for all remaining instances.
+- **Transfer Syntax Conversion Logging & Performance Optimizations**:
+  - Added structured logging for transfer syntax conversions in `DicomGeneratorService.apply_transfer_syntax` and `create_instances_from_mwl`, explicitly reporting `original_transfer_syntax`, `ending_transfer_syntax`, `original_transfer_syntax_uid`, and `ending_transfer_syntax_uid`.
+  - Added series-level lifecycle logging (`generating_template_series_instances`, `generated_template_series_instances`) reporting modality, total slices, transfer syntax transition, conversion necessity, and generation duration in seconds.
+  - Added `transfer_syntax` and `transfer_syntax_uid` metadata attributes to `dicom_c_store_instance_pushed` events during C-MOVE SCP storage sub-operations.
+  - Optimized template slice transcoding: eliminated redundant NumPy `pixel_array` decompression and byte buffer re-packing when slices do not require burned-in annotations, and streamlined uncompressed Little Endian byte transfers.
+- **WADO-RS In-Memory Caching & Fast Metadata Extraction**:
+  - Implemented an LRU in-memory study cache (`_study_cache`) in `DicomWebService` keyed on `(study_instance_uid, target_transfer_syntax, is_stress)` with a capacity of 50 studies.
+  - Eliminated redundant series generation and pixel transcoding on repetitive WADO-RS instance, frame, and rendered view requests for the same study, dropping subsequent retrieval latencies from ~3.3 seconds to under 1 microsecond.
+  - Optimized WADO-RS metadata extraction (`get_metadata`) to shallow-copy datasets with pixel tag filtering `(0x7FE0, 0x0010)` and `(0x7FE0, 0x0001)`, avoiding expensive deep copies and eliminating pixel compression cycles for metadata-only requests.
+  - Added cache management methods `clear_cache(study_uid=None)` with backwards-compatible alias `clear_stress_cache()`.
+  - Added automated test case `test_wado_study_cache_and_transcoder_reuse` verifying zero repeated transcoding invocations across instance queries.
 - **Automated Multi-Slice Template Test Suite**:
-  - Added `tests/test_template_datasets.py` with 6 test cases verifying root file rejection, mixed modality rejection, non-image object filtering, series grouping & slice sorting, non-synthetic exact delivery with sequential assignment, and synthetic cyclic rotation with stress cloning.
+  - Added `tests/test_template_datasets.py` with 7 test cases verifying root file rejection, mixed modality rejection, non-image object filtering, series grouping & slice sorting, non-synthetic exact delivery with sequential assignment, synthetic cyclic rotation with stress cloning, and transfer syntax conversion logging with direct passthrough verification.
 
 ## [0.2.3] - 2026-09-04
 

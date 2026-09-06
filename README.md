@@ -26,7 +26,7 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 3. **DICOM SCP Services**: Built-in DICOM C-FIND, C-MOVE/GET, and MWL (Modality Worklist) SCP network listeners.
 4. **Modality Worklist (MWL) Synthesis**: Automated business-hours MWL entry creation and retention window management.
 5. **MCP Integration Provisioning**: Exposes server capabilities to AI Assistants (AGY, Claude Desktop, Cursor, etc.) over Server-Sent Events (SSE) transport.
-6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice DICOM datasets from subdirectories under `templates/` (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`) with dynamic modality detection and folder purity validation. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), the server delivers exact series slice counts with round-robin template picking and pixel preservation. In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), slices rotate cyclically conforming to configurable slice ranges. Supported compression syntaxes include `JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, and `IMPLICIT_VR_LITTLE_ENDIAN`.
+6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice DICOM datasets from subdirectories under `templates/` (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`) with dynamic modality detection and folder purity validation. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), the server delivers exact series slice counts with round-robin template picking, preserves the template's original Study Description (without swapping with mock up values), and maintains pixel preservation. In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), slices rotate cyclically conforming to configurable slice ranges and generate synthetic study descriptions. Supported compression syntaxes include `JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, and `IMPLICIT_VR_LITTLE_ENDIAN`.
 
 ---
 
@@ -246,11 +246,13 @@ templates/
 ### 2. Non-Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE=false`, Default)
 - **Exact Slice Delivery**: The server delivers the complete DICOM series for the exact slice count present in the selected template series.
 - **Round-Robin Template Selection**: Available modalities are selected randomly. When multiple template series exist for a modality (e.g. two CT series or multiple MR series), the server sequentially cycles through them in round-robin order for subsequent MWL entries.
-- **Pixel Data Preservation**: Original pixel data and geometry from each slice are preserved. When `burn_in_text=True` is enabled, patient demographics and slice indicators are rendered directly on top of the original slice pixel matrix.
+- **Pixel Data Preservation & No Burn-In**: Original pixel data and geometry from each slice are preserved untouched without burned-in annotations.
+- **Transfer Syntax Transcoding**: If the requested transfer syntax differs from the template series, slices are transcoded on-the-fly without altering image pixels.
 
 ### 3. Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE=true`)
 - **Configurable Slice Ranges**: Honors `GOSMART_MS_MIN_SLICES` and `GOSMART_MS_MAX_SLICES` (or custom per-request slice counts).
 - **Cyclic Slice Rotation**: When the requested slice count differs from the template slice count, slices cycle sequentially (`slice_index = (i - 1) % M`).
+- **Burn-In Metadata Annotations**: Patient demographics and slice indicators are burned into the image pixels.
 - **Stress Mode Compatibility**: When combined with `GOSMART_MS_STRESS=true`, the first slice is computed and compressed once, and the precomputed compressed payload is reused across all remaining instances in the series.
 
 ---

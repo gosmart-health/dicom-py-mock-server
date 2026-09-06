@@ -37,6 +37,8 @@ class TemplateSeriesDataset:
             "series_instance_uid": self.series_instance_uid,
             "series_number": self.series_number,
             "series_description": self.series_description,
+            "study_instance_uid": self.study_instance_uid,
+            "study_description": self.study_description,
             "rows": self.rows,
             "columns": self.columns,
             "source_dir": str(self.source_dir) if self.source_dir else None,
