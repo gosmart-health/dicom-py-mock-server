@@ -629,3 +629,66 @@ def test_wado_accept_header_semicolon_and_comma_separation(client):
     assert resp_comma.status_code == 200
     dsets_comma = _extract_multipart_dicom_parts(resp_comma.headers["content-type"], resp_comma.content)
     assert str(dsets_comma[0].file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.50"
+
+
+def test_wado_study_cache_and_transcoder_reuse(client, monkeypatch):
+    """Verify WADO study caching avoids redundant transcoding on repetitive instance requests."""
+    from dicom_py_mock_server.api.dicomweb_routes import dicomweb_service
+    from dicom_py_mock_server.services.generator import DicomGeneratorService
+
+    dicomweb_service.clear_cache()
+    studies = client.get("/dicomweb/studies").json()
+    study_uid = studies[0]["0020000D"]["Value"][0]
+
+    # Retrieve instances list
+    inst_list_resp = client.get(f"/dicomweb/studies/{study_uid}/instances")
+    assert inst_list_resp.status_code == 200
+    inst_list = inst_list_resp.json()
+    assert len(inst_list) >= 1
+
+    series_uid = inst_list[0]["0020000E"]["Value"][0]
+    sop_uid_0 = inst_list[0]["00080018"]["Value"][0]
+
+    ts_uid = "1.2.840.10008.1.2.1"
+    headers = {"Accept": f'multipart/related; type="application/dicom"; transfer-syntax="{ts_uid}"'}
+
+    # First instance request populates the cache
+    resp1 = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid_0}",
+        headers=headers,
+    )
+    assert resp1.status_code == 200
+    assert (study_uid, ts_uid, False) in dicomweb_service._study_cache
+
+    # Track calls to create_instances_from_mwl and apply_transfer_syntax
+    call_counts = {"create": 0, "transcode": 0}
+    orig_create = DicomGeneratorService.create_instances_from_mwl
+    orig_transcode = DicomGeneratorService.apply_transfer_syntax
+
+    def counting_create(*args, **kwargs):
+        call_counts["create"] += 1
+        return orig_create(*args, **kwargs)
+
+    def counting_transcode(*args, **kwargs):
+        call_counts["transcode"] += 1
+        return orig_transcode(*args, **kwargs)
+
+    monkeypatch.setattr(DicomGeneratorService, "create_instances_from_mwl", counting_create)
+    monkeypatch.setattr(DicomGeneratorService, "apply_transfer_syntax", counting_transcode)
+
+    # Subsequent instance requests for the same study & transfer syntax must HIT the cache
+    for inst in inst_list[:3]:
+        sop_uid = inst["00080018"]["Value"][0]
+        resp = client.get(
+            f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}",
+            headers=headers,
+        )
+        assert resp.status_code == 200
+
+    # Cache hits mean ZERO new creations or transcodings occurred
+    assert call_counts["create"] == 0
+    assert call_counts["transcode"] == 0
+
+    # Clear cache test
+    dicomweb_service.clear_cache(study_uid=study_uid)
+    assert (study_uid, ts_uid, False) not in dicomweb_service._study_cache

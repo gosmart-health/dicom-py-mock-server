@@ -8,6 +8,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.3.0] - 2026-09-06
+
+### Changed
+- **Template Directory Structure Requirement (Breaking Change)**:
+  - Standalone DICOM files directly located in the `templates/` root folder are no longer accepted and will raise a `ValueError` to prevent ambiguity.
+  - Multi-slice templates must now be organized into dedicated subfolders per series/modality (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`).
+
+### Added
+- **Multi-Slice CT & MR Template Loading**:
+  - Added multi-slice DICOM template loading from dedicated subfolders under `templates/` (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`).
+  - Implemented strict folder structure validation: standalone files directly in `templates/` root are strictly rejected with `ValueError` to prevent ambiguity.
+  - Implemented dynamic modality discovery from DICOM tag `(0008, 0060)` rather than directory names.
+  - Enforced folder modality purity: subfolders containing datasets with mixed modalities raise a descriptive `ValueError`.
+  - Added automatic non-image object exclusion: non-pixel objects, Presentation States (`PR`), Structured Reports (`SR`), and private raw objects (`XX_*`) are safely excluded from image slice series.
+  - Added series grouping and deterministic slice sorting: DICOM instances within each template series are grouped by `SeriesInstanceUID` and sorted by `InstanceNumber`, `SliceLocation`, and image position `z` coordinate.
+- **Template Study Description Preservation in Non-Synthetic Mode**:
+  - In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), preserved the original `StudyDescription` loaded from template datasets (such as `"dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"` in `templates/MR`) across Modality Worklist (MWL) entries (`json_entry`, `dataset`, `entry_record`), C-FIND query responses, and synthesized DICOM SOP instances (`create_instances_from_mwl`).
+  - Prohibited swapping native template Study Descriptions with mockup/random descriptions from `MODALITY_STUDY_DESCRIPTIONS` when running in non-synthetic mode.
+  - For templates lacking an original `StudyDescription` (e.g. `templates/Toshiba_Aquilion`), prevented injecting mockup study descriptions, keeping `StudyDescription` unset or empty as in the source template.
+  - Supported explicit `custom["studyDescription"]` overrides in MWL requests while defaulting to the template dataset's native value.
+  - In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), maintained standard synthetic generation of modality-aligned study descriptions when omitted.
+  - Enhanced multi-slice scanning across all slices in `MwlGeneratorService._load_templates` to capture any present `StudyDescription` into `TemplateSeriesDataset.study_description`.
+  - Added `study_instance_uid` and `study_description` fields to `TemplateSeriesDataset.to_dict()`.
+- **Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE`)**:
+  - Implemented configurable synthetic mode via `GOSMART_MS_SYNTHETIC_MODE=true/false` (or alias `SYNTHETIC_MODE`, default `false`).
+  - **Non-Synthetic Mode (`false`, default)**:
+    - Delivers complete series with the exact slice count matching the selected template series.
+    - Sequentially rotates through template series per modality in round-robin fashion for Modality Worklist (MWL) entries.
+    - Preserves the Study Description originally present in the template dataset without swapping with mock up values.
+    - Preserves native template slice pixel data and image geometry without burned-in annotations.
+    - Only in synthetic mode (`synthetic_mode=true`) are patient demographics and slice indicators burned into the image pixels.
+  - **Synthetic Mode (`true`)**:
+    - Generates synthetic slice volumes conforming to `min_slices`/`max_slices` configuration (or custom count requests).
+    - Rotates slices cyclically across the template series (`slice_index = (i - 1) % M`).
+    - Generates modality-aligned synthetic study descriptions when omitted.
+    - Compatible with high-throughput stress mode (`GOSMART_MS_STRESS=true`): computes and compresses frame 0 once and clones the compressed payload for all remaining instances.
+- **Transfer Syntax Conversion Logging & Performance Optimizations**:
+  - Added structured logging for transfer syntax conversions in `DicomGeneratorService.apply_transfer_syntax` and `create_instances_from_mwl`, explicitly reporting `original_transfer_syntax`, `ending_transfer_syntax`, `original_transfer_syntax_uid`, and `ending_transfer_syntax_uid`.
+  - Added series-level lifecycle logging (`generating_template_series_instances`, `generated_template_series_instances`) reporting modality, total slices, transfer syntax transition, conversion necessity, and generation duration in seconds.
+  - Added `transfer_syntax` and `transfer_syntax_uid` metadata attributes to `dicom_c_store_instance_pushed` events during C-MOVE SCP storage sub-operations.
+  - Optimized template slice transcoding: eliminated redundant NumPy `pixel_array` decompression and byte buffer re-packing when slices do not require burned-in annotations, and streamlined uncompressed Little Endian byte transfers.
+- **WADO-RS In-Memory Caching & Fast Metadata Extraction**:
+  - Implemented an LRU in-memory study cache (`_study_cache`) in `DicomWebService` keyed on `(study_instance_uid, target_transfer_syntax, is_stress)` with a capacity of 50 studies.
+  - Eliminated redundant series generation and pixel transcoding on repetitive WADO-RS instance, frame, and rendered view requests for the same study, dropping subsequent retrieval latencies from ~3.3 seconds to under 1 microsecond.
+  - Optimized WADO-RS metadata extraction (`get_metadata`) to shallow-copy datasets with pixel tag filtering `(0x7FE0, 0x0010)` and `(0x7FE0, 0x0001)`, avoiding expensive deep copies and eliminating pixel compression cycles for metadata-only requests.
+  - Added cache management methods `clear_cache(study_uid=None)` with backwards-compatible alias `clear_stress_cache()`.
+  - Added automated test case `test_wado_study_cache_and_transcoder_reuse` verifying zero repeated transcoding invocations across instance queries.
+- **Automated Multi-Slice Template Test Suite**:
+  - Added `tests/test_template_datasets.py` with 9 test cases verifying root file rejection, mixed modality rejection, non-image object filtering, series grouping & slice sorting, non-synthetic exact delivery with sequential assignment, synthetic cyclic rotation with stress cloning, transfer syntax conversion logging with direct passthrough verification, non-synthetic Study Description preservation without mockup swapping, and repository template behavior (MR preservation vs CT mockup omission).
+
 ## [0.2.3] - 2026-09-04
 
 ### Added

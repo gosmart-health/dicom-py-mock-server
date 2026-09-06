@@ -3,6 +3,7 @@
 import io
 import re
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -11,9 +12,14 @@ import pydicom
 import structlog
 from PIL import Image
 from pydicom.dataset import Dataset
+from pydicom.uid import JPEGBaseline8Bit
 
 from dicom_py_mock_server.config import config
-from dicom_py_mock_server.services.generator import TRANSFER_SYNTAX_MAP, DicomGeneratorService
+from dicom_py_mock_server.services.generator import (
+    TRANSFER_SYNTAX_MAP,
+    DicomGeneratorService,
+    resolve_transfer_syntax,
+)
 from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
 
 logger = structlog.get_logger(__name__)
@@ -33,11 +39,25 @@ class DicomWebService:
         self.storage_dir = Path(storage_dir or config.storage_dir)
         self._study_transfer_syntaxes: dict[str, str] = {}
         self._stress_study_cache: dict[str, list[Dataset]] = {}
+        self._study_cache: OrderedDict[tuple[str, str, bool], list[Dataset]] = OrderedDict()
+        self._study_cache_max_size: int = 50
+
+    def clear_cache(self, study_uid: str | None = None) -> None:
+        """Clear cached transfer syntaxes and study instances."""
+        if study_uid:
+            keys_to_remove = [k for k in self._study_cache if k[0] == str(study_uid)]
+            for k in keys_to_remove:
+                self._study_cache.pop(k, None)
+            self._study_transfer_syntaxes.pop(study_uid, None)
+            self._stress_study_cache.pop(study_uid, None)
+        else:
+            self._study_cache.clear()
+            self._study_transfer_syntaxes.clear()
+            self._stress_study_cache.clear()
 
     def clear_stress_cache(self) -> None:
-        """Clear cached transfer syntaxes and study instances for stress mode."""
-        self._study_transfer_syntaxes.clear()
-        self._stress_study_cache.clear()
+        """Clear cached transfer syntaxes and study instances for stress mode and WADO requests."""
+        self.clear_cache()
 
     def _get_stored_files(self) -> list[Path]:
         """Get all stored .dcm files on disk."""
@@ -463,7 +483,7 @@ class DicomWebService:
 
         If num_instances is specified, limits or configures the number of slices to generate/retrieve (up to 1024).
         Otherwise, follows the actual number of slices generated for the study without arbitrary clamping.
-        In stress mode, uses the transfer syntax from the first image request and reuses the single compressed frame.
+        Cached across repetitive WADO requests for the same study/series to avoid redundant transcoding.
         """
         is_stress = stress if stress is not None else getattr(config, "stress", False)
 
@@ -481,6 +501,40 @@ class DicomWebService:
                 return cached
         else:
             effective_ts = requested_transfer_syntax
+
+        # Determine canonical transfer syntax UID for cache key
+        lookup_ts = effective_ts
+        if not lookup_ts and self.mwl_service:
+            matched_entries = self.mwl_service.find_entries(study_uid=study_uid)
+            if matched_entries and matched_entries[0].get("transfer_syntax"):
+                lookup_ts = matched_entries[0].get("transfer_syntax")
+        if not lookup_ts:
+            lookup_ts = getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
+
+        target_ts_uid = str(resolve_transfer_syntax(lookup_ts))
+        cache_key = (str(study_uid), target_ts_uid, is_stress)
+
+        if cache_key in self._study_cache:
+            cached = self._study_cache[cache_key]
+            if num_instances is None or len(cached) >= num_instances:
+                self._study_cache.move_to_end(cache_key)
+                logger.debug(
+                    "wado_study_cache_hit",
+                    study_uid=study_uid,
+                    transfer_syntax=target_ts_uid,
+                    cached_instances=len(cached),
+                    requested_instances=num_instances,
+                )
+                if num_instances is not None and len(cached) > num_instances:
+                    return cached[:num_instances]
+                return cached
+
+        logger.debug(
+            "wado_study_cache_miss",
+            study_uid=study_uid,
+            transfer_syntax=target_ts_uid,
+            requested_instances=num_instances,
+        )
 
         datasets: list[Dataset] = []
 
@@ -505,6 +559,12 @@ class DicomWebService:
 
         if is_stress and datasets:
             self._stress_study_cache[study_uid] = datasets
+
+        if datasets:
+            self._study_cache[cache_key] = datasets
+            self._study_cache.move_to_end(cache_key)
+            if len(self._study_cache) > self._study_cache_max_size:
+                self._study_cache.popitem(last=False)
 
         if num_instances is not None and len(datasets) > num_instances:
             datasets = datasets[:num_instances]
@@ -555,18 +615,31 @@ class DicomWebService:
     @staticmethod
     def get_metadata(datasets: list[Dataset], requested_transfer_syntax: str | None = None) -> list[dict[str, Any]]:
         """Extract metadata (omitting PixelData and bulk data) in DICOM JSON format."""
-        import copy
-
         metadata_list = []
         for ds in datasets:
-            ds_copy = copy.deepcopy(ds)
+            # Fast copy omitting PixelData to avoid duplicating large byte arrays
+            if (0x7FE0, 0x0010) in ds or (0x7FE0, 0x0001) in ds:
+                ds_copy = Dataset({k: v for k, v in ds.items() if k not in ((0x7FE0, 0x0010), (0x7FE0, 0x0001))})
+                if hasattr(ds, "file_meta"):
+                    ds_copy.file_meta = ds.file_meta
+            else:
+                ds_copy = Dataset(ds)
+                if hasattr(ds, "file_meta"):
+                    ds_copy.file_meta = ds.file_meta
+
             if requested_transfer_syntax:
-                ds_copy = DicomGeneratorService.apply_transfer_syntax(ds_copy, requested_transfer_syntax)
-            # Remove pixel data element (0x7FE0, 0x0010) and pixel data provider url
-            if (0x7FE0, 0x0010) in ds_copy:
-                del ds_copy[0x7FE0, 0x0010]
-            if (0x7FE0, 0x0001) in ds_copy:
-                del ds_copy[0x7FE0, 0x0001]
+                target_uid = resolve_transfer_syntax(requested_transfer_syntax)
+                if hasattr(ds_copy, "file_meta"):
+                    ds_copy.file_meta.TransferSyntaxUID = target_uid
+                if target_uid == JPEGBaseline8Bit:
+                    ds_copy.BitsAllocated = 8
+                    ds_copy.BitsStored = 8
+                    ds_copy.HighBit = 7
+                    ds_copy.WindowCenter = 128
+                    ds_copy.WindowWidth = 256
+                    ds_copy.PhotometricInterpretation = "MONOCHROME2"
+                    ds_copy.SamplesPerPixel = 1
+                    ds_copy.PixelRepresentation = 0
             metadata_list.append(ds_copy.to_json_dict(suppress_invalid_tags=True))
         return metadata_list
 

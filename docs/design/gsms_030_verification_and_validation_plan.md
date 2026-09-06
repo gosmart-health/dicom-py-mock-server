@@ -27,6 +27,8 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
   - Verify C-STORE CSV audit record formatting, throughput rate calculations (`kb/s`), and UTC timestamp handling.
   - Verify deterministic ITU-T X.667 / ISO/IEC 9834-8 `2.25.<u128>` UID generation, version 5 (SHA-1) and version 3 (MD5) bitfields, string length <= 64, hierarchical seeding (Study -> Series -> Instance), and PHI protection.
   - Verify raw-first image generation with test patterns and burned-in text across all transfer syntaxes (RAW, JPEG, JPEG2000 Lossless, JPEG2000 Lossy, RLE), UID retention across compression, and presentation context advertisement in SCP/SCU services.
+  - Verify multi-slice template directory scanning, strict root file rejection (`ValueError`), folder modality purity enforcement (`ValueError`), non-image object filtering (`PR`, `SR`, missing `PixelData`), series grouping, and deterministic slice sorting.
+  - Verify non-synthetic exact slice count delivery, sequential round-robin template picking per modality, original template Study Description preservation without mockup swapping, original pixel data preservation with direct burn-in annotation, and synthetic mode cyclic slice rotation with stress-mode single-frame compression cloning (`test_template_datasets.py`).
 
 ### 2.2 API & Integration Testing (Level 2)
 * **Scope:** FastAPI route handlers, Uvicorn app initialization, auto-push scheduler, DICOMweb QIDO-RS/WADO-RS/WADO-URI handlers, and endpoint responses.

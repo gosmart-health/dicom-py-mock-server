@@ -51,9 +51,14 @@ def test_mwl_generator_default_templates(tmp_path):
 
 
 def test_mwl_generator_template_file_loading(tmp_path):
-    # Create template JSON files
-    (tmp_path / "CT.json").write_text(json.dumps({"modality": "CT", "desc": "CT Template"}), encoding="utf-8")
-    (tmp_path / "PET.json").write_text(json.dumps({"modality": "PET", "desc": "PET Template"}), encoding="utf-8")
+    # Create template JSON files inside subfolders (subfolders are required)
+    ct_dir = tmp_path / "ct_dir"
+    ct_dir.mkdir()
+    (ct_dir / "CT.json").write_text(json.dumps({"modality": "CT", "desc": "CT Template"}), encoding="utf-8")
+
+    pet_dir = tmp_path / "pet_dir"
+    pet_dir.mkdir()
+    (pet_dir / "PET.json").write_text(json.dumps({"modality": "PET", "desc": "PET Template"}), encoding="utf-8")
 
     cfg = AppConfig(templates_path=str(tmp_path))
     service = MwlGeneratorService(app_config=cfg)
@@ -67,23 +72,32 @@ def test_mwl_generator_template_file_loading(tmp_path):
 
 def test_mwl_generator_dicom_template_scanning(tmp_path):
     import shutil
+    from pathlib import Path
 
     from pydicom.dataset import FileDataset, FileMetaDataset
     from pydicom.uid import ExplicitVRLittleEndian, MRImageStorage, generate_uid
 
-    # Use actual template file ./templates/CT_small.dcm
-    shutil.copy("templates/CT_small.dcm", tmp_path / "CT_small.dcm")
+    # Copy real CT template slice into subfolder
+    ct_src = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    ct_dir = tmp_path / "ct_series"
+    ct_dir.mkdir()
+    shutil.copy(ct_src, ct_dir / "slice.dcm")
 
-    # Create second modality DICOM file (.dcm) for MR
+    # Create MR series in separate subfolder
+    mr_dir = tmp_path / "mr_series"
+    mr_dir.mkdir()
     file_meta_mr = FileMetaDataset()
     file_meta_mr.MediaStorageSOPClassUID = MRImageStorage
     file_meta_mr.MediaStorageSOPInstanceUID = generate_uid()
     file_meta_mr.TransferSyntaxUID = ExplicitVRLittleEndian
-    ds_mr = FileDataset(str(tmp_path / "sample_mr.dcm"), {}, file_meta=file_meta_mr, preamble=b"\x00" * 128)
+    ds_mr = FileDataset(str(mr_dir / "sample_mr.dcm"), {}, file_meta=file_meta_mr, preamble=b"\x00" * 128)
     ds_mr.Modality = "MR"
     ds_mr.SOPClassUID = MRImageStorage
     ds_mr.SOPInstanceUID = file_meta_mr.MediaStorageSOPInstanceUID
-    ds_mr.save_as(tmp_path / "sample_mr.dcm", enforce_file_format=True)
+    ds_mr.Rows = 256
+    ds_mr.Columns = 256
+    ds_mr.PixelData = b"\x00" * (256 * 256 * 2)
+    ds_mr.save_as(mr_dir / "sample_mr.dcm", enforce_file_format=True)
 
     cfg = AppConfig(templates_path=str(tmp_path))
     service = MwlGeneratorService(app_config=cfg)
@@ -97,18 +111,21 @@ def test_mwl_generator_dicom_template_scanning(tmp_path):
 
     assert len(ct_templates) == 1
     assert ct_templates[0].Modality == "CT"
-    assert ct_templates[0].Rows == 128
-    assert ct_templates[0].Columns == 128
-    assert getattr(ct_templates[0], "PatientName", "") == "CompressedSamples^CT1"
+    assert ct_templates[0].Rows == 512
+    assert ct_templates[0].Columns == 512
     assert len(mr_templates) == 1
     assert mr_templates[0].Modality == "MR"
 
 
 def test_mwl_generator_no_modality_fallback_when_template_present(tmp_path):
     import shutil
+    from pathlib import Path
 
-    # Copy ONLY the CT_small.dcm template file
-    shutil.copy("templates/CT_small.dcm", tmp_path / "CT_small.dcm")
+    # Copy ONLY the CT template file into a subfolder
+    ct_src = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    ct_dir = tmp_path / "ct_series"
+    ct_dir.mkdir()
+    shutil.copy(ct_src, ct_dir / "slice.dcm")
 
     cfg = AppConfig(templates_path=str(tmp_path))
     service = MwlGeneratorService(app_config=cfg)
@@ -123,20 +140,23 @@ def test_mwl_generator_no_modality_fallback_when_template_present(tmp_path):
 
 
 def test_mwl_generator_workspace_template_loading():
-    """Verify MwlGeneratorService loads the real workspace ./templates/CT_small.dcm."""
+    """Verify MwlGeneratorService loads the real workspace templates."""
     cfg = AppConfig(templates_path="./templates")
     service = MwlGeneratorService(app_config=cfg)
 
     modalities = service.get_template_modalities()
-    assert modalities == ["CT"]
+    assert set(modalities) == {"CT", "MR"}
 
     ct_templates = service.get_dicom_templates_by_modality("CT")
-    assert len(ct_templates) == 1
+    assert len(ct_templates) >= 1
     ds = ct_templates[0]
     assert ds.Modality == "CT"
-    assert ds.Rows == 128
-    assert ds.Columns == 128
-    assert getattr(ds, "PatientName", "") == "CompressedSamples^CT1"
+    assert ds.Rows == 512
+    assert ds.Columns == 512
+
+    mr_templates = service.get_dicom_templates_by_modality("MR")
+    assert len(mr_templates) >= 1
+    assert mr_templates[0].Modality == "MR"
 
 
 def test_mwl_generate_json_and_dataset():
@@ -268,8 +288,10 @@ def test_seed_initial_entries():
 
 
 def test_mwl_generator_randomized_instance_counts():
-    """Verify that generated MWL entries have randomized instance counts between min_slices and max_slices."""
-    cfg = AppConfig(min_slices=8, max_slices=24)
+    """Verify that in synthetic mode, generated MWL entries have randomized instance counts
+    between min_slices and max_slices.
+    """
+    cfg = AppConfig(min_slices=8, max_slices=24, synthetic_mode=True)
     service = MwlGeneratorService(app_config=cfg)
 
     counts = set()
@@ -284,11 +306,33 @@ def test_mwl_generator_randomized_instance_counts():
 
 
 def test_mwl_generator_modality_aligned_study_descriptions():
-    """Verify MWL entries generate modality-appropriate study descriptions."""
+    """Verify MWL entries generate modality-appropriate study descriptions in synthetic mode."""
+    from dicom_py_mock_server.config import AppConfig
     from dicom_py_mock_server.services.generator import MODALITY_STUDY_DESCRIPTIONS
 
-    service = MwlGeneratorService()
+    service = MwlGeneratorService(AppConfig(synthetic_mode=True))
     for modality in ["CT", "MR", "US", "DX", "CR", "MG", "NM", "PT", "XA", "RF", "OT"]:
         entry = service.generate_json(custom={"modality": modality})
         desc = entry["00081030"]["Value"][0]
         assert desc in MODALITY_STUDY_DESCRIPTIONS[modality]
+
+
+def test_mwl_generator_non_synthetic_preserves_template_study_description():
+    """Verify that in non-synthetic mode, original template Study Description is preserved
+    and not swapped with mockups.
+    """
+    from dicom_py_mock_server.config import AppConfig
+    from dicom_py_mock_server.services.generator import MODALITY_STUDY_DESCRIPTIONS
+
+    service = MwlGeneratorService(AppConfig(synthetic_mode=False))
+
+    # MR template has original StudyDescription "dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"
+    mr_entry = service.add_entry(custom={"modality": "MR"})
+    assert mr_entry["study_description"] == "dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"
+    assert mr_entry["json_entry"]["00081030"]["Value"][0] == "dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"
+    assert mr_entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["MR"]
+
+    # CT template (Toshiba Aquilion) had no StudyDescription originally; should not be swapped with mockup
+    ct_entry = service.add_entry(custom={"modality": "CT"})
+    assert ct_entry["study_description"] is None or ct_entry["study_description"] == ""
+    assert ct_entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["CT"]

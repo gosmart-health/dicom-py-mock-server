@@ -174,15 +174,17 @@ def wado_get_study_metadata(
 ):
     """WADO-RS: Retrieve metadata for all instances in a study as DICOM JSON."""
     req_slices = limit or slices or count or num_instances or num_instances_snake
-    datasets = dicomweb_service.get_study_datasets(study_instance_uid, num_instances=req_slices)
-    if not datasets:
-        raise HTTPException(status_code=404, detail="Study not found")
-
     req_ts = dicomweb_service.parse_transfer_syntax_header(
         accept_header=accept,
         query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
         direct_header=transfer_syntax_header or x_transfer_syntax_header,
     )
+    datasets = dicomweb_service.get_study_datasets(
+        study_instance_uid, num_instances=req_slices, requested_transfer_syntax=req_ts
+    )
+    if not datasets:
+        raise HTTPException(status_code=404, detail="Study not found")
+
     metadata = dicomweb_service.get_metadata(datasets, requested_transfer_syntax=req_ts)
     return JSONResponse(content=metadata, media_type="application/dicom+json")
 
@@ -211,15 +213,17 @@ def wado_get_series_metadata(
 ):
     """WADO-RS: Retrieve metadata for all instances in a series as DICOM JSON."""
     req_slices = limit or slices or count or num_instances or num_instances_snake
-    datasets = dicomweb_service.get_series_datasets(study_instance_uid, series_instance_uid, num_instances=req_slices)
-    if not datasets:
-        raise HTTPException(status_code=404, detail="Series not found")
-
     req_ts = dicomweb_service.parse_transfer_syntax_header(
         accept_header=accept,
         query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
         direct_header=transfer_syntax_header or x_transfer_syntax_header,
     )
+    datasets = dicomweb_service.get_series_datasets(
+        study_instance_uid, series_instance_uid, num_instances=req_slices, requested_transfer_syntax=req_ts
+    )
+    if not datasets:
+        raise HTTPException(status_code=404, detail="Series not found")
+
     metadata = dicomweb_service.get_metadata(datasets, requested_transfer_syntax=req_ts)
     return JSONResponse(content=metadata, media_type="application/dicom+json")
 
@@ -248,15 +252,17 @@ def wado_get_instance_metadata(
     transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
 ):
     """WADO-RS: Retrieve metadata for a single instance as DICOM JSON."""
-    dataset = dicomweb_service.get_instance_dataset(study_instance_uid, series_instance_uid, sop_instance_uid)
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Instance not found")
-
     req_ts = dicomweb_service.parse_transfer_syntax_header(
         accept_header=accept,
         query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
         direct_header=transfer_syntax_header or x_transfer_syntax_header,
     )
+    dataset = dicomweb_service.get_instance_dataset(
+        study_instance_uid, series_instance_uid, sop_instance_uid, requested_transfer_syntax=req_ts
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
     metadata = dicomweb_service.get_metadata([dataset], requested_transfer_syntax=req_ts)
     return JSONResponse(content=metadata, media_type="application/dicom+json")
 
@@ -365,7 +371,7 @@ def wado_retrieve_instance(
 
     # Check if client explicitly wants a direct non-multipart application/dicom response
     if accept and "multipart" not in accept.lower() and "application/dicom" in accept.lower():
-        if req_ts:
+        if req_ts and getattr(getattr(dataset, "file_meta", None), "TransferSyntaxUID", None) != req_ts:
             dataset = DicomGeneratorService.apply_transfer_syntax(dataset, req_ts)
         buf = io.BytesIO()
         dataset.save_as(buf, enforce_file_format=True)
@@ -428,10 +434,6 @@ def wado_retrieve_frames(
     transfer_syntax_snake: str | None = Query(None, alias="transfer_syntax"),
 ):
     """WADO-RS: Retrieve pixel frame bytes for specified frame numbers with dynamic transfer syntax negotiation."""
-    dataset = dicomweb_service.get_instance_dataset(study_instance_uid, series_instance_uid, sop_instance_uid)
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Instance not found")
-
     try:
         frames = [int(f.strip()) for f in frame_list.split(",") if f.strip()]
     except ValueError:
@@ -442,6 +444,11 @@ def wado_retrieve_frames(
         query_param=transfer_syntax or transfer_syntax_hyphen or transfer_syntax_snake,
         direct_header=transfer_syntax_header or x_transfer_syntax_header,
     )
+    dataset = dicomweb_service.get_instance_dataset(
+        study_instance_uid, series_instance_uid, sop_instance_uid, requested_transfer_syntax=req_ts
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Instance not found")
 
     raw_frames, part_content_type = dicomweb_service.get_encoded_frames(
         dataset, frames, requested_transfer_syntax=req_ts
