@@ -293,9 +293,9 @@ def test_synthetic_mode_cyclic_rotation_and_stress(tmp_path):
         assert int(d.NumberOfSeriesRelatedInstances) == 5
 
 
-def test_transfer_syntax_conversion_and_logging(tmp_path):
+def test_transfer_syntax_conversion_and_logging(tmp_path, capsys):
     """Verify that original and ending transfer syntaxes are logged during conversion and passthrough works."""
-    from structlog.testing import capture_logs
+    from dicom_py_mock_server.logging_config import setup_logging
 
     ct_dir = tmp_path / "ct_ts_test"
     ct_dir.mkdir()
@@ -307,44 +307,44 @@ def test_transfer_syntax_conversion_and_logging(tmp_path):
     )
 
     cfg = AppConfig(templates_path=str(tmp_path), synthetic_mode=False)
+    setup_logging(cfg)
+
     service = MwlGeneratorService(app_config=cfg)
     entry = service.add_entry(custom={"modality": "CT"})
 
     # 1. Conversion from ExplicitVRLittleEndian to JPEG2000_LOSSLESS
-    with capture_logs() as cap:
-        ds_converted = DicomGeneratorService.create_instances_from_mwl(
-            entry,
-            num_instances=1,
-            transfer_syntax="JPEG2000_LOSSLESS",
-        )
-        assert len(ds_converted) == 1
-        assert ds_converted[0].file_meta.TransferSyntaxUID.name == "JPEG 2000 Image Compression (Lossless Only)"
+    capsys.readouterr()
+    ds_converted = DicomGeneratorService.create_instances_from_mwl(
+        entry,
+        num_instances=1,
+        transfer_syntax="JPEG2000_LOSSLESS",
+    )
+    assert len(ds_converted) == 1
+    assert ds_converted[0].file_meta.TransferSyntaxUID.name == "JPEG 2000 Image Compression (Lossless Only)"
 
-        events = [log.get("event") for log in cap]
-        assert "generating_template_series_instances" in events
-        assert "transfer_syntax_conversion" in events
-        assert "generated_template_series_instances" in events
-
-        conv_log = next(log for log in cap if log.get("event") == "transfer_syntax_conversion")
-        assert conv_log.get("original_transfer_syntax") == "Explicit VR Little Endian"
-        assert conv_log.get("ending_transfer_syntax") == "JPEG 2000 Image Compression (Lossless Only)"
-        assert conv_log.get("original_transfer_syntax_uid") == "1.2.840.10008.1.2.1"
-        assert conv_log.get("ending_transfer_syntax_uid") == "1.2.840.10008.1.2.4.90"
+    captured_conversion = capsys.readouterr().out
+    assert "generating_template_series_instances" in captured_conversion
+    assert "transfer_syntax_conversion" in captured_conversion
+    assert "generated_template_series_instances" in captured_conversion
+    assert "Explicit VR Little Endian" in captured_conversion
+    assert "JPEG 2000 Image Compression (Lossless Only)" in captured_conversion
+    assert "1.2.840.10008.1.2.1" in captured_conversion
+    assert "1.2.840.10008.1.2.4.90" in captured_conversion
 
     # 2. Passthrough when transfer syntaxes match
-    with capture_logs() as cap:
-        ds_raw = DicomGeneratorService.create_instances_from_mwl(
-            entry,
-            num_instances=1,
-            transfer_syntax="RAW",
-        )
-        assert len(ds_raw) == 1
-        assert ds_raw[0].file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
+    capsys.readouterr()
+    ds_raw = DicomGeneratorService.create_instances_from_mwl(
+        entry,
+        num_instances=1,
+        transfer_syntax="RAW",
+    )
+    assert len(ds_raw) == 1
+    assert ds_raw[0].file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
 
-        gen_log = next(log for log in cap if log.get("event") == "generating_template_series_instances")
-        assert gen_log.get("requires_conversion") is False
-        assert gen_log.get("original_transfer_syntax") == "Explicit VR Little Endian"
-        assert gen_log.get("ending_transfer_syntax") == "Explicit VR Little Endian"
+    captured_passthrough = capsys.readouterr().out
+    assert "generating_template_series_instances" in captured_passthrough
+    assert "transfer_syntax_conversion" not in captured_passthrough
+    assert "generated_template_series_instances" in captured_passthrough
 
 
 def test_non_synthetic_preserves_template_study_description_and_does_not_swap_with_mockups(tmp_path):

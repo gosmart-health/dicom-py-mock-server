@@ -8,7 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
-## [0.2.4] - 2026-09-06
+## [0.3.0] - 2026-09-06
+
+### Changed
+- **Template Directory Structure Requirement (Breaking Change)**:
+  - Standalone DICOM files directly located in the `templates/` root folder are no longer accepted and will raise a `ValueError` to prevent ambiguity.
+  - Multi-slice templates must now be organized into dedicated subfolders per series/modality (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`).
 
 ### Added
 - **Multi-Slice CT & MR Template Loading**:

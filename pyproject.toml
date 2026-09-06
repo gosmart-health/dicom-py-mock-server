@@ -1,6 +1,6 @@
 [project]
 name = "dicom-py-mock-server"
-version = "0.2.4"
+version = "0.3.0"
 description = "Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP"
 readme = "README.md"
 requires-python = ">=3.10"

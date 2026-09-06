@@ -16,7 +16,7 @@ class AppConfig(BaseSettings):
     )
 
     app_name: str = "DICOM Mock Server"
-    app_version: str = "0.2.4"
+    app_version: str = "0.3.0"
     host: str = "127.0.0.1"
     port: int = 8000
     scp_ae_title: str = Field(
