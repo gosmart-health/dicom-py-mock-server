@@ -758,6 +758,36 @@ class DicomWebService:
 
         from dicom_py_mock_server.services.generator import resolve_transfer_syntax
 
+        current_ts = getattr(getattr(dataset, "file_meta", None), "TransferSyntaxUID", None)
+        if requested_transfer_syntax:
+            target_uid = resolve_transfer_syntax(requested_transfer_syntax)
+        else:
+            target_uid = current_ts or ExplicitVRLittleEndian
+
+        if target_uid in (JPEG2000Lossless, JPEG2000):
+            media_type = "image/jp2"
+        elif target_uid == RLELossless:
+            media_type = "image/rle"
+        elif target_uid == JPEGBaseline8Bit:
+            media_type = "image/jpeg"
+        else:
+            media_type = "application/octet-stream"
+
+        # Optimization: If dataset is already encapsulated in the requested transfer syntax,
+        # extract the requested frames directly without decompressing and re-encoding.
+        if current_ts == target_uid and getattr(target_uid, "is_encapsulated", False) and hasattr(dataset, "PixelData"):
+            try:
+                all_enc_frames = list(generate_pixel_data_frame(dataset.PixelData))
+                frames = []
+                for fn in frame_numbers:
+                    idx = fn - 1
+                    if 0 <= idx < len(all_enc_frames):
+                        frames.append(all_enc_frames[idx])
+                if frames:
+                    return frames, media_type
+            except Exception as exc:
+                logger.warning("direct_encapsulated_frame_extraction_failed", error=str(exc))
+
         frames: list[bytes] = []
         try:
             arr = dataset.pixel_array
@@ -770,6 +800,16 @@ class DicomWebService:
             if 1 in frame_numbers:
                 frame_arrays.append(arr)
         elif arr.ndim == 3:
+            samples_per_pixel = getattr(dataset, "SamplesPerPixel", 1)
+            if samples_per_pixel == 3 and arr.shape[-1] == 3:
+                if 1 in frame_numbers:
+                    frame_arrays.append(arr)
+            else:
+                for fn in frame_numbers:
+                    idx = fn - 1
+                    if 0 <= idx < arr.shape[0]:
+                        frame_arrays.append(arr[idx])
+        elif arr.ndim == 4:
             for fn in frame_numbers:
                 idx = fn - 1
                 if 0 <= idx < arr.shape[0]:
@@ -778,33 +818,41 @@ class DicomWebService:
         if not frame_arrays:
             return [], "application/octet-stream"
 
-        if requested_transfer_syntax:
-            target_uid = resolve_transfer_syntax(requested_transfer_syntax)
-        else:
-            target_uid = getattr(getattr(dataset, "file_meta", None), "TransferSyntaxUID", ExplicitVRLittleEndian)
-
         if target_uid == JPEGBaseline8Bit:
-            media_type = "image/jpeg"
             for f_arr in frame_arrays:
-                if f_arr.dtype == np.uint8 or f_arr.max() <= 255:
-                    f_arr8 = f_arr.astype(np.uint8)
+                if f_arr.dtype == np.uint8:
+                    f_arr8 = f_arr
                 else:
-                    f_arr8 = (f_arr >> 4).astype(np.uint8)
-                img = Image.fromarray(f_arr8, mode="L")
+                    arr_min = float(f_arr.min())
+                    arr_max = float(f_arr.max())
+                    if arr_max > arr_min:
+                        scaled = ((f_arr.astype(np.float32) - arr_min) / (arr_max - arr_min)) * 255.0
+                        f_arr8 = np.clip(scaled, 0, 255).astype(np.uint8)
+                    else:
+                        f_arr8 = np.zeros(f_arr.shape, dtype=np.uint8)
+                mode = "RGB" if f_arr8.ndim == 3 and f_arr8.shape[-1] == 3 else "L"
+                img = Image.fromarray(f_arr8, mode=mode)
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=95)
                 frames.append(buf.getvalue())
         elif target_uid in (JPEG2000Lossless, JPEG2000):
-            media_type = "image/jp2"
             for f_arr in frame_arrays:
+                is_16bit = f_arr.itemsize == 2 or f_arr.dtype in (np.int16, np.uint16)
+                is_signed = np.issubdtype(f_arr.dtype, np.signedinteger)
+
                 temp_ds = Dataset()
-                temp_ds.Rows, temp_ds.Columns = f_arr.shape
-                temp_ds.BitsAllocated = 16 if f_arr.dtype == np.uint16 else 8
-                temp_ds.BitsStored = 12 if f_arr.dtype == np.uint16 else 8
-                temp_ds.HighBit = 11 if f_arr.dtype == np.uint16 else 7
-                temp_ds.PixelRepresentation = 0
-                temp_ds.SamplesPerPixel = 1
-                temp_ds.PhotometricInterpretation = "MONOCHROME2"
+                temp_ds.Rows, temp_ds.Columns = f_arr.shape[:2]
+                bits_alloc = getattr(dataset, "BitsAllocated", 16 if is_16bit else 8)
+                if is_16bit and bits_alloc < 16:
+                    bits_alloc = 16
+                temp_ds.BitsAllocated = bits_alloc
+                temp_ds.BitsStored = getattr(dataset, "BitsStored", bits_alloc)
+                temp_ds.HighBit = getattr(dataset, "HighBit", temp_ds.BitsStored - 1)
+                temp_ds.PixelRepresentation = getattr(dataset, "PixelRepresentation", 1 if is_signed else 0)
+                temp_ds.SamplesPerPixel = getattr(dataset, "SamplesPerPixel", 1)
+                temp_ds.PhotometricInterpretation = getattr(dataset, "PhotometricInterpretation", "MONOCHROME2")
+                if hasattr(dataset, "PlanarConfiguration"):
+                    temp_ds.PlanarConfiguration = dataset.PlanarConfiguration
                 temp_ds.PixelData = f_arr.tobytes()
                 temp_ds.file_meta = FileMetaDataset()
                 temp_ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
@@ -820,16 +868,23 @@ class DicomWebService:
                     frames.append(f_arr.tobytes())
                     media_type = "application/octet-stream"
         elif target_uid == RLELossless:
-            media_type = "image/rle"
             for f_arr in frame_arrays:
+                is_16bit = f_arr.itemsize == 2 or f_arr.dtype in (np.int16, np.uint16)
+                is_signed = np.issubdtype(f_arr.dtype, np.signedinteger)
+
                 temp_ds = Dataset()
-                temp_ds.Rows, temp_ds.Columns = f_arr.shape
-                temp_ds.BitsAllocated = 16 if f_arr.dtype == np.uint16 else 8
-                temp_ds.BitsStored = 12 if f_arr.dtype == np.uint16 else 8
-                temp_ds.HighBit = 11 if f_arr.dtype == np.uint16 else 7
-                temp_ds.PixelRepresentation = 0
-                temp_ds.SamplesPerPixel = 1
-                temp_ds.PhotometricInterpretation = "MONOCHROME2"
+                temp_ds.Rows, temp_ds.Columns = f_arr.shape[:2]
+                bits_alloc = getattr(dataset, "BitsAllocated", 16 if is_16bit else 8)
+                if is_16bit and bits_alloc < 16:
+                    bits_alloc = 16
+                temp_ds.BitsAllocated = bits_alloc
+                temp_ds.BitsStored = getattr(dataset, "BitsStored", bits_alloc)
+                temp_ds.HighBit = getattr(dataset, "HighBit", temp_ds.BitsStored - 1)
+                temp_ds.PixelRepresentation = getattr(dataset, "PixelRepresentation", 1 if is_signed else 0)
+                temp_ds.SamplesPerPixel = getattr(dataset, "SamplesPerPixel", 1)
+                temp_ds.PhotometricInterpretation = getattr(dataset, "PhotometricInterpretation", "MONOCHROME2")
+                if hasattr(dataset, "PlanarConfiguration"):
+                    temp_ds.PlanarConfiguration = dataset.PlanarConfiguration
                 temp_ds.PixelData = f_arr.tobytes()
                 temp_ds.file_meta = FileMetaDataset()
                 temp_ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
