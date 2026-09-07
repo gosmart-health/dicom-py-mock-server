@@ -369,6 +369,13 @@ class MwlGeneratorService:
             return self.template_datasets_by_modality[mod_upper]
         return [ts for datasets in self.template_datasets_by_modality.values() for ts in datasets]
 
+    def has_modality_template(self, modality: str | None) -> bool:
+        """Check if template images or metadata are available for the given modality."""
+        if not modality:
+            return False
+        mod_upper = str(modality).strip().upper()
+        return mod_upper in [m.upper() for m in self.get_template_modalities()]
+
     def get_dicom_templates_by_modality(self, modality: str) -> list[Dataset]:
         """Get in-memory loaded DICOM template datasets for a specific modality.
 
@@ -672,6 +679,36 @@ class MwlGeneratorService:
         if purged > 0:
             logger.info("purged_expired_mwl_entries", count=purged, remaining=len(self._entries))
         return purged
+
+    def remove_entry(
+        self,
+        accession: str | None = None,
+        study_uid: str | None = None,
+        patient_id: str | None = None,
+    ) -> int:
+        """Remove MWL entries matching accession, study_uid, or patient_id (used for cancellations)."""
+        if not accession and not study_uid and not patient_id:
+            return 0
+
+        initial_count = len(self._entries)
+        remaining = []
+        for e in self._entries:
+            match = False
+            if accession and str(e.get("accession", "")).strip() == str(accession).strip():
+                match = True
+            elif study_uid and str(e.get("study_uid", "")).strip() == str(study_uid).strip():
+                match = True
+            elif patient_id and str(e.get("patient_id", "")).strip() == str(patient_id).strip() and not accession and not study_uid:
+                match = True
+
+            if not match:
+                remaining.append(e)
+
+        self._entries = remaining
+        removed = initial_count - len(self._entries)
+        if removed > 0:
+            logger.info("removed_mwl_entries_on_cancellation", removed=removed, accession=accession, study_uid=study_uid)
+        return removed
 
     def add_entry(
         self, custom: dict[str, Any] | None = None, scheduled_at: datetime | None = None
