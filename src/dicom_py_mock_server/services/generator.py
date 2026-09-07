@@ -543,6 +543,66 @@ class DicomGeneratorService:
         return ds
 
     @classmethod
+    def sync_dicom_dates_and_times(cls, ds: Any, study_date: str, study_time: str) -> None:
+        """Synchronize Study, Series, Acquisition, Content, and Procedure Step dates and times."""
+        ds.StudyDate = study_date
+        ds.StudyTime = study_time
+        ds.SeriesDate = study_date
+        ds.SeriesTime = study_time
+        ds.AcquisitionDate = study_date
+        ds.AcquisitionTime = study_time
+        ds.ContentDate = study_date
+        ds.ContentTime = study_time
+
+        if hasattr(ds, "InstanceCreationDate"):
+            ds.InstanceCreationDate = study_date
+        if hasattr(ds, "InstanceCreationTime"):
+            ds.InstanceCreationTime = study_time
+
+        # Synchronize procedure step dates/times if present at top-level
+        if hasattr(ds, "ScheduledProcedureStepStartDate"):
+            ds.ScheduledProcedureStepStartDate = study_date
+        if hasattr(ds, "ScheduledProcedureStepStartTime"):
+            ds.ScheduledProcedureStepStartTime = study_time
+        if hasattr(ds, "ScheduledProcedureStepEndDate"):
+            ds.ScheduledProcedureStepEndDate = study_date
+        if hasattr(ds, "ScheduledProcedureStepEndTime"):
+            ds.ScheduledProcedureStepEndTime = study_time
+
+        if hasattr(ds, "PerformedProcedureStepStartDate"):
+            ds.PerformedProcedureStepStartDate = study_date
+        if hasattr(ds, "PerformedProcedureStepStartTime"):
+            ds.PerformedProcedureStepStartTime = study_time
+        if hasattr(ds, "PerformedProcedureStepEndDate"):
+            ds.PerformedProcedureStepEndDate = study_date
+        if hasattr(ds, "PerformedProcedureStepEndTime"):
+            ds.PerformedProcedureStepEndTime = study_time
+
+        # Synchronize inside ScheduledProcedureStepSequence (0040,0100) if present
+        if hasattr(ds, "ScheduledProcedureStepSequence") and ds.ScheduledProcedureStepSequence:
+            for sps_item in ds.ScheduledProcedureStepSequence:
+                if hasattr(sps_item, "ScheduledProcedureStepStartDate"):
+                    sps_item.ScheduledProcedureStepStartDate = study_date
+                if hasattr(sps_item, "ScheduledProcedureStepStartTime"):
+                    sps_item.ScheduledProcedureStepStartTime = study_time
+                if hasattr(sps_item, "ScheduledProcedureStepEndDate"):
+                    sps_item.ScheduledProcedureStepEndDate = study_date
+                if hasattr(sps_item, "ScheduledProcedureStepEndTime"):
+                    sps_item.ScheduledProcedureStepEndTime = study_time
+
+        # Synchronize inside RequestAttributesSequence (0040,0275) if present
+        if hasattr(ds, "RequestAttributesSequence") and ds.RequestAttributesSequence:
+            for req_item in ds.RequestAttributesSequence:
+                if hasattr(req_item, "ScheduledProcedureStepStartDate"):
+                    req_item.ScheduledProcedureStepStartDate = study_date
+                if hasattr(req_item, "ScheduledProcedureStepStartTime"):
+                    req_item.ScheduledProcedureStepStartTime = study_time
+                if hasattr(req_item, "ScheduledProcedureStepEndDate"):
+                    req_item.ScheduledProcedureStepEndDate = study_date
+                if hasattr(req_item, "ScheduledProcedureStepEndTime"):
+                    req_item.ScheduledProcedureStepEndTime = study_time
+
+    @classmethod
     def create_dicom_file(
         cls,
         request: MockDicomRequest,
@@ -587,8 +647,7 @@ class DicomGeneratorService:
         study_date = request.study.study_date or time.strftime("%Y%m%d")
         study_time = request.study.study_time or time.strftime("%H%M%S")
         ds.StudyInstanceUID = study_uid
-        ds.StudyDate = study_date
-        ds.StudyTime = study_time
+        cls.sync_dicom_dates_and_times(ds, study_date, study_time)
         ds.AccessionNumber = request.study.accession_number or ""
         ds.StudyDescription = request.study.study_description or get_random_study_description(request.series.modality)
         ds.InstitutionName = request.study.institution_name or getattr(config, "institution_name", "GO SMART CLINIC")
@@ -766,8 +825,7 @@ class DicomGeneratorService:
 
         ds.PatientName = p_name
         ds.PatientID = p_id
-        ds.StudyDate = s_date
-        ds.StudyTime = s_time
+        cls.sync_dicom_dates_and_times(ds, s_date, s_time)
 
         if institution_name:
             ds.InstitutionName = institution_name
@@ -1090,8 +1148,7 @@ class DicomGeneratorService:
                 if patient_sex:
                     ds1.PatientSex = patient_sex
                 ds1.StudyInstanceUID = study_uid
-                ds1.StudyDate = study_date
-                ds1.StudyTime = study_time
+                cls.sync_dicom_dates_and_times(ds1, study_date, study_time)
                 ds1.AccessionNumber = accession
                 if study_desc is not None:
                     ds1.StudyDescription = study_desc
@@ -1174,8 +1231,7 @@ class DicomGeneratorService:
                     ds.PatientSex = patient_sex
 
                 ds.StudyInstanceUID = study_uid
-                ds.StudyDate = study_date
-                ds.StudyTime = study_time
+                cls.sync_dicom_dates_and_times(ds, study_date, study_time)
                 ds.AccessionNumber = accession
                 if study_desc is not None:
                     ds.StudyDescription = study_desc

@@ -150,6 +150,36 @@ class AppConfig(BaseSettings):
         validation_alias=AliasChoices("GOSMART_MS_UID_VERSION", "GOSMART_MS_DICOM_UID_VERSION", "UID_VERSION"),
         description="UUID version for deterministic DICOM UID generation (5 for SHA-1, 3 for MD5)",
     )
+    hl7_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("GOSMART_MS_HL7_ENABLED", "HL7_ENABLED"),
+        description="Enable HL7 v2 MLLP socket listener",
+    )
+    hl7_host: str = Field(
+        default="0.0.0.0",
+        validation_alias=AliasChoices("GOSMART_MS_HL7_HOST", "HL7_HOST"),
+        description="HL7 v2 MLLP listener host address",
+    )
+    hl7_port: int = Field(
+        default=2575,
+        validation_alias=AliasChoices("GOSMART_MS_HL7_PORT", "HL7_PORT"),
+        description="HL7 v2 MLLP listener TCP port",
+    )
+    hl7_app_name: str = Field(
+        default="GOSMART_MWL",
+        validation_alias=AliasChoices("GOSMART_MS_HL7_APP_NAME", "HL7_APP_NAME"),
+        description="Receiving Application name for HL7 MSH and ACK segments",
+    )
+    hl7_facility: str = Field(
+        default="GOSMART_HOSP",
+        validation_alias=AliasChoices("GOSMART_MS_HL7_FACILITY", "HL7_FACILITY"),
+        description="Receiving Facility name for HL7 MSH and ACK segments",
+    )
+    fhir_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("GOSMART_MS_FHIR_ENABLED", "FHIR_ENABLED"),
+        description="Enable FHIR ServiceRequest / Bundle REST endpoints",
+    )
 
     @property
     def ae_title(self) -> str:

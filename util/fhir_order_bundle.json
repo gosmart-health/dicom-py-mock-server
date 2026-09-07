@@ -1,0 +1,83 @@
+{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:patient-001",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "pat-12345",
+        "identifier": [
+          {
+            "system": "http://hospital.org/mrn",
+            "value": "MRN-FHIR-9988"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "family": "WILLIAMS",
+            "given": [
+              "SARAH",
+              "JANE"
+            ]
+          }
+        ],
+        "gender": "female",
+        "birthDate": "1982-06-15"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:practitioner-001",
+      "resource": {
+        "resourceType": "Practitioner",
+        "id": "doc-678",
+        "name": [
+          {
+            "family": "TAYLOR",
+            "given": [
+              "MICHAEL"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:servicerequest-001",
+      "resource": {
+        "resourceType": "ServiceRequest",
+        "id": "sr-ct-5566",
+        "status": "active",
+        "intent": "order",
+        "identifier": [
+          {
+            "system": "http://hospital.org/accession",
+            "value": "ACC-FHIR-CT-01"
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "24627-2",
+              "display": "CT Chest with contrast"
+            }
+          ],
+          "text": "CT Chest with IV contrast"
+        },
+        "subject": {
+          "reference": "Patient/pat-12345"
+        },
+        "requester": {
+          "reference": "Practitioner/doc-678"
+        },
+        "occurrenceDateTime": "2026-09-07T16:00:00",
+        "reasonCode": [
+          {
+            "text": "Persistent cough evaluation"
+          }
+        ]
+      }
+    }
+  ]
+}

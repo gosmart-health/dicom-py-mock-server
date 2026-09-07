@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
-## [0.3.0] - 2026-09-06
+## [0.3.0] - 2026-09-07
 
 ### Changed
 - **Template Directory Structure Requirement (Breaking Change)**:
@@ -55,10 +55,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Optimized WADO-RS metadata extraction (`get_metadata`) to shallow-copy datasets with pixel tag filtering `(0x7FE0, 0x0010)` and `(0x7FE0, 0x0001)`, avoiding expensive deep copies and eliminating pixel compression cycles for metadata-only requests.
   - Added cache management methods `clear_cache(study_uid=None)` with backwards-compatible alias `clear_stress_cache()`.
   - Added automated test case `test_wado_study_cache_and_transcoder_reuse` verifying zero repeated transcoding invocations across instance queries.
-- **Automated Multi-Slice Template Test Suite**:
+- **Zero-Dependency HL7 v2 MLLP Ingestion Subsystem**:
+  - Implemented a built-in, non-blocking `asyncio` TCP server listening for HL7 v2 messages using Minimal Lower Layer Protocol (MLLP) on configurable port `GOSMART_MS_HL7_PORT` (default `2575`).
+  - Added standard MLLP framing support (`<SB> = 0x0B`, `<EB><CR> = 0x1C 0x0D`) and automatic generation of `ACK^O01` acknowledgement responses (`AA` for application accept, `AE` for error/rejection).
+  - Built zero-dependency parser for `ORM^O01` radiology orders extracting patient demographics (`PID-3`, `PID-5`, `PID-7`, `PID-8`), order details (`ORC-1`, `ORC-2`, `ORC-3`, `ORC-7`), procedure and modality attributes (`OBR-4`, `OBR-18`, `OBR-20`, `OBR-24`, `OBR-27`, `OBR-31`, `OBR-32`, `OBR-34`), and custom Study Instance UID (`ZDS-1`).
+  - Enforced raw demographic preservation: ingested EHR/RIS demographics are injected directly into active Modality Worklist (MWL) entries without modification (no anonymization, no `GSH-` prefixes, no `_GSH` suffixes).
+  - Implemented modality template validation: orders requesting modalities without available template images on disk (e.g. `PET`) are rejected with an MLLP `ACK` containing `MSA|AE|<MsgID>|Rejected: No template images available for modality '<MOD>'`.
+  - Implemented active MWL order cancellation: messages with `ORC-1` in `CA`, `OC`, or `DC` locate and immediately purge matching active MWL entries.
+  - Added REST management endpoints: `GET /api/v1/hl7/status`, `POST /api/v1/hl7/start`, `POST /api/v1/hl7/stop`, and `POST /api/v1/hl7/simulate`.
+- **Zero-Dependency FHIR ServiceRequest & Bundle Ingestion Subsystem**:
+  - Implemented RESTful endpoints (`POST /api/v1/fhir_service_request`, `POST /api/v1/fhir/Bundle`, and `POST /api/v1/fhir/ServiceRequest`) to ingest FHIR R4/R5 imaging order bundles.
+  - Built zero-dependency FHIR parser using native Pydantic models resolving internal bundle references (`urn:uuid:...` and relative `Patient/123`), mapping `Patient`, `Practitioner`, and `ServiceRequest` attributes directly into active MWL entries.
+  - Preserved raw patient demographics and accession identifiers without artificial modification.
+  - Supported modality validation returning HTTP 422 with descriptive error messages when requested modalities lack template images.
+  - Implemented order revocation: bundles containing ServiceRequests with `status` set to `revoked` or `entered-in-error` immediately purge matching active MWL entries.
+- **Developer Testing Utilities (`util/`)**:
+  - Added `push_hl7` Command Line Utility (`util/push_hl7.py`, `src/dicom_py_mock_server/utils/push_hl7.py`): Standalone, zero-dependency Python CLI tool to push HL7 messages over MLLP to the mock server (`127.0.0.1:2575`), featuring newline-to-CR normalization, MLLP framing, ACK parsing, and friendly formatted outputs.
+  - Added console scripts `push-hl7` and `push_hl7` in `pyproject.toml` (`uv run push-hl7`).
+  - Added sample HL7 `ORM^O01` message file `util/orm.txt`.
+  - Added `push_fhir.sh` Shell Script (`util/push_fhir.sh`): Executable `curl` script to POST FHIR bundles to `/api/v1/fhir_service_request` with HTTP response validation and formatted JSON rendering via `jq`/`python3`.
+  - Added sample FHIR imaging order bundle `util/fhir_order_bundle.json`.
+- **Automated Multi-Slice Template, HL7 & FHIR Test Suites**:
   - Added `tests/test_template_datasets.py` with 9 test cases verifying root file rejection, mixed modality rejection, non-image object filtering, series grouping & slice sorting, non-synthetic exact delivery with sequential assignment, synthetic cyclic rotation with stress cloning, transfer syntax conversion logging with direct passthrough verification, non-synthetic Study Description preservation without mockup swapping, and repository template behavior (MR preservation vs CT mockup omission).
+  - Added `tests/test_hl7_orm.py` with 8 test cases verifying ORM^O01 parsing, ACK construction, demographic preservation, template validation rejection, order cancellation, downstream DICOM synthesis, and live MLLP socket client communication.
+  - Added `tests/test_fhir_service_request.py` with 7 test cases verifying CT/MR MWL creation, modality rejection, order cancellation/revocation, downstream DICOM synthesis, and REST endpoint behavior.
+  - Added `tests/test_push_hl7.py` with 9 test cases verifying line normalization, ACK status parsing, default file lookup, live MLLP pushing, error handling, and CLI execution.
 
 ### Fixed
+- **DICOM Instance & MWL Date and Time Synchronization**:
+  - Fixed an issue where synthesized DICOM instances retained historical template dates and times (e.g., from 2010/2011 template files) for Acquisition Date `(0008,0022)`, Content Date `(0008,0023)`, Series Date `(0008,0021)`, Series Time `(0008,0031)`, Scheduled Procedure Step Date/Time `(0040,0002)/(0040,0003)`, and Performed Procedure Step Date/Time `(0040,0244)/(0040,0245)`.
+  - Implemented `DicomGeneratorService.sync_dicom_dates_and_times()` ensuring all date and time attributes across Study, Series, Acquisition, Content, and Procedure Steps (both top-level and sequence items) synchronize to the MWL scheduled study date and time across template synthesis, stress mode, and synthetic generation.
+  - Added Scheduled Procedure Step End Date `(0040,0004)` and Scheduled Procedure Step End Time `(0040,0005)` to MWL JSON generation (`MwlGeneratorService.generate_json()`) and dataset conversion (`json_to_dataset()`).
+  - Set top-level `StudyDate` and `StudyTime` on MWL datasets matching SPS start date and time.
+  - Added unit test cases `test_mwl_generator_sps_and_study_dates`, `test_create_dicom_from_template_date_time_sync`, and `test_create_instances_from_mwl_date_time_sync`.
 - **WADO-RS JPEG 2000 & RLE 16-bit Signed Frame Encoding**:
   - Fixed an issue in `DicomWebService.get_encoded_frames()` where CT and other 16-bit signed (`int16`, `PixelRepresentation=1`) datasets had their bit depth incorrectly calculated as 8-bit because `f_arr.dtype == np.uint16` evaluated to `False`. This caused OpenJPEG to encode only the top half of 512x512 images (resulting in a blank rectangular bottom half and truncated dynamic range) and caused RLE encoding to output an invalid single-segment count.
   - Corrected `BitsAllocated`, `BitsStored`, `HighBit`, and `PixelRepresentation` preservation and fallback calculation to fully support signed 16-bit CT/MR data for both `JPEG2000Lossless`/`JPEG2000` and `RLELossless`.

@@ -65,6 +65,8 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
 | **Software Bill of Materials (SBOM)** | `uv run cyclonedx-py environment --pyproject pyproject.toml .venv -o sbom.json --validate` | Generates and validates standard CycloneDX 1.6 SBOM. |
 | **Unit & Integration Test Suite** | `uv run pytest` | Executes complete pytest suite across models, generator, API, scheduler, MCP SSE, and SCP. |
 | **CLI Application Verification** | `uv run dicom-py-mock-server` | Verifies installed CLI entry point and Uvicorn server startup. |
+| **HL7 Message Pusher Verification** | `uv run push-hl7` / `python util/push_hl7.py` | Verifies HL7 v2 ORM message MLLP transmission and MWL creation. |
+| **FHIR Order Pusher Verification** | `./util/push_fhir.sh` | Verifies FHIR ServiceRequest bundle ingestion via HTTP POST. |
 
 ---
 
