@@ -27,6 +27,9 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 4. **Modality Worklist (MWL) Synthesis**: Automated business-hours MWL entry creation and retention window management.
 5. **MCP Integration Provisioning**: Exposes server capabilities to AI Assistants (AGY, Claude Desktop, Cursor, etc.) over Server-Sent Events (SSE) transport.
 6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice DICOM datasets from subdirectories under `templates/` (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`) with dynamic modality detection and folder purity validation. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), the server delivers exact series slice counts with round-robin template picking, preserves the template's original Study Description (without swapping with mock up values), and maintains pixel preservation. In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), slices rotate cyclically conforming to configurable slice ranges and generate synthetic study descriptions. Supported compression syntaxes include `JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, and `IMPLICIT_VR_LITTLE_ENDIAN`.
+7. **Template SOP Compression & PACS Verification**: Synthesize valid DICOM Part-10 files directly from templates (such as `templates/sample_ct` and `templates/sample_mr`) with burned metadata text, precomputed background test patterns, and supported compression syntaxes (`JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, `IMPLICIT_VR_LITTLE_ENDIAN`) saved to `test_output/` for PACS viewer inspection.
+8. **Zero-Dependency HL7 v2 MLLP Socket Listener**: Ingests raw `ORM^O01` radiology order messages over TCP/IP via MLLP framing on port `2575`, registers MWL items without demographic alteration/anonymization, handles order cancellation (`ORC-1 = CA`), rejects unsupported modalities without template images, and transmits MLLP-framed `ACK^O01` responses.
+9. **FHIR ServiceRequest Bundle Ingestion**: Accepts FHIR R4/R5 imaging order bundles via `POST /api/v1/fhir_service_request` (and aliases `/api/v1/fhir/Bundle` and `/api/v1/fhir/ServiceRequest`), maps patient demographics, procedure codes, and timing directly into MWL entries, and triggers order revocation.
 
 ---
 
@@ -122,6 +125,12 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_ID_PREFIX` | `ID_PREFIX` | `GSH-` | Prefix prepended to synthetic Patient ID and Accession number to avoid PACS collisions (empty strings permitted). |
 | `GOSMART_MS_NAMESPACE_UUID` | `GOSMART_MS_DICOM_NAMESPACE_UUID`, `NAMESPACE_UUID` | `6ba7b810-9dad-11d1-80b4-00c04fd430c8` | Persistent UUID namespace used for deterministic ITU-T X.667 DICOM UID generation. |
 | `GOSMART_MS_UID_VERSION` | `GOSMART_MS_DICOM_UID_VERSION`, `UID_VERSION` | `5` | UUID version for deterministic DICOM UID generation (`5` for SHA-1, `3` for MD5). |
+| `GOSMART_MS_HL7_ENABLED` | `HL7_ENABLED` | `true` | Enable HL7 v2 MLLP TCP socket listener. |
+| `GOSMART_MS_HL7_HOST` | `HL7_HOST` | `0.0.0.0` | HL7 v2 MLLP listener host address. |
+| `GOSMART_MS_HL7_PORT` | `HL7_PORT` | `2575` | HL7 v2 MLLP listener TCP port. |
+| `GOSMART_MS_HL7_APP_NAME` | `HL7_APP_NAME` | `GOSMART_MWL` | Receiving Application name for HL7 MSH and ACK segments. |
+| `GOSMART_MS_HL7_FACILITY` | `HL7_FACILITY` | `GOSMART_HOSP` | Receiving Facility name for HL7 MSH and ACK segments. |
+| `GOSMART_MS_FHIR_ENABLED` | `FHIR_ENABLED` | `true` | Enable FHIR ServiceRequest / Bundle REST endpoints. |
 | `GOSMART_MS_APP_NAME` | `APP_NAME` | `DICOM Mock Server` | Application display name. |
 | `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.3.0` | Application version string. |
 
@@ -266,6 +275,83 @@ For load testing, high-frequency retrieval, or stress testing PACS/viewers, enab
   - **DIMSE Associations**: The single frame is compressed once directly in the association's negotiated transfer syntax.
   - **WADO-RS**: The transfer syntax of the first image/series/study request establishes the transfer syntax used to deliver the study or series.
 * **Standards Compliance**: While pixel data is efficiently reused, each instance retains a unique `SOPInstanceUID` and sequential `InstanceNumber`.
+
+---
+
+## HL7 v2 MLLP Socket Listener (`hl7_*`)
+
+The server runs a built-in, zero-dependency `asyncio` TCP socket listener running the Minimal Lower Layer Protocol (MLLP) on port `2575` (configurable via `GOSMART_MS_HL7_PORT`).
+
+### Features & Workflow
+- **Protocol**: Standard MLLP framing with `<SB>` (`0x0B`) and `<EB><CR>` (`0x1C 0x0D`).
+- **Demographic Integrity**: Ingests `ORM^O01` messages and transfers patient demographics (`PatientName`, `PatientID`, `PatientBirthDate`, `PatientSex`, `AccessionNumber`, `Modality`, `Physicians`) directly into active MWL entries without altering or anonymizing values.
+- **Modality Validation**: Checks requested modality against available template images (`templates/sample_ct`, `templates/sample_mr`). Orders requesting unsupported modalities are rejected with an MLLP `ACK^O01` containing `MSA|AE|<MsgID>|Rejected: No template images available for modality '<MOD>'`.
+- **Order Cancellation**: Messages with `ORC-1` set to `CA`, `OC`, or `DC` automatically locate and remove matching MWL entries.
+- **Downstream Retrieval**: Once an order is ingested into MWL, requesting the study via DICOM C-MOVE (`movescu`) or DICOMweb WADO-RS dynamically synthesizes instances carrying the order's exact demographics.
+
+### Testing HL7 via Python Socket
+```python
+import socket
+
+# Sample ORM message
+msg = (
+    "MSH|^~\\&|EPIC|HOSPITAL|GOSMART_MWL|GOSMART_HOSP|20260907120000||ORM^O01|MSG-001|P|2.3\r"
+    "PID|1||MRN12345^^^HOSPITAL||DOE^JOHN^A||19800101|M\r"
+    "ORC|NW|ORD1001|ACC2002\r"
+    "OBR|1|ORD1001|ACC2002|CT01^CT CHEST||||||||||||||||||CT||||||Chest pain\r"
+)
+frame = b"\x0b" + msg.encode("utf-8") + b"\x1c\r"
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(("127.0.0.1", 2575))
+s.sendall(frame)
+ack = s.recv(4096)
+print(ack[1:-2].decode("utf-8"))  # Prints MSH / MSA|AA|MSG-001
+s.close()
+```
+
+---
+
+## FHIR ServiceRequest & Bundle Ingestion (`fhir_*`)
+
+The server provides zero-dependency REST endpoints to ingest FHIR R4/R5 imaging order bundles:
+- `POST /api/v1/fhir_service_request`
+- `POST /api/v1/fhir/Bundle`
+- `POST /api/v1/fhir/ServiceRequest`
+
+### Example FHIR Bundle Ingest
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/fhir_service_request" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "resourceType": "Bundle",
+       "type": "collection",
+       "entry": [
+         {
+           "resource": {
+             "resourceType": "Patient",
+             "id": "pat-01",
+             "identifier": [{"value": "MRN-FHIR-7788"}],
+             "name": [{"family": "SMITH", "given": ["ALICE"]}],
+             "gender": "female",
+             "birthDate": "1992-04-10"
+           }
+         },
+         {
+           "resource": {
+             "resourceType": "ServiceRequest",
+             "id": "sr-01",
+             "status": "active",
+             "identifier": [{"value": "ACC-FHIR-001"}],
+             "code": {"text": "CT Abdomen Pelvis with Contrast"},
+             "subject": {"reference": "Patient/pat-01"},
+             "occurrenceDateTime": "2026-09-07T14:00:00"
+           }
+         }
+       ]
+     }'
+```
+Orders with `status` set to `revoked` or `entered-in-error` automatically remove the matching MWL item.
 
 ---
 

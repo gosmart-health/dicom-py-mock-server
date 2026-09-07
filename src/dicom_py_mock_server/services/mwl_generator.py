@@ -4,7 +4,7 @@ import asyncio
 import json
 import random
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -493,7 +493,7 @@ class MwlGeneratorService:
             patient_name = custom.get("patientName") or patient_name
             patient_id = custom.get("patientId") or custom.get("mrn") or patient_id
             if custom.get("dob"):
-                if isinstance(custom["dob"], (datetime, datetime.date)):
+                if isinstance(custom["dob"], (datetime, date)):
                     dob_str = custom["dob"].strftime("%Y%m%d")
                 else:
                     dob_str = str(custom["dob"]).replace("-", "")
@@ -698,7 +698,12 @@ class MwlGeneratorService:
                 match = True
             elif study_uid and str(e.get("study_uid", "")).strip() == str(study_uid).strip():
                 match = True
-            elif patient_id and str(e.get("patient_id", "")).strip() == str(patient_id).strip() and not accession and not study_uid:
+            elif (
+                patient_id
+                and str(e.get("patient_id", "")).strip() == str(patient_id).strip()
+                and not accession
+                and not study_uid
+            ):
                 match = True
 
             if not match:
@@ -707,7 +712,9 @@ class MwlGeneratorService:
         self._entries = remaining
         removed = initial_count - len(self._entries)
         if removed > 0:
-            logger.info("removed_mwl_entries_on_cancellation", removed=removed, accession=accession, study_uid=study_uid)
+            logger.info(
+                "removed_mwl_entries_on_cancellation", removed=removed, accession=accession, study_uid=study_uid
+            )
         return removed
 
     def add_entry(

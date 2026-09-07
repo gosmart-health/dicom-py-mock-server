@@ -6,7 +6,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from dicom_py_mock_server.api import dicomweb_router, mcp_router, router
+from dicom_py_mock_server.api import dicomweb_router, fhir_router, hl7_router, hl7_server, mcp_router, router
 from dicom_py_mock_server.api.routes import mwl_service, scp_service
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.logging_config import get_logger, setup_logging
@@ -44,12 +44,21 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error("failed_to_start_dicom_scp_on_startup", error=str(exc))
 
+    # 4. Start HL7 v2 MLLP listener
+    if config.hl7_enabled:
+        try:
+            await hl7_server.start()
+        except Exception as exc:
+            logger.error("failed_to_start_hl7_server_on_startup", error=str(exc))
+
     yield
 
     logger.info("app_stopping", app_name=config.app_name)
     # Stop background services
     mwl_service.stop_auto_generation()
     scp_service.stop()
+    if hl7_server.is_running:
+        await hl7_server.stop()
 
 
 app = FastAPI(
@@ -87,6 +96,8 @@ async def log_request_details(request: Request, call_next):
 app.include_router(router)
 app.include_router(dicomweb_router)
 app.include_router(mcp_router)
+app.include_router(hl7_router)
+app.include_router(fhir_router)
 
 
 def main() -> None:

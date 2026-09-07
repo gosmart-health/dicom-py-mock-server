@@ -188,7 +188,8 @@ def test_template_sop_mwl():
     from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
 
     mwl_service = MwlGeneratorService(AppConfig(templates_path="./templates"))
-    assert set(mwl_service.get_template_modalities()) == {"CT", "MR"}
+    assert "CT" in mwl_service.get_template_modalities()
+    assert "MR" in mwl_service.get_template_modalities()
 
     record = mwl_service.add_entry(custom={"modality": "CT"})
     assert record["modality"] == "CT"

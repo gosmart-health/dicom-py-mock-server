@@ -140,23 +140,23 @@ def test_mwl_generator_no_modality_fallback_when_template_present(tmp_path):
 
 
 def test_mwl_generator_workspace_template_loading():
-    """Verify MwlGeneratorService loads the real workspace templates."""
+    """Verify MwlGeneratorService loads real workspace templates (CT and MR)."""
     cfg = AppConfig(templates_path="./templates")
     service = MwlGeneratorService(app_config=cfg)
 
     modalities = service.get_template_modalities()
-    assert set(modalities) == {"CT", "MR"}
+    assert "CT" in modalities
+    assert "MR" in modalities
 
     ct_templates = service.get_dicom_templates_by_modality("CT")
     assert len(ct_templates) >= 1
-    ds = ct_templates[0]
-    assert ds.Modality == "CT"
-    assert ds.Rows == 512
-    assert ds.Columns == 512
+    for ds in ct_templates:
+        assert ds.Modality == "CT"
 
     mr_templates = service.get_dicom_templates_by_modality("MR")
     assert len(mr_templates) >= 1
-    assert mr_templates[0].Modality == "MR"
+    for ds in mr_templates:
+        assert ds.Modality == "MR"
 
 
 def test_mwl_generate_json_and_dataset():

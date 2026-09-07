@@ -19,6 +19,12 @@ The software generates images on the fly with a modest system resource footprint
 ```mermaid
 graph TD
     Client[REST API Client / Web UI / CI/CD] -->|HTTP POST /api/v1/generate<br/>/api/v1/worklist/generate| FastAPI[FastAPI App<br/>src/dicom_py_mock_server/main.py]
+    EHR_HL7[EHR / RIS / Interface Engine] -->|HL7 v2 MLLP ORM^O01 :2575| HL7Server[HL7 MLLP Listener<br/>src/dicom_py_mock_server/services/hl7_server.py]
+    EHR_FHIR[EHR / Interface Engine] -->|POST /api/v1/fhir_service_request| FastAPI
+    HL7Server -->|Extract Raw Demographics & Order| HL7Parser[HL7 Parser Service<br/>src/dicom_py_mock_server/services/hl7_parser.py]
+    HL7Parser -->|Ingest / Cancel MWL Entry| MWLService[MWL Generator Service<br/>src/dicom_py_mock_server/services/mwl_generator.py]
+    FastAPI -->|Parse Bundle / ServiceRequest| FHIRParser[FHIR Parser Service<br/>src/dicom_py_mock_server/services/fhir_parser.py]
+    FHIRParser -->|Ingest / Cancel MWL Entry| MWLService
     FastAPI -->|Request Validation| Models[Pydantic Models<br/>src/dicom_py_mock_server/models/dicom.py]
     FastAPI -->|Invoke Generator| Generator[DICOM & MWL Generator Service<br/>src/dicom_py_mock_server/services/generator.py]
     Generator -->|Template SOP Parsing| TemplateLoader[SOP Template Loader]
@@ -124,6 +130,33 @@ graph TD
   - **DIMSE Association Handling**: Storage presentation context transfer syntax negotiated at association start is used to compress the frame once, avoiding per-slice re-encoding during C-MOVE or C-STORE push.
   - **WADO-RS Transfer Syntax Caching**: In WADO-RS, the transfer syntax from the first image request establishes the study's cached transfer syntax and compressed frame, which is reused for delivering the remainder of the study or series.
   - **DICOM Compliance**: Instance-level identifiers (`SOPInstanceUID`, sequential `InstanceNumber`, and `MediaStorageSOPInstanceUID`) remain unique per DICOM Part 10 standards.
+
+### 3.10 HL7 v2 MLLP Ingestion Subsystem (`src/dicom_py_mock_server/services/hl7_server.py`, `services/hl7_parser.py`, `api/hl7_routes.py`)
+* **Minimal Lower Layer Protocol (MLLP) Listener (`Hl7ServerService`)**:
+  - Non-blocking `asyncio` TCP server listening on configurable `GOSMART_MS_HL7_PORT` (default `2575`).
+  - Frames messages using standard MLLP delimiters (`<SB> = 0x0B`, `<EB><CR> = 0x1C 0x0D`).
+  - Automatically returns standard MLLP-framed `ACK^O01` messages acknowledging or rejecting received orders (`AA` for success, `AE` for error/rejection).
+* **Zero-Dependency HL7 Parser (`Hl7Parser`)**:
+  - Parses pipe-delimited HL7 v2 `MSH`, `PID`, `PV1`, `ORC`, `OBR`, and `ZDS` segments without external dependencies.
+  - Extracts patient demographics (`PID-3`, `PID-5`, `PID-7`, `PID-8`), order details (`ORC-1`, `ORC-2`, `OBR-4`, `OBR-16`, `OBR-19`, `OBR-24`), and custom Study UID (`ZDS-1`).
+  - **Raw Demographics Preservation**: Ingested demographics are passed directly into active MWL entries without modifying values (no synthetic prefixes, no `_GSH` suffixes).
+  - **Modality Template Validation**: Rejects order creation (`ACK AE`) if no DICOM template images exist on disk for the requested modality.
+  - **Order Cancellation**: When `ORC-1` is `CA`, `OC`, or `DC`, cancels and removes matching active MWL entries.
+* **REST Management Endpoints (`api/hl7_routes.py`)**:
+  - `GET /api/v1/hl7/status`: Server status, port, enabled state, and processed counts.
+  - `POST /api/v1/hl7/start` / `POST /api/v1/hl7/stop`: Administrative lifecycle control.
+  - `POST /api/v1/hl7/simulate`: Simulates raw HL7 message ingestion via HTTP for testing without raw TCP sockets.
+
+### 3.11 FHIR ServiceRequest REST Subsystem (`src/dicom_py_mock_server/services/fhir_parser.py`, `models/fhir_models.py`, `api/fhir_routes.py`)
+* **REST Ingestion Endpoints (`api/fhir_routes.py`)**:
+  - `POST /api/v1/fhir_service_request` (with aliases `POST /api/v1/fhir/Bundle` and `POST /api/v1/fhir/ServiceRequest`).
+  - Validates and parses FHIR R4/R5 JSON payloads with zero external dependencies using native Pydantic models.
+* **Zero-Dependency FHIR Parser (`FhirParserService`)**:
+  - Resolves internal bundle references (`urn:uuid:...` or relative `Patient/123`).
+  - Maps `Patient` demographics (`name`, `identifier`, `birthDate`, `gender`), `ServiceRequest` attributes (`accessionIdentifier`, `code`, `orderDetail`, `performer`, `requester`), and DICOM Study UID extension (`http://hl7.org/fhir/StructureDefinition/workflow-studyInstanceUID`).
+  - Preserves exact demographic data as provided by the external system.
+  - **Modality Template Validation**: Validates template availability and returns HTTP 422 if template images for the modality are absent.
+  - **Order Revocation**: Immediately purges active MWL entries when `status` is `revoked` or `entered-in-error`.
 
 ---
 
