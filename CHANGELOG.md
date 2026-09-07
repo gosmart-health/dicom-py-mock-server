@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Automated Multi-Slice Template Test Suite**:
   - Added `tests/test_template_datasets.py` with 9 test cases verifying root file rejection, mixed modality rejection, non-image object filtering, series grouping & slice sorting, non-synthetic exact delivery with sequential assignment, synthetic cyclic rotation with stress cloning, transfer syntax conversion logging with direct passthrough verification, non-synthetic Study Description preservation without mockup swapping, and repository template behavior (MR preservation vs CT mockup omission).
 
+### Fixed
+- **WADO-RS JPEG 2000 & RLE 16-bit Signed Frame Encoding**:
+  - Fixed an issue in `DicomWebService.get_encoded_frames()` where CT and other 16-bit signed (`int16`, `PixelRepresentation=1`) datasets had their bit depth incorrectly calculated as 8-bit because `f_arr.dtype == np.uint16` evaluated to `False`. This caused OpenJPEG to encode only the top half of 512x512 images (resulting in a blank rectangular bottom half and truncated dynamic range) and caused RLE encoding to output an invalid single-segment count.
+  - Corrected `BitsAllocated`, `BitsStored`, `HighBit`, and `PixelRepresentation` preservation and fallback calculation to fully support signed 16-bit CT/MR data for both `JPEG2000Lossless`/`JPEG2000` and `RLELossless`.
+  - Added direct encapsulated frame passthrough: when the active dataset is already encapsulated in the requested transfer syntax, `get_encoded_frames()` extracts encapsulated frames directly via `generate_pixel_data_frame()` without performing redundant decompression and re-encoding.
+  - Improved JPEG Baseline 8-bit transcoding for signed 16-bit datasets using dynamic range min-max scaling to `[0, 255]`.
+  - Added automated test `test_wado_retrieve_ct_frames_j2k_and_rle_integrity` verifying full 512x512 resolution, `int16` range, and non-blank bottom half for both JPEG 2000 and RLE frames over WADO-RS.
+
 ## [0.2.3] - 2026-09-04
 
 ### Added
