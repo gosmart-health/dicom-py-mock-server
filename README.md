@@ -408,6 +408,13 @@ uv run cyclonedx-py environment --pyproject pyproject.toml .venv -o sbom.json --
 
 ---
 
+## Standards Conformance & Technical Documentation
+
+- **[DICOM Conformance Statement](./docs/dicom_conformance_statement.md)**: Full NEMA PS 3.2 Conformance Statement specifying supported DIMSE services (C-ECHO, C-FIND, C-MOVE, C-STORE, MWL), transfer syntaxes (RAW, JPEG Process 1, JPEG 2000, RLE), DICOMweb services (QIDO-RS, WADO-RS, WADO-URI), and order ingestion pipelines.
+- **[Design Controls Documentation](./docs/design/README.md)**: Architecture specifications, Hazard Analysis (ISO 14971), V&V Plan, and Requirements Traceability Matrix.
+
+---
+
 ## Release & Changelog
 
 Releases are distributed strictly as source-code releases. For details on version history, changes, and upgrades, see [CHANGELOG.md](./CHANGELOG.md).

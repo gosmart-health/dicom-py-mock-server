@@ -80,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `tests/test_hl7_orm.py` with 8 test cases verifying ORM^O01 parsing, ACK construction, demographic preservation, template validation rejection, order cancellation, downstream DICOM synthesis, and live MLLP socket client communication.
   - Added `tests/test_fhir_service_request.py` with 7 test cases verifying CT/MR MWL creation, modality rejection, order cancellation/revocation, downstream DICOM synthesis, and REST endpoint behavior.
   - Added `tests/test_push_hl7.py` with 9 test cases verifying line normalization, ACK status parsing, default file lookup, live MLLP pushing, error handling, and CLI execution.
+- **DICOM Conformance Statement (PS 3.2)**:
+  - Added comprehensive, formal DICOM Conformance Statement (`docs/dicom_conformance_statement.md`) adhering to NEMA PS 3.2.
+  - Documented supported DIMSE SOP classes (Verification, Patient/Study Root Query/Retrieve C-FIND & C-MOVE, Storage C-STORE SCP/SCU, Modality Worklist C-FIND).
+  - Documented supported transfer syntaxes (RAW, JPEG Process 1, JPEG 2000 Lossless/Lossy, RLE Lossless), DICOMweb services (QIDO-RS, WADO-RS, WADO-URI), order ingestion protocols (HL7 v2 MLLP, FHIR ServiceRequest), and deterministic ITU-T X.667 `2.25.` UID generation.
+
 
 ### Fixed
 - **DICOM Instance & MWL Date and Time Synchronization**:
