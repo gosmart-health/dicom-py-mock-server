@@ -23,6 +23,8 @@ dependencies = [
 
 [project.scripts]
 dicom-py-mock-server = "dicom_py_mock_server.main:main"
+push-hl7 = "dicom_py_mock_server.utils.push_hl7:main"
+push_hl7 = "dicom_py_mock_server.utils.push_hl7:main"
 
 [build-system]
 requires = ["hatchling"]

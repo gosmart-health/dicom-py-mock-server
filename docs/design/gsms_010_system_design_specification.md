@@ -146,6 +146,10 @@ graph TD
   - `GET /api/v1/hl7/status`: Server status, port, enabled state, and processed counts.
   - `POST /api/v1/hl7/start` / `POST /api/v1/hl7/stop`: Administrative lifecycle control.
   - `POST /api/v1/hl7/simulate`: Simulates raw HL7 message ingestion via HTTP for testing without raw TCP sockets.
+* **HL7 Message Pusher CLI Utility (`src/dicom_py_mock_server/utils/push_hl7.py`, `util/push_hl7.py`)**:
+  - Command-line utility to push HL7 ORM text files over MLLP to the mock server's listener (`127.0.0.1:2575`).
+  - Supports automatic newline normalization, MLLP framing, ACK parsing, and exit codes.
+  - Includes sample `ORM^O01` message file `util/orm.txt`.
 
 ### 3.11 FHIR ServiceRequest REST Subsystem (`src/dicom_py_mock_server/services/fhir_parser.py`, `models/fhir_models.py`, `api/fhir_routes.py`)
 * **REST Ingestion Endpoints (`api/fhir_routes.py`)**:
@@ -157,6 +161,10 @@ graph TD
   - Preserves exact demographic data as provided by the external system.
   - **Modality Template Validation**: Validates template availability and returns HTTP 422 if template images for the modality are absent.
   - **Order Revocation**: Immediately purges active MWL entries when `status` is `revoked` or `entered-in-error`.
+* **FHIR Order Bundle Pusher Utility (`util/push_fhir.sh`)**:
+  - `curl`-based shell script to POST FHIR bundles to the mock server's REST endpoint (`/api/v1/fhir_service_request`).
+  - Formats JSON responses using `jq` or `python3 -m json.tool`.
+  - Includes sample imaging order bundle `util/fhir_order_bundle.json`.
 
 ---
 

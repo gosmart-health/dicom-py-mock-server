@@ -242,3 +242,21 @@ def test_fhir_api_endpoints():
     # Unsupported modality returns HTTP 422
     res3 = client.post("/api/v1/fhir_service_request", json=SAMPLE_FHIR_UNSUPPORTED_MODALITY_BUNDLE)
     assert res3.status_code == 422
+
+
+def test_sample_fhir_order_bundle_file_validity():
+    """Verify that the sample util/fhir_order_bundle.json file parses and posts cleanly."""
+    import json
+    from pathlib import Path
+
+    bundle_path = Path("util/fhir_order_bundle.json")
+    assert bundle_path.is_file()
+
+    bundle_data = json.loads(bundle_path.read_text(encoding="utf-8"))
+    client = TestClient(app)
+    response = client.post("/api/v1/fhir_service_request", json=bundle_data)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert len(data["entries_created"]) == 1
+    assert data["entries_created"][0]["accession"] == "ACC-FHIR-CT-01"

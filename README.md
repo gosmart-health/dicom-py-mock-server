@@ -289,25 +289,25 @@ The server runs a built-in, zero-dependency `asyncio` TCP socket listener runnin
 - **Order Cancellation**: Messages with `ORC-1` set to `CA`, `OC`, or `DC` automatically locate and remove matching MWL entries.
 - **Downstream Retrieval**: Once an order is ingested into MWL, requesting the study via DICOM C-MOVE (`movescu`) or DICOMweb WADO-RS dynamically synthesizes instances carrying the order's exact demographics.
 
-### Testing HL7 via Python Socket
-```python
-import socket
+### HL7 Message Pusher CLI Utility (`push_hl7`)
 
-# Sample ORM message
-msg = (
-    "MSH|^~\\&|EPIC|HOSPITAL|GOSMART_MWL|GOSMART_HOSP|20260907120000||ORM^O01|MSG-001|P|2.3\r"
-    "PID|1||MRN12345^^^HOSPITAL||DOE^JOHN^A||19800101|M\r"
-    "ORC|NW|ORD1001|ACC2002\r"
-    "OBR|1|ORD1001|ACC2002|CT01^CT CHEST||||||||||||||||||CT||||||Chest pain\r"
-)
-frame = b"\x0b" + msg.encode("utf-8") + b"\x1c\r"
+To test the HL7 listener and generate ad-hoc Modality Worklist (MWL) entries, a lightweight, zero-dependency command line utility `push_hl7` and sample `ORM^O01` message file (`util/orm.txt`) are provided:
 
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(("127.0.0.1", 2575))
-s.sendall(frame)
-ack = s.recv(4096)
-print(ack[1:-2].decode("utf-8"))  # Prints MSH / MSA|AA|MSG-001
-s.close()
+```bash
+# Push sample util/orm.txt to default port 2575
+python util/push_hl7.py
+
+# Or via package script
+uv run push-hl7
+```
+
+Options:
+```bash
+uv run push-hl7 [-h] [-H HOST] [-p PORT] [-t TIMEOUT] [-v] [file]
+
+# Examples:
+uv run push-hl7 -v util/orm.txt                    # Verbose mode showing raw ACK
+uv run push-hl7 -H 127.0.0.1 -p 2575 custom.txt    # Custom host and port
 ```
 
 ---
@@ -352,6 +352,18 @@ curl -X POST "http://127.0.0.1:8000/api/v1/fhir_service_request" \
      }'
 ```
 Orders with `status` set to `revoked` or `entered-in-error` automatically remove the matching MWL item.
+
+### FHIR Order Bundle Pusher Shell Script (`push_fhir.sh`)
+
+A developer utility script and sample bundle are included in the `util/` folder:
+
+```bash
+# Push the sample bundle (util/fhir_order_bundle.json) to the default local endpoint
+./util/push_fhir.sh
+
+# Or specify a custom bundle JSON and endpoint URL:
+./util/push_fhir.sh path/to/order_bundle.json http://127.0.0.1:8000/api/v1/fhir_service_request
+```
 
 ---
 

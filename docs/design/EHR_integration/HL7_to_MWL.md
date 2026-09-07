@@ -44,3 +44,31 @@ The mapping from HL7 v2 `ORM^O01` (or `OMG^O19` / `OMI^O23` in v2.5+) messages t
 
 
 * **Timing & Quantity (`OBR-27` vs. `TQ1`):** In HL7 v2.3/v2.4 messages, appointment start dates and priorities reside in the composite field `OBR-27`. In HL7 v2.5 and later (`OMG^O19` / `OMI^O23`), this is formally deprecated in favor of explicit `TQ1` (Timing/Quantity) and `TQ2` segments.
+
+---
+
+## HL7 Message Pusher CLI Utility (`push_hl7`)
+
+To test the HL7 v2 wire listener, verify network connectivity, and inject ad-hoc MWL entries, the repository provides a zero-dependency command line utility `push_hl7` and a sample `ORM^O01` message file (`util/orm.txt`).
+
+### Quick Start
+```bash
+# Push the default sample message (util/orm.txt) to 127.0.0.1:2575
+python util/push_hl7.py
+
+# Or via package script
+uv run push-hl7
+```
+
+### Custom Options
+```bash
+# Push custom ORM file with specific host and port
+uv run push-hl7 -H 127.0.0.1 -p 2575 -v path/to/custom_order.hl7
+```
+
+Options:
+- `file`: Path to HL7 text file (defaults to `util/orm.txt`).
+- `-H`, `--host`: HL7 MLLP server host (default: `127.0.0.1` or `GOSMART_MS_HL7_HOST`).
+- `-p`, `--port`: HL7 MLLP server port (default: `2575` or `GOSMART_MS_HL7_PORT`).
+- `-t`, `--timeout`: Socket timeout in seconds (default: `5.0`).
+- `-v`, `--verbose`: Show full sent payload and parsed ACK response.

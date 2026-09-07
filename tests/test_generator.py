@@ -438,3 +438,72 @@ def test_template_all_supported_compressions_generation():
         assert read_back.Columns == 512
         assert read_back.pixel_array.shape == (512, 512)
         assert read_back.pixel_array.dtype == expected_dtype
+
+
+def test_create_dicom_from_template_date_time_sync():
+    """Verify that create_dicom_from_template synchronizes all dates and times to the specified study date/time."""
+    ct_sample = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    target_date = "20260907"
+    target_time = "143000"
+
+    ds = DicomGeneratorService.create_dicom_from_template(
+        template=ct_sample,
+        study_date=target_date,
+        study_time=target_time,
+        burn_in_text=False,
+        preserve_pixel_data=True,
+    )
+
+    assert ds.StudyDate == target_date
+    assert ds.StudyTime == target_time
+    assert ds.SeriesDate == target_date
+    assert ds.SeriesTime == target_time
+    assert ds.AcquisitionDate == target_date
+    assert ds.AcquisitionTime == target_time
+    assert ds.ContentDate == target_date
+    assert ds.ContentTime == target_time
+
+
+def test_create_instances_from_mwl_date_time_sync():
+    """Verify that create_instances_from_mwl synchronizes all instance dates/times with the MWL scheduled date/time."""
+    from datetime import datetime
+
+    from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
+
+    mwl_svc = MwlGeneratorService()
+    scheduled_at = datetime(2026, 9, 7, 14, 30, 0)
+    mwl_record = mwl_svc.add_entry(scheduled_at=scheduled_at)
+    assert mwl_record is not None
+
+    target_date = "20260907"
+    target_time = "143000"
+
+    # 1. Non-stress mode
+    instances = DicomGeneratorService.create_instances_from_mwl(mwl_record, num_instances=2, stress=False)
+    assert len(instances) == 2
+    for inst in instances:
+        assert inst.StudyDate == target_date
+        assert inst.StudyTime == target_time
+        assert inst.SeriesDate == target_date
+        assert inst.SeriesTime == target_time
+        assert inst.AcquisitionDate == target_date
+        assert inst.AcquisitionTime == target_time
+        assert inst.ContentDate == target_date
+        assert inst.ContentTime == target_time
+        if hasattr(inst, "ScheduledProcedureStepStartDate"):
+            assert inst.ScheduledProcedureStepStartDate == target_date
+        if hasattr(inst, "PerformedProcedureStepStartDate"):
+            assert inst.PerformedProcedureStepStartDate == target_date
+
+    # 2. Stress mode
+    stress_instances = DicomGeneratorService.create_instances_from_mwl(mwl_record, num_instances=3, stress=True)
+    assert len(stress_instances) == 3
+    for inst in stress_instances:
+        assert inst.StudyDate == target_date
+        assert inst.StudyTime == target_time
+        assert inst.SeriesDate == target_date
+        assert inst.SeriesTime == target_time
+        assert inst.AcquisitionDate == target_date
+        assert inst.AcquisitionTime == target_time
+        assert inst.ContentDate == target_date
+        assert inst.ContentTime == target_time

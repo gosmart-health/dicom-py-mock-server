@@ -79,4 +79,26 @@ Data from supplemental clinical resources flags safety alerts and pre-procedure 
 
 ## Technology Stack
 
-We will use `fhir.resources` utilizing the Pydantic structure.
+The FHIR ingestion subsystem parses bundles natively using standard Pydantic models with zero external dependencies.
+
+---
+
+## FHIR Order Bundle Pusher Utility (`push_fhir.sh`)
+
+To quickly test the FHIR REST endpoint and inject ad-hoc MWL entries, the repository provides a sample imaging order bundle (`util/fhir_order_bundle.json`) and a `curl`-based shell script (`util/push_fhir.sh`).
+
+### Quick Start
+```bash
+# Push default sample bundle (util/fhir_order_bundle.json) to http://127.0.0.1:8000/api/v1/fhir_service_request
+./util/push_fhir.sh
+```
+
+### Custom Bundle or Endpoint
+```bash
+# Push a custom bundle file
+./util/push_fhir.sh path/to/custom_bundle.json
+
+# Push to a custom endpoint URL
+./util/push_fhir.sh path/to/custom_bundle.json http://localhost:8000/api/v1/fhir_service_request
+```
+

@@ -479,6 +479,9 @@ class MwlGeneratorService:
 
         start_date = now.strftime("%Y%m%d")
         start_time = now.strftime("%H%M%S")
+        end_dt = now + timedelta(minutes=30)
+        end_date = end_dt.strftime("%Y%m%d")
+        end_time = end_dt.strftime("%H%M%S")
 
         patient_name = patient.name
         patient_id = patient.mrn
@@ -519,9 +522,23 @@ class MwlGeneratorService:
                 or custom.get("institution")
                 or institution
             )
-            if custom.get("studyDate") and isinstance(custom["studyDate"], datetime):
-                start_date = custom["studyDate"].strftime("%Y%m%d")
-                start_time = custom["studyDate"].strftime("%H%M%S")
+            if custom.get("studyDate"):
+                if isinstance(custom["studyDate"], datetime):
+                    start_date = custom["studyDate"].strftime("%Y%m%d")
+                    start_time = custom["studyDate"].strftime("%H%M%S")
+                    custom_end_dt = custom["studyDate"] + timedelta(minutes=30)
+                    end_date = custom_end_dt.strftime("%Y%m%d")
+                    end_time = custom_end_dt.strftime("%H%M%S")
+                elif isinstance(custom["studyDate"], str):
+                    clean_d = str(custom["studyDate"]).replace("-", "").strip()
+                    if len(clean_d) >= 8:
+                        start_date = clean_d[:8]
+                        end_date = start_date
+            if custom.get("studyTime") and isinstance(custom["studyTime"], str):
+                clean_t = str(custom["studyTime"]).replace(":", "").strip()
+                if len(clean_t) >= 6:
+                    start_time = clean_t[:6]
+                    end_time = start_time
 
         study_uid = custom_study_uid or generate_study_uid(patient_name, patient_id, accession)
         series_uid = generate_series_uid(study_uid, 1)
@@ -572,6 +589,8 @@ class MwlGeneratorService:
                         "00400001": {"vr": "AE", "Value": [scheduled_station_ae]},
                         "00400002": {"vr": "DA", "Value": [start_date]},
                         "00400003": {"vr": "TM", "Value": [start_time]},
+                        "00400004": {"vr": "DA", "Value": [end_date]},
+                        "00400005": {"vr": "TM", "Value": [end_time]},
                         "00400006": {"vr": "PN", "Value": [{"Alphabetic": performing_name}]},
                         "00400007": {"vr": "LO", "Value": desc_val},
                         "00400008": {
@@ -651,6 +670,10 @@ class MwlGeneratorService:
             sps_ds.ScheduledStationAETitle = sps_item["00400001"]["Value"][0]
             sps_ds.ScheduledProcedureStepStartDate = sps_item["00400002"]["Value"][0]
             sps_ds.ScheduledProcedureStepStartTime = sps_item["00400003"]["Value"][0]
+            if "00400004" in sps_item and sps_item["00400004"].get("Value"):
+                sps_ds.ScheduledProcedureStepEndDate = sps_item["00400004"]["Value"][0]
+            if "00400005" in sps_item and sps_item["00400005"].get("Value"):
+                sps_ds.ScheduledProcedureStepEndTime = sps_item["00400005"]["Value"][0]
             sps_raw_perf = sps_item["00400006"]["Value"]
             if isinstance(sps_raw_perf, list) and len(sps_raw_perf) > 0:
                 sps_perf_val = sps_raw_perf[0]
@@ -665,6 +688,14 @@ class MwlGeneratorService:
             sps_sequence.append(sps_ds)
 
         ds.ScheduledProcedureStepSequence = sps_sequence
+
+        # Also set StudyDate and StudyTime on MWL dataset matching SPS start date/time
+        if len(sps_sequence) > 0:
+            first_sps = sps_sequence[0]
+            if hasattr(first_sps, "ScheduledProcedureStepStartDate"):
+                ds.StudyDate = first_sps.ScheduledProcedureStepStartDate
+            if hasattr(first_sps, "ScheduledProcedureStepStartTime"):
+                ds.StudyTime = first_sps.ScheduledProcedureStepStartTime
         return ds
 
     def purge_expired_entries(self, current_time: datetime | None = None) -> int:

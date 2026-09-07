@@ -336,3 +336,33 @@ def test_mwl_generator_non_synthetic_preserves_template_study_description():
     ct_entry = service.add_entry(custom={"modality": "CT"})
     assert ct_entry["study_description"] is None or ct_entry["study_description"] == ""
     assert ct_entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["CT"]
+
+
+def test_mwl_generator_sps_and_study_dates():
+    """Verify that MWL JSON and Dataset include SPS start & end date/time, and StudyDate/StudyTime match."""
+    service = MwlGeneratorService()
+    scheduled_at = datetime(2026, 9, 7, 14, 30, 0)
+    entry = service.add_entry(scheduled_at=scheduled_at)
+    assert entry is not None
+
+    json_e = entry["json_entry"]
+    sps_json = json_e["00400100"]["Value"][0]
+
+    # SPS start & end date/time in JSON
+    assert sps_json["00400002"]["Value"][0] == "20260907"
+    assert sps_json["00400003"]["Value"][0] == "143000"
+    assert sps_json["00400004"]["Value"][0] == "20260907"
+    assert sps_json["00400005"]["Value"][0] == (scheduled_at + timedelta(minutes=30)).strftime("%H%M%S")
+
+    # Dataset SPS sequence tags
+    ds = entry["dataset"]
+    assert len(ds.ScheduledProcedureStepSequence) > 0
+    sps_item = ds.ScheduledProcedureStepSequence[0]
+    assert sps_item.ScheduledProcedureStepStartDate == "20260907"
+    assert sps_item.ScheduledProcedureStepStartTime == "143000"
+    assert sps_item.ScheduledProcedureStepEndDate == "20260907"
+    assert sps_item.ScheduledProcedureStepEndTime == (scheduled_at + timedelta(minutes=30)).strftime("%H%M%S")
+
+    # Dataset top-level StudyDate & StudyTime
+    assert ds.StudyDate == "20260907"
+    assert ds.StudyTime == "143000"
