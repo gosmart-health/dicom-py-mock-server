@@ -78,7 +78,7 @@ def test_mwl_generator_dicom_template_scanning(tmp_path):
     from pydicom.uid import ExplicitVRLittleEndian, MRImageStorage, generate_uid
 
     # Copy real CT template slice into subfolder
-    ct_src = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    ct_src = sorted(Path("templates/sample_ct").glob("*.dcm"))[0]
     ct_dir = tmp_path / "ct_series"
     ct_dir.mkdir()
     shutil.copy(ct_src, ct_dir / "slice.dcm")
@@ -122,7 +122,7 @@ def test_mwl_generator_no_modality_fallback_when_template_present(tmp_path):
     from pathlib import Path
 
     # Copy ONLY the CT template file into a subfolder
-    ct_src = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    ct_src = sorted(Path("templates/sample_ct").glob("*.dcm"))[0]
     ct_dir = tmp_path / "ct_series"
     ct_dir.mkdir()
     shutil.copy(ct_src, ct_dir / "slice.dcm")
@@ -332,7 +332,7 @@ def test_mwl_generator_non_synthetic_preserves_template_study_description():
     assert mr_entry["json_entry"]["00081030"]["Value"][0] == "dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"
     assert mr_entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["MR"]
 
-    # CT template (Toshiba Aquilion) had no StudyDescription originally; should not be swapped with mockup
+    # CT template (sample_ct) had no StudyDescription originally; should not be swapped with mockup
     ct_entry = service.add_entry(custom={"modality": "CT"})
     assert ct_entry["study_description"] is None or ct_entry["study_description"] == ""
     assert ct_entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["CT"]

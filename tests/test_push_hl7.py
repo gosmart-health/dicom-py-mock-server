@@ -23,6 +23,7 @@ def test_config():
     """Create isolated test configuration for HL7 listener."""
     return AppConfig(
         templates_path="./templates",
+        hl7_host="127.0.0.1",
         hl7_port=22576,
         mwl_window_hr=24,
     )

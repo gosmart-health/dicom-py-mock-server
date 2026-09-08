@@ -27,6 +27,7 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 4. **Modality Worklist (MWL) Synthesis**: Automated business-hours MWL entry creation and retention window management.
 5. **MCP Integration Provisioning**: Exposes server capabilities to AI Assistants (AGY, Claude Desktop, Cursor, etc.) over Server-Sent Events (SSE) transport.
 6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice DICOM datasets from subdirectories under `templates/` (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`) with dynamic modality detection and folder purity validation. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), the server delivers exact series slice counts with round-robin template picking, preserves the template's original Study Description (without swapping with mock up values), and maintains pixel preservation. In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), slices rotate cyclically conforming to configurable slice ranges and generate synthetic study descriptions. Supported compression syntaxes include `JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, and `IMPLICIT_VR_LITTLE_ENDIAN`.
+6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice DICOM datasets from subdirectories under `templates/` (e.g. `templates/sample_ct/`, `templates/sample_mr/`) with dynamic modality detection and folder purity validation. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), the server delivers exact series slice counts with round-robin template picking, preserves the template's original Study Description (without swapping with mock up values), and maintains pixel preservation. In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), slices rotate cyclically conforming to configurable slice ranges and generate synthetic study descriptions. Supported compression syntaxes include `JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, and `IMPLICIT_VR_LITTLE_ENDIAN`.
 7. **Template SOP Compression & PACS Verification**: Synthesize valid DICOM Part-10 files directly from templates (such as `templates/sample_ct` and `templates/sample_mr`) with burned metadata text, precomputed background test patterns, and supported compression syntaxes (`JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, `IMPLICIT_VR_LITTLE_ENDIAN`) saved to `test_output/` for PACS viewer inspection.
 8. **Zero-Dependency HL7 v2 MLLP Socket Listener**: Ingests raw `ORM^O01` radiology order messages over TCP/IP via MLLP framing on port `2575`, registers MWL items without demographic alteration/anonymization, handles order cancellation (`ORC-1 = CA`), rejects unsupported modalities without template images, and transmits MLLP-framed `ACK^O01` responses.
 9. **FHIR ServiceRequest Bundle Ingestion**: Accepts FHIR R4/R5 imaging order bundles via `POST /api/v1/fhir_service_request` (and aliases `/api/v1/fhir/Bundle` and `/api/v1/fhir/ServiceRequest`), maps patient demographics, procedure codes, and timing directly into MWL entries, and triggers order revocation.
@@ -235,14 +236,12 @@ The server supports loading multi-slice DICOM image datasets from dedicated subf
 
 ```
 templates/
-├── Toshiba_Aquilion/          # Multi-slice CT series folder
-│   ├── slice_001.dcm
-│   ├── slice_002.dcm
-│   └── ... (197 slices)
-└── MR/                        # Multi-slice MR series folder
-    ├── mr_001.dcm
-    ├── mr_002.dcm
-    └── ... (multiple MR series)
+├── sample_ct/                 # Multi-slice CT series folder
+│   ├── 1.2.392.200036...dcm
+│   └── ... (10 slices)
+└── sample_mr/                 # Multi-slice MR series folder
+    ├── IM_0001
+    └── ... (10 slices)
 ```
 
 ### 1. Template Subfolder Rules & Modality Purity

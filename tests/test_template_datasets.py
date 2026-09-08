@@ -405,7 +405,7 @@ def test_non_synthetic_mode_repo_templates_mr_and_ct_study_description():
         assert ds.StudyDescription == expected_mr_desc
         assert ds.StudyDescription not in MODALITY_STUDY_DESCRIPTIONS["MR"]
 
-    # 2. CT template (Toshiba Aquilion) had NO original StudyDescription; do not swap with mockups
+    # 2. CT template (sample_ct) had NO original StudyDescription; do not swap with mockups
     ct_entry = service.add_entry(custom={"modality": "CT"})
     assert ct_entry["study_description"] is None or ct_entry["study_description"] == ""
     assert ct_entry["study_description"] not in MODALITY_STUDY_DESCRIPTIONS["CT"]
