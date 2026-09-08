@@ -353,6 +353,13 @@ curl -X POST "http://127.0.0.1:8000/api/v1/fhir_service_request" \
 ```
 Orders with `status` set to `revoked` or `entered-in-error` automatically remove the matching MWL item.
 
+### Identifier Parsing Behavior & Enterprise Hospital Note
+> [!NOTE]
+> **Identifier Extraction Strategy**:
+> To maximize developer friendliness and accommodate varied test harnesses, the built-in FHIR parser extracts the **first available identifier** (`patient.identifier[0].value` for Patient ID / MRN, and the first in `serviceRequest.identifier` for Accession Number, falling back to resource `.id` if omitted). It does not enforce specific hospital `system` URIs (such as `http://hospital.org` or `http://gosmart.health`).
+>
+> In real-world enterprise hospital environments (e.g. Epic, Cerner/Oracle Health), FHIR resources typically carry multiple identifiers (Enterprise Master Patient Index / EMPI, facility-specific MRNs, internal Community IDs, etc.) differentiated by authority OIDs (e.g. `urn:oid:1.2.840.114350...`) or HL7 v2 Table 0203 type codes (`code = "MR"` for Medical Record Number, `code = "ACSN"` for Accession Number). Developers adapting this mock server to simulate complex multi-identifier enterprise workflows can easily customize `FhirParserService` in `src/dicom_py_mock_server/services/fhir_parser.py` to match on specific `system` URIs or `type.coding` elements.
+
 ### FHIR Order Bundle Pusher Shell Script (`push_fhir.sh`)
 
 A developer utility script and sample bundle are included in the `util/` folder:

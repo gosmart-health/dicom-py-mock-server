@@ -77,6 +77,17 @@ Data from supplemental clinical resources flags safety alerts and pre-procedure 
 | **`Condition`** | `code.text` / `category` | `(0010,2000)` | Medical Alerts |
 | **`Device`** | Implants / pacemakers | `(0010,21B0)` | Additional Patient History |
 
+## Identifier Resolution Strategy & Clinical Customization
+
+> [!NOTE]
+> **First-Identifier Extraction vs. Production Hospital Systems**:
+> In the mock server's default implementation, `FhirParserService` extracts the first non-empty identifier value (`patient.identifier[0].value` for Patient ID / MRN, and `serviceRequest.identifier[0].value` for Accession Number, falling back to resource `.id`). It intentionally ignores `system` URIs (such as `http://hospital.org` or `http://gosmart.health`) so ad-hoc test bundles generate active MWL records with zero configuration friction.
+>
+> In real clinical hospital deployments with Epic or Cerner/Oracle Health:
+> - Resources typically contain multiple identifiers (EMPI, facility-specific MRNs, internal Community IDs, national IDs).
+> - Production integration engines should filter on `identifier.type.coding` (e.g. HL7 v2 Table 0203 code `"MR"` for Medical Record Number, `"ACSN"` for Accession Number) or match specific enterprise authority OIDs (`urn:oid:1.2.840.114350...`).
+> - Developers extending this server for complex multi-identifier enterprise test harnesses can customize the identifier extraction logic in `FhirParserService._process_bundle()`.
+
 ## Technology Stack
 
 The FHIR ingestion subsystem parses bundles natively using standard Pydantic models with zero external dependencies.
