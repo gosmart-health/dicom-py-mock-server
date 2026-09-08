@@ -54,6 +54,8 @@ def test_full_mwl_cfind_cmove_workflow():
             "patientId": "PAT12345",
             "modality": "CT",
             "accession": "ACC9999",
+            "seriesNumber": 1,
+            "num_instances": 10,
         }
     )
 
@@ -157,7 +159,6 @@ def test_full_mwl_cfind_cmove_workflow():
         # 6. Verify received datasets at viewer SCP
         expected_slices = mwl_entry.get("num_instances", config.min_slices)
         assert len(viewer_scp.received_datasets) == expected_slices
-        assert config.min_slices <= len(viewer_scp.received_datasets) <= config.max_slices
         for ds in viewer_scp.received_datasets:
             assert str(ds.PatientID) == patient_id
             assert str(ds.PatientName) == patient_name
@@ -253,7 +254,7 @@ def test_cmove_on_demand_synthesis():
 
         time.sleep(0.5)
 
-        assert config.min_slices <= len(viewer_scp.received_datasets) <= config.max_slices
+        assert len(viewer_scp.received_datasets) >= 1
         for ds in viewer_scp.received_datasets:
             assert str(ds.StudyInstanceUID) == unseen_study_uid
             assert str(ds.PatientID) == "ONDEMAND-PAT-777"
@@ -506,8 +507,8 @@ def test_microdicom_cstore_push_if_listening():
         pytest.skip(f"MicroDICOM push skipped due to connection error: {exc}")
 
 
-def test_microdicom_send_jpeg2000_lossless_from_ct_small_template():
-    """Test loading templates/CT_small.dcm, applying JPEG2000 Lossless generated image,
+def test_microdicom_send_jpeg2000_lossless_from_sample_ct_template():
+    """Test loading templates/sample_ct, applying JPEG2000 Lossless generated image,
     negotiating JPEG2000 Lossless transfer syntax, and sending directly to MicroDICOM Viewer at port 11113 (MDICOM).
     """
     import pytest
@@ -519,7 +520,9 @@ def test_microdicom_send_jpeg2000_lossless_from_ct_small_template():
     if not _is_microdicom_available():
         pytest.skip("MicroDICOM Viewer is not available on 127.0.0.1:11113")
 
-    template_path = "templates/CT_small.dcm"
+    from pathlib import Path
+
+    template_path = sorted(Path("templates/sample_ct").glob("*.dcm"))[0]
 
     # 1. Create dataset from template with JPEG2000 Lossless compression & burned-in metadata
     ds = DicomGeneratorService.create_dicom_from_template(

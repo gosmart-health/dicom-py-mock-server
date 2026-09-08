@@ -19,6 +19,12 @@ The software generates images on the fly with a modest system resource footprint
 ```mermaid
 graph TD
     Client[REST API Client / Web UI / CI/CD] -->|HTTP POST /api/v1/generate<br/>/api/v1/worklist/generate| FastAPI[FastAPI App<br/>src/dicom_py_mock_server/main.py]
+    EHR_HL7[EHR / RIS / Interface Engine] -->|HL7 v2 MLLP ORM^O01 :2575| HL7Server[HL7 MLLP Listener<br/>src/dicom_py_mock_server/services/hl7_server.py]
+    EHR_FHIR[EHR / Interface Engine] -->|POST /api/v1/fhir_service_request| FastAPI
+    HL7Server -->|Extract Raw Demographics & Order| HL7Parser[HL7 Parser Service<br/>src/dicom_py_mock_server/services/hl7_parser.py]
+    HL7Parser -->|Ingest / Cancel MWL Entry| MWLService[MWL Generator Service<br/>src/dicom_py_mock_server/services/mwl_generator.py]
+    FastAPI -->|Parse Bundle / ServiceRequest| FHIRParser[FHIR Parser Service<br/>src/dicom_py_mock_server/services/fhir_parser.py]
+    FHIRParser -->|Ingest / Cancel MWL Entry| MWLService
     FastAPI -->|Request Validation| Models[Pydantic Models<br/>src/dicom_py_mock_server/models/dicom.py]
     FastAPI -->|Invoke Generator| Generator[DICOM & MWL Generator Service<br/>src/dicom_py_mock_server/services/generator.py]
     Generator -->|Template SOP Parsing| TemplateLoader[SOP Template Loader]
@@ -61,8 +67,12 @@ graph TD
 * **`MwlGeneratorService`**:
   - Initializes 3 Referring, 3 Performing, and 3 Reading Physicians on startup.
   - Randomly selects physician roles for Modality Worklist (MWL) entries and populates `InstitutionName` (`GORMART_MS_INSTITUTION_NAME` / `GOSMART_MS_INSTITUTION_NAME`).
+  - **Multi-Slice Template Scanner & Modality Registry**: Scans subfolders under `templates/`, strictly rejecting standalone root template files with `ValueError`. Discovers modalities dynamically via DICOM tag `(0008, 0060)`, enforces folder modality purity, and excludes non-image objects (`PR`, `SR`, missing `PixelData`, Philips private `XX_*`). Groups slices into `TemplateSeriesDataset` records (`SeriesInstanceUID`, modality, series description, sorted slice file paths).
+  - **MWL Allocation Strategy**: Selects modalities randomly from available modalities. Sequentially cycles through template series per modality in round-robin order for subsequent MWL entries. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), assigns exact slice counts and preserves the template's original Study Description without swapping with mockup values.
 * **`DicomGeneratorService`**:
-  - **Template-Based Synthesis**: Loads base DICOM SOP templates (`templates/CT_small.dcm` or custom template files via `create_dicom_from_template`) and synthesizes compliant DICOM datasets and Modality Worklist items. Note: The generator does NOT perform de-identification on template files. Patient Name, Patient ID, Patient Sex, Study Date & Time, DICOM UIDs (Study/Series/SOP Instance), and image pixel data are generated and replaced; all other DICOM elements (including private data elements) are passed through "as is".
+  - **Multi-Slice & Template-Based Synthesis**: Synthesizes compliant DICOM datasets and Modality Worklist items from multi-slice template datasets or legacy templates. Note: The generator does NOT perform de-identification on template files. Patient Name, Patient ID, Patient Sex, Study Date & Time, DICOM UIDs (Study/Series/SOP Instance), and image pixel data are generated and replaced; all other DICOM elements (including private data elements) are passed through "as is".
+  - **Non-Synthetic Exact Delivery Mode**: Delivers complete series matching the exact slice count of the selected template series. Preserves original slice pixel arrays, native slice metadata, and the original template Study Description (leaving it intact and not replacing with mockup study descriptions). When burn-in text overlay is enabled, text annotations are drawn directly on top of the original slice pixel matrix.
+  - **Synthetic Cyclic Rotation Mode**: In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), generates slice volumes conforming to `min_slices`/`max_slices` bounds with cyclic slice rotation `(i - 1) % M`, and generates modality-appropriate synthetic study descriptions when omitted. Supports single compressed frame cloning when combined with stress mode (`GOSMART_MS_STRESS=true`).
   - **Physician & Institution Attribute Propagation**: Propagates Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) from MWL entries and request specs into synthesized SOP instances during C-MOVE / push flows.
   - **Gender-Aligned Name Synthesizer**: Uses JSON data files containing gender-specific first names (male/female) and common US last names to generate realistic patient names matching DICOM `PatientSex` (`M`/`F`).
   - **Burned-In Text OCR Engine**: Renders high-contrast, OCR-readable text (containing image number, patient name, and patient ID) directly into image pixel arrays using Pillow/OpenCV text drawing before standard DICOM pixel array encoding.
@@ -120,6 +130,41 @@ graph TD
   - **DIMSE Association Handling**: Storage presentation context transfer syntax negotiated at association start is used to compress the frame once, avoiding per-slice re-encoding during C-MOVE or C-STORE push.
   - **WADO-RS Transfer Syntax Caching**: In WADO-RS, the transfer syntax from the first image request establishes the study's cached transfer syntax and compressed frame, which is reused for delivering the remainder of the study or series.
   - **DICOM Compliance**: Instance-level identifiers (`SOPInstanceUID`, sequential `InstanceNumber`, and `MediaStorageSOPInstanceUID`) remain unique per DICOM Part 10 standards.
+
+### 3.10 HL7 v2 MLLP Ingestion Subsystem (`src/dicom_py_mock_server/services/hl7_server.py`, `services/hl7_parser.py`, `api/hl7_routes.py`)
+* **Minimal Lower Layer Protocol (MLLP) Listener (`Hl7ServerService`)**:
+  - Non-blocking `asyncio` TCP server listening on configurable `GOSMART_MS_HL7_PORT` (default `2575`).
+  - Frames messages using standard MLLP delimiters (`<SB> = 0x0B`, `<EB><CR> = 0x1C 0x0D`).
+  - Automatically returns standard MLLP-framed `ACK^O01` messages acknowledging or rejecting received orders (`AA` for success, `AE` for error/rejection).
+* **Zero-Dependency HL7 Parser (`Hl7Parser`)**:
+  - Parses pipe-delimited HL7 v2 `MSH`, `PID`, `PV1`, `ORC`, `OBR`, and `ZDS` segments without external dependencies.
+  - Extracts patient demographics (`PID-3`, `PID-5`, `PID-7`, `PID-8`), order details (`ORC-1`, `ORC-2`, `OBR-4`, `OBR-16`, `OBR-19`, `OBR-24`), and custom Study UID (`ZDS-1`).
+  - **Raw Demographics Preservation**: Ingested demographics are passed directly into active MWL entries without modifying values (no synthetic prefixes, no `_GSH` suffixes).
+  - **Modality Template Validation**: Rejects order creation (`ACK AE`) if no DICOM template images exist on disk for the requested modality.
+  - **Order Cancellation**: When `ORC-1` is `CA`, `OC`, or `DC`, cancels and removes matching active MWL entries.
+* **REST Management Endpoints (`api/hl7_routes.py`)**:
+  - `GET /api/v1/hl7/status`: Server status, port, enabled state, and processed counts.
+  - `POST /api/v1/hl7/start` / `POST /api/v1/hl7/stop`: Administrative lifecycle control.
+  - `POST /api/v1/hl7/simulate`: Simulates raw HL7 message ingestion via HTTP for testing without raw TCP sockets.
+* **HL7 Message Pusher CLI Utility (`src/dicom_py_mock_server/utils/push_hl7.py`, `util/push_hl7.py`)**:
+  - Command-line utility to push HL7 ORM text files over MLLP to the mock server's listener (`127.0.0.1:2575`).
+  - Supports automatic newline normalization, MLLP framing, ACK parsing, and exit codes.
+  - Includes sample `ORM^O01` message file `util/orm.txt`.
+
+### 3.11 FHIR ServiceRequest REST Subsystem (`src/dicom_py_mock_server/services/fhir_parser.py`, `models/fhir_models.py`, `api/fhir_routes.py`)
+* **REST Ingestion Endpoints (`api/fhir_routes.py`)**:
+  - `POST /api/v1/fhir_service_request` (with aliases `POST /api/v1/fhir/Bundle` and `POST /api/v1/fhir/ServiceRequest`).
+  - Validates and parses FHIR R4/R5 JSON payloads with zero external dependencies using native Pydantic models.
+* **Zero-Dependency FHIR Parser (`FhirParserService`)**:
+  - Resolves internal bundle references (`urn:uuid:...` or relative `Patient/123`).
+  - Maps `Patient` demographics (`name`, `identifier`, `birthDate`, `gender`), `ServiceRequest` attributes (`accessionIdentifier`, `code`, `orderDetail`, `performer`, `requester`), and DICOM Study UID extension (`http://hl7.org/fhir/StructureDefinition/workflow-studyInstanceUID`).
+  - Preserves exact demographic data as provided by the external system.
+  - **Modality Template Validation**: Validates template availability and returns HTTP 422 if template images for the modality are absent.
+  - **Order Revocation**: Immediately purges active MWL entries when `status` is `revoked` or `entered-in-error`.
+* **FHIR Order Bundle Pusher Utility (`util/push_fhir.sh`)**:
+  - `curl`-based shell script to POST FHIR bundles to the mock server's REST endpoint (`/api/v1/fhir_service_request`).
+  - Formats JSON responses using `jq` or `python3 -m json.tool`.
+  - Includes sample imaging order bundle `util/fhir_order_bundle.json`.
 
 ---
 

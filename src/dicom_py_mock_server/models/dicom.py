@@ -75,7 +75,13 @@ class MockDicomRequest(BaseModel):
     rows: int = Field(default=512, ge=16, le=2048, description="Image Rows")
     columns: int = Field(default=512, ge=16, le=2048, description="Image Columns")
     transfer_syntax: str | None = Field(default=None, description="Transfer syntax (RAW, JPEG, JPEG2000, RLE)")
-    burn_in_text: bool = Field(default=True, description="Burn patient/study metadata strings into image pixels")
+    burn_in_text: bool | None = Field(
+        default=None,
+        description=(
+            "Burn patient/study metadata strings into image pixels "
+            "(defaults to True in synthetic mode, False in non-synthetic mode)"
+        ),
+    )
     stress: bool | None = Field(default=None, description="Enable stress mode (single frame compression)")
     include_slice_overlay: bool | None = Field(
         default=None, description="Explicitly control burning 'Image: <number>' into pixels"

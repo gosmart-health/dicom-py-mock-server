@@ -25,5 +25,7 @@ The documents are prefixed with `gsms_XXX` in recommended reading order (from re
 | **[gsms_030_verification_and_validation_plan.md](./gsms_030_verification_and_validation_plan.md)** | IEC 62304 Cl. 5.5 - 5.7 | **Verification & Validation Plan**: Test protocols across unit tests (`pytest`), template & OCR verification, 9-5 scheduler tests, headless CI/CD interop, and stress testing. |
 | **[gsms_040_traceability_matrix.md](./gsms_040_traceability_matrix.md)** | FDA Design Controls | **Requirements Traceability Matrix (RTM)**: Bi-directional matrix mapping **Requirements (SRS) <-> System Design (SDS) <-> Hazards (ISO 14971) <-> Verification Tests (V&V)** across all features. |
 | **[gsms_050_cybersecurity_and_soup_bom.md](./gsms_050_cybersecurity_and_soup_bom.md)** | FDA Cybersecurity Guidance | **Cybersecurity & SOUP BOM**: Software Bill of Materials (SBOM) for SOUP components (`fastapi`, `pydantic`, `pydicom`, `pynetdicom`, `uvicorn`, `pillow`), local network security model, non-clinical disclaimers, and synthetic data safety. |
+| **[dicom_conformance_statement.md](../dicom_conformance_statement.md)** | NEMA PS 3.2 | **DICOM Conformance Statement (DCS)**: Comprehensive conformance statement covering supported DIMSE services (C-ECHO, C-FIND, C-MOVE, C-STORE, MWL), transfer syntaxes (RAW, JPEG Process 1, JPEG 2000, RLE), DICOMweb services (QIDO-RS, WADO-RS, WADO-URI), and order ingestion pipelines (HL7 v2 MLLP, FHIR ServiceRequest). |
+
 
 

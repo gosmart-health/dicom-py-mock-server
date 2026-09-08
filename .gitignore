@@ -29,6 +29,9 @@ share/python-wheels/
 *.egg
 MANIFEST
 received/
+templates/*
+!templates/.gitkeep
+
 
 # PyInstaller
 #   Usually these files are written by a python script from a template

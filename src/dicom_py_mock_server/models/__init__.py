@@ -8,6 +8,7 @@ from dicom_py_mock_server.models.dicom import (
     SeriesModel,
     StudyModel,
 )
+from dicom_py_mock_server.models.template import TemplateSeriesDataset
 
 __all__ = [
     "MockDicomRequest",
@@ -16,4 +17,5 @@ __all__ = [
     "ScpStatusResponse",
     "SeriesModel",
     "StudyModel",
+    "TemplateSeriesDataset",
 ]

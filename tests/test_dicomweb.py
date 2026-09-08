@@ -629,3 +629,149 @@ def test_wado_accept_header_semicolon_and_comma_separation(client):
     assert resp_comma.status_code == 200
     dsets_comma = _extract_multipart_dicom_parts(resp_comma.headers["content-type"], resp_comma.content)
     assert str(dsets_comma[0].file_meta.TransferSyntaxUID) == "1.2.840.10008.1.2.4.50"
+
+
+def test_wado_study_cache_and_transcoder_reuse(client, monkeypatch):
+    """Verify WADO study caching avoids redundant transcoding on repetitive instance requests."""
+    from dicom_py_mock_server.api.dicomweb_routes import dicomweb_service
+    from dicom_py_mock_server.services.generator import DicomGeneratorService
+
+    dicomweb_service.clear_cache()
+    studies = client.get("/dicomweb/studies").json()
+    study_uid = studies[0]["0020000D"]["Value"][0]
+
+    # Retrieve instances list
+    inst_list_resp = client.get(f"/dicomweb/studies/{study_uid}/instances")
+    assert inst_list_resp.status_code == 200
+    inst_list = inst_list_resp.json()
+    assert len(inst_list) >= 1
+
+    series_uid = inst_list[0]["0020000E"]["Value"][0]
+    sop_uid_0 = inst_list[0]["00080018"]["Value"][0]
+
+    ts_uid = "1.2.840.10008.1.2.1"
+    headers = {"Accept": f'multipart/related; type="application/dicom"; transfer-syntax="{ts_uid}"'}
+
+    # First instance request populates the cache
+    resp1 = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid_0}",
+        headers=headers,
+    )
+    assert resp1.status_code == 200
+    assert (study_uid, ts_uid, False) in dicomweb_service._study_cache
+
+    # Track calls to create_instances_from_mwl and apply_transfer_syntax
+    call_counts = {"create": 0, "transcode": 0}
+    orig_create = DicomGeneratorService.create_instances_from_mwl
+    orig_transcode = DicomGeneratorService.apply_transfer_syntax
+
+    def counting_create(*args, **kwargs):
+        call_counts["create"] += 1
+        return orig_create(*args, **kwargs)
+
+    def counting_transcode(*args, **kwargs):
+        call_counts["transcode"] += 1
+        return orig_transcode(*args, **kwargs)
+
+    monkeypatch.setattr(DicomGeneratorService, "create_instances_from_mwl", counting_create)
+    monkeypatch.setattr(DicomGeneratorService, "apply_transfer_syntax", counting_transcode)
+
+    # Subsequent instance requests for the same study & transfer syntax must HIT the cache
+    for inst in inst_list[:3]:
+        sop_uid = inst["00080018"]["Value"][0]
+        resp = client.get(
+            f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}",
+            headers=headers,
+        )
+        assert resp.status_code == 200
+
+    # Cache hits mean ZERO new creations or transcodings occurred
+    assert call_counts["create"] == 0
+    assert call_counts["transcode"] == 0
+
+    # Clear cache test
+    dicomweb_service.clear_cache(study_uid=study_uid)
+    assert (study_uid, ts_uid, False) not in dicomweb_service._study_cache
+
+
+def test_wado_retrieve_ct_frames_j2k_and_rle_integrity(client):
+    """Verify 16-bit signed CT frame retrieval preserves 512x512 resolution, int16 range, and non-blank bottom half."""
+    from pydicom.dataset import Dataset, FileMetaDataset
+    from pydicom.encaps import encapsulate
+    from pydicom.uid import JPEG2000Lossless, RLELossless
+
+    # Ensure MWL has a CT study
+    ct_entries = [e for e in mwl_service._entries if e.get("modality") == "CT"]
+    if not ct_entries:
+        mwl_service.seed_initial_entries(count=10)
+        ct_entries = [e for e in mwl_service._entries if e.get("modality") == "CT"]
+    assert ct_entries, "A CT MWL entry must exist for testing"
+
+    study_uid = ct_entries[0]["study_uid"]
+    series = client.get(f"/dicomweb/studies/{study_uid}/series").json()
+    series_uid = series[0]["0020000E"]["Value"][0]
+    instances = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances").json()
+    sop_uid = instances[0]["00080018"]["Value"][0]
+    meta = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/metadata").json()[0]
+
+    # 1. JPEG 2000 frame retrieve and integrity check
+    resp_j2k = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="image/jp2"; transfer-syntax="1.2.840.10008.1.2.4.90"'},
+    )
+    assert resp_j2k.status_code == 200
+    body_j2k = resp_j2k.content
+    h_end_j2k = body_j2k.find(b"\r\n\r\n")
+    b_marker_j2k = body_j2k.find(b"\r\n--", h_end_j2k + 4)
+    frame_data_j2k = body_j2k[h_end_j2k + 4 : b_marker_j2k]
+
+    ds_dec_j2k = Dataset()
+    ds_dec_j2k.file_meta = FileMetaDataset()
+    ds_dec_j2k.file_meta.TransferSyntaxUID = JPEG2000Lossless
+    ds_dec_j2k.Rows = meta["00280010"]["Value"][0]
+    ds_dec_j2k.Columns = meta["00280011"]["Value"][0]
+    ds_dec_j2k.BitsAllocated = meta["00280100"]["Value"][0]
+    ds_dec_j2k.BitsStored = meta["00280101"]["Value"][0]
+    ds_dec_j2k.HighBit = meta["00280102"]["Value"][0]
+    ds_dec_j2k.PixelRepresentation = meta["00280103"]["Value"][0]
+    ds_dec_j2k.SamplesPerPixel = 1
+    ds_dec_j2k.PhotometricInterpretation = "MONOCHROME2"
+    ds_dec_j2k.PixelData = encapsulate([frame_data_j2k])
+
+    arr_j2k = ds_dec_j2k.pixel_array
+    assert arr_j2k.shape == (512, 512)
+    assert str(arr_j2k.dtype) == "int16"
+    assert arr_j2k.min() < -500  # CT air / Hounsfield units are negative
+    assert arr_j2k.max() > 200
+    assert (arr_j2k[256:, :] != 0).any()  # Bottom half must not be blank
+
+    # 2. RLE frame retrieve and integrity check
+    resp_rle = client.get(
+        f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_uid}/frames/1",
+        headers={"Accept": 'multipart/related; type="image/rle"; transfer-syntax="1.2.840.10008.1.2.5"'},
+    )
+    assert resp_rle.status_code == 200
+    body_rle = resp_rle.content
+    h_end_rle = body_rle.find(b"\r\n\r\n")
+    b_marker_rle = body_rle.find(b"\r\n--", h_end_rle + 4)
+    frame_data_rle = body_rle[h_end_rle + 4 : b_marker_rle]
+
+    ds_dec_rle = Dataset()
+    ds_dec_rle.file_meta = FileMetaDataset()
+    ds_dec_rle.file_meta.TransferSyntaxUID = RLELossless
+    ds_dec_rle.Rows = meta["00280010"]["Value"][0]
+    ds_dec_rle.Columns = meta["00280011"]["Value"][0]
+    ds_dec_rle.BitsAllocated = meta["00280100"]["Value"][0]
+    ds_dec_rle.BitsStored = meta["00280101"]["Value"][0]
+    ds_dec_rle.HighBit = meta["00280102"]["Value"][0]
+    ds_dec_rle.PixelRepresentation = meta["00280103"]["Value"][0]
+    ds_dec_rle.SamplesPerPixel = 1
+    ds_dec_rle.PhotometricInterpretation = "MONOCHROME2"
+    ds_dec_rle.PixelData = encapsulate([frame_data_rle])
+
+    arr_rle = ds_dec_rle.pixel_array
+    assert arr_rle.shape == (512, 512)
+    assert str(arr_rle.dtype) == "int16"
+    assert arr_rle.min() < -500
+    assert arr_rle.max() > 200
+    assert (arr_rle[256:, :] != 0).any()  # Bottom half must not be blank

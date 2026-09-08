@@ -3,6 +3,7 @@
 import io
 import re
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -11,9 +12,14 @@ import pydicom
 import structlog
 from PIL import Image
 from pydicom.dataset import Dataset
+from pydicom.uid import JPEGBaseline8Bit
 
 from dicom_py_mock_server.config import config
-from dicom_py_mock_server.services.generator import TRANSFER_SYNTAX_MAP, DicomGeneratorService
+from dicom_py_mock_server.services.generator import (
+    TRANSFER_SYNTAX_MAP,
+    DicomGeneratorService,
+    resolve_transfer_syntax,
+)
 from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
 
 logger = structlog.get_logger(__name__)
@@ -33,11 +39,25 @@ class DicomWebService:
         self.storage_dir = Path(storage_dir or config.storage_dir)
         self._study_transfer_syntaxes: dict[str, str] = {}
         self._stress_study_cache: dict[str, list[Dataset]] = {}
+        self._study_cache: OrderedDict[tuple[str, str, bool], list[Dataset]] = OrderedDict()
+        self._study_cache_max_size: int = 50
+
+    def clear_cache(self, study_uid: str | None = None) -> None:
+        """Clear cached transfer syntaxes and study instances."""
+        if study_uid:
+            keys_to_remove = [k for k in self._study_cache if k[0] == str(study_uid)]
+            for k in keys_to_remove:
+                self._study_cache.pop(k, None)
+            self._study_transfer_syntaxes.pop(study_uid, None)
+            self._stress_study_cache.pop(study_uid, None)
+        else:
+            self._study_cache.clear()
+            self._study_transfer_syntaxes.clear()
+            self._stress_study_cache.clear()
 
     def clear_stress_cache(self) -> None:
-        """Clear cached transfer syntaxes and study instances for stress mode."""
-        self._study_transfer_syntaxes.clear()
-        self._stress_study_cache.clear()
+        """Clear cached transfer syntaxes and study instances for stress mode and WADO requests."""
+        self.clear_cache()
 
     def _get_stored_files(self) -> list[Path]:
         """Get all stored .dcm files on disk."""
@@ -463,7 +483,7 @@ class DicomWebService:
 
         If num_instances is specified, limits or configures the number of slices to generate/retrieve (up to 1024).
         Otherwise, follows the actual number of slices generated for the study without arbitrary clamping.
-        In stress mode, uses the transfer syntax from the first image request and reuses the single compressed frame.
+        Cached across repetitive WADO requests for the same study/series to avoid redundant transcoding.
         """
         is_stress = stress if stress is not None else getattr(config, "stress", False)
 
@@ -481,6 +501,40 @@ class DicomWebService:
                 return cached
         else:
             effective_ts = requested_transfer_syntax
+
+        # Determine canonical transfer syntax UID for cache key
+        lookup_ts = effective_ts
+        if not lookup_ts and self.mwl_service:
+            matched_entries = self.mwl_service.find_entries(study_uid=study_uid)
+            if matched_entries and matched_entries[0].get("transfer_syntax"):
+                lookup_ts = matched_entries[0].get("transfer_syntax")
+        if not lookup_ts:
+            lookup_ts = getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
+
+        target_ts_uid = str(resolve_transfer_syntax(lookup_ts))
+        cache_key = (str(study_uid), target_ts_uid, is_stress)
+
+        if cache_key in self._study_cache:
+            cached = self._study_cache[cache_key]
+            if num_instances is None or len(cached) >= num_instances:
+                self._study_cache.move_to_end(cache_key)
+                logger.debug(
+                    "wado_study_cache_hit",
+                    study_uid=study_uid,
+                    transfer_syntax=target_ts_uid,
+                    cached_instances=len(cached),
+                    requested_instances=num_instances,
+                )
+                if num_instances is not None and len(cached) > num_instances:
+                    return cached[:num_instances]
+                return cached
+
+        logger.debug(
+            "wado_study_cache_miss",
+            study_uid=study_uid,
+            transfer_syntax=target_ts_uid,
+            requested_instances=num_instances,
+        )
 
         datasets: list[Dataset] = []
 
@@ -505,6 +559,12 @@ class DicomWebService:
 
         if is_stress and datasets:
             self._stress_study_cache[study_uid] = datasets
+
+        if datasets:
+            self._study_cache[cache_key] = datasets
+            self._study_cache.move_to_end(cache_key)
+            if len(self._study_cache) > self._study_cache_max_size:
+                self._study_cache.popitem(last=False)
 
         if num_instances is not None and len(datasets) > num_instances:
             datasets = datasets[:num_instances]
@@ -555,18 +615,31 @@ class DicomWebService:
     @staticmethod
     def get_metadata(datasets: list[Dataset], requested_transfer_syntax: str | None = None) -> list[dict[str, Any]]:
         """Extract metadata (omitting PixelData and bulk data) in DICOM JSON format."""
-        import copy
-
         metadata_list = []
         for ds in datasets:
-            ds_copy = copy.deepcopy(ds)
+            # Fast copy omitting PixelData to avoid duplicating large byte arrays
+            if (0x7FE0, 0x0010) in ds or (0x7FE0, 0x0001) in ds:
+                ds_copy = Dataset({k: v for k, v in ds.items() if k not in ((0x7FE0, 0x0010), (0x7FE0, 0x0001))})
+                if hasattr(ds, "file_meta"):
+                    ds_copy.file_meta = ds.file_meta
+            else:
+                ds_copy = Dataset(ds)
+                if hasattr(ds, "file_meta"):
+                    ds_copy.file_meta = ds.file_meta
+
             if requested_transfer_syntax:
-                ds_copy = DicomGeneratorService.apply_transfer_syntax(ds_copy, requested_transfer_syntax)
-            # Remove pixel data element (0x7FE0, 0x0010) and pixel data provider url
-            if (0x7FE0, 0x0010) in ds_copy:
-                del ds_copy[0x7FE0, 0x0010]
-            if (0x7FE0, 0x0001) in ds_copy:
-                del ds_copy[0x7FE0, 0x0001]
+                target_uid = resolve_transfer_syntax(requested_transfer_syntax)
+                if hasattr(ds_copy, "file_meta"):
+                    ds_copy.file_meta.TransferSyntaxUID = target_uid
+                if target_uid == JPEGBaseline8Bit:
+                    ds_copy.BitsAllocated = 8
+                    ds_copy.BitsStored = 8
+                    ds_copy.HighBit = 7
+                    ds_copy.WindowCenter = 128
+                    ds_copy.WindowWidth = 256
+                    ds_copy.PhotometricInterpretation = "MONOCHROME2"
+                    ds_copy.SamplesPerPixel = 1
+                    ds_copy.PixelRepresentation = 0
             metadata_list.append(ds_copy.to_json_dict(suppress_invalid_tags=True))
         return metadata_list
 
@@ -685,6 +758,36 @@ class DicomWebService:
 
         from dicom_py_mock_server.services.generator import resolve_transfer_syntax
 
+        current_ts = getattr(getattr(dataset, "file_meta", None), "TransferSyntaxUID", None)
+        if requested_transfer_syntax:
+            target_uid = resolve_transfer_syntax(requested_transfer_syntax)
+        else:
+            target_uid = current_ts or ExplicitVRLittleEndian
+
+        if target_uid in (JPEG2000Lossless, JPEG2000):
+            media_type = "image/jp2"
+        elif target_uid == RLELossless:
+            media_type = "image/rle"
+        elif target_uid == JPEGBaseline8Bit:
+            media_type = "image/jpeg"
+        else:
+            media_type = "application/octet-stream"
+
+        # Optimization: If dataset is already encapsulated in the requested transfer syntax,
+        # extract the requested frames directly without decompressing and re-encoding.
+        if current_ts == target_uid and getattr(target_uid, "is_encapsulated", False) and hasattr(dataset, "PixelData"):
+            try:
+                all_enc_frames = list(generate_pixel_data_frame(dataset.PixelData))
+                frames = []
+                for fn in frame_numbers:
+                    idx = fn - 1
+                    if 0 <= idx < len(all_enc_frames):
+                        frames.append(all_enc_frames[idx])
+                if frames:
+                    return frames, media_type
+            except Exception as exc:
+                logger.warning("direct_encapsulated_frame_extraction_failed", error=str(exc))
+
         frames: list[bytes] = []
         try:
             arr = dataset.pixel_array
@@ -697,6 +800,16 @@ class DicomWebService:
             if 1 in frame_numbers:
                 frame_arrays.append(arr)
         elif arr.ndim == 3:
+            samples_per_pixel = getattr(dataset, "SamplesPerPixel", 1)
+            if samples_per_pixel == 3 and arr.shape[-1] == 3:
+                if 1 in frame_numbers:
+                    frame_arrays.append(arr)
+            else:
+                for fn in frame_numbers:
+                    idx = fn - 1
+                    if 0 <= idx < arr.shape[0]:
+                        frame_arrays.append(arr[idx])
+        elif arr.ndim == 4:
             for fn in frame_numbers:
                 idx = fn - 1
                 if 0 <= idx < arr.shape[0]:
@@ -705,33 +818,41 @@ class DicomWebService:
         if not frame_arrays:
             return [], "application/octet-stream"
 
-        if requested_transfer_syntax:
-            target_uid = resolve_transfer_syntax(requested_transfer_syntax)
-        else:
-            target_uid = getattr(getattr(dataset, "file_meta", None), "TransferSyntaxUID", ExplicitVRLittleEndian)
-
         if target_uid == JPEGBaseline8Bit:
-            media_type = "image/jpeg"
             for f_arr in frame_arrays:
-                if f_arr.dtype == np.uint8 or f_arr.max() <= 255:
-                    f_arr8 = f_arr.astype(np.uint8)
+                if f_arr.dtype == np.uint8:
+                    f_arr8 = f_arr
                 else:
-                    f_arr8 = (f_arr >> 4).astype(np.uint8)
-                img = Image.fromarray(f_arr8, mode="L")
+                    arr_min = float(f_arr.min())
+                    arr_max = float(f_arr.max())
+                    if arr_max > arr_min:
+                        scaled = ((f_arr.astype(np.float32) - arr_min) / (arr_max - arr_min)) * 255.0
+                        f_arr8 = np.clip(scaled, 0, 255).astype(np.uint8)
+                    else:
+                        f_arr8 = np.zeros(f_arr.shape, dtype=np.uint8)
+                mode = "RGB" if f_arr8.ndim == 3 and f_arr8.shape[-1] == 3 else "L"
+                img = Image.fromarray(f_arr8, mode=mode)
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=95)
                 frames.append(buf.getvalue())
         elif target_uid in (JPEG2000Lossless, JPEG2000):
-            media_type = "image/jp2"
             for f_arr in frame_arrays:
+                is_16bit = f_arr.itemsize == 2 or f_arr.dtype in (np.int16, np.uint16)
+                is_signed = np.issubdtype(f_arr.dtype, np.signedinteger)
+
                 temp_ds = Dataset()
-                temp_ds.Rows, temp_ds.Columns = f_arr.shape
-                temp_ds.BitsAllocated = 16 if f_arr.dtype == np.uint16 else 8
-                temp_ds.BitsStored = 12 if f_arr.dtype == np.uint16 else 8
-                temp_ds.HighBit = 11 if f_arr.dtype == np.uint16 else 7
-                temp_ds.PixelRepresentation = 0
-                temp_ds.SamplesPerPixel = 1
-                temp_ds.PhotometricInterpretation = "MONOCHROME2"
+                temp_ds.Rows, temp_ds.Columns = f_arr.shape[:2]
+                bits_alloc = getattr(dataset, "BitsAllocated", 16 if is_16bit else 8)
+                if is_16bit and bits_alloc < 16:
+                    bits_alloc = 16
+                temp_ds.BitsAllocated = bits_alloc
+                temp_ds.BitsStored = getattr(dataset, "BitsStored", bits_alloc)
+                temp_ds.HighBit = getattr(dataset, "HighBit", temp_ds.BitsStored - 1)
+                temp_ds.PixelRepresentation = getattr(dataset, "PixelRepresentation", 1 if is_signed else 0)
+                temp_ds.SamplesPerPixel = getattr(dataset, "SamplesPerPixel", 1)
+                temp_ds.PhotometricInterpretation = getattr(dataset, "PhotometricInterpretation", "MONOCHROME2")
+                if hasattr(dataset, "PlanarConfiguration"):
+                    temp_ds.PlanarConfiguration = dataset.PlanarConfiguration
                 temp_ds.PixelData = f_arr.tobytes()
                 temp_ds.file_meta = FileMetaDataset()
                 temp_ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
@@ -747,16 +868,23 @@ class DicomWebService:
                     frames.append(f_arr.tobytes())
                     media_type = "application/octet-stream"
         elif target_uid == RLELossless:
-            media_type = "image/rle"
             for f_arr in frame_arrays:
+                is_16bit = f_arr.itemsize == 2 or f_arr.dtype in (np.int16, np.uint16)
+                is_signed = np.issubdtype(f_arr.dtype, np.signedinteger)
+
                 temp_ds = Dataset()
-                temp_ds.Rows, temp_ds.Columns = f_arr.shape
-                temp_ds.BitsAllocated = 16 if f_arr.dtype == np.uint16 else 8
-                temp_ds.BitsStored = 12 if f_arr.dtype == np.uint16 else 8
-                temp_ds.HighBit = 11 if f_arr.dtype == np.uint16 else 7
-                temp_ds.PixelRepresentation = 0
-                temp_ds.SamplesPerPixel = 1
-                temp_ds.PhotometricInterpretation = "MONOCHROME2"
+                temp_ds.Rows, temp_ds.Columns = f_arr.shape[:2]
+                bits_alloc = getattr(dataset, "BitsAllocated", 16 if is_16bit else 8)
+                if is_16bit and bits_alloc < 16:
+                    bits_alloc = 16
+                temp_ds.BitsAllocated = bits_alloc
+                temp_ds.BitsStored = getattr(dataset, "BitsStored", bits_alloc)
+                temp_ds.HighBit = getattr(dataset, "HighBit", temp_ds.BitsStored - 1)
+                temp_ds.PixelRepresentation = getattr(dataset, "PixelRepresentation", 1 if is_signed else 0)
+                temp_ds.SamplesPerPixel = getattr(dataset, "SamplesPerPixel", 1)
+                temp_ds.PhotometricInterpretation = getattr(dataset, "PhotometricInterpretation", "MONOCHROME2")
+                if hasattr(dataset, "PlanarConfiguration"):
+                    temp_ds.PlanarConfiguration = dataset.PlanarConfiguration
                 temp_ds.PixelData = f_arr.tobytes()
                 temp_ds.file_meta = FileMetaDataset()
                 temp_ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian

@@ -296,6 +296,9 @@ class DicomScpService:
             sop_inst_uid = str(getattr(ds, "SOPInstanceUID", ""))
             instance_num = int(getattr(ds, "InstanceNumber", idx))
 
+            ts_uid = getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None)
+            ts_name = getattr(ts_uid, "name", str(ts_uid)) if ts_uid else "Unknown"
+
             logger.info(
                 "dicom_c_store_instance_pushed",
                 patient_name=patient_name,
@@ -304,6 +307,8 @@ class DicomScpService:
                 series_instance_uid=series_inst_uid,
                 sop_instance_uid=sop_inst_uid,
                 instance_number=f"{instance_num}/{total_instances}",
+                transfer_syntax=ts_name,
+                transfer_syntax_uid=str(ts_uid) if ts_uid else None,
                 move_destination=move_destination,
                 dest_host=addr,
                 dest_port=port,

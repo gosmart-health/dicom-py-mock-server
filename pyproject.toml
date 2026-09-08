@@ -1,6 +1,6 @@
 [project]
 name = "dicom-py-mock-server"
-version = "0.2.3"
+version = "0.3.0"
 description = "Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,6 +23,8 @@ dependencies = [
 
 [project.scripts]
 dicom-py-mock-server = "dicom_py_mock_server.main:main"
+push-hl7 = "dicom_py_mock_server.utils.push_hl7:main"
+push_hl7 = "dicom_py_mock_server.utils.push_hl7:main"
 
 [build-system]
 requires = ["hatchling"]

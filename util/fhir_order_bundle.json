@@ -1,0 +1,83 @@
+{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:65cf2546-24a9-4674-8b65-e9df770d10b7",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "pat-12345",
+        "identifier": [
+          {
+            "system": "http://gosmart.health/mrn",
+            "value": "MRN-FHIR-9988"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "family": "WILLIAMS",
+            "given": [
+              "SARAH",
+              "JANE"
+            ]
+          }
+        ],
+        "gender": "female",
+        "birthDate": "1982-06-15"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:d6e42b26-0e1f-45c5-a0c3-329b35b69038",
+      "resource": {
+        "resourceType": "Practitioner",
+        "id": "doc-678",
+        "name": [
+          {
+            "family": "TAYLOR",
+            "given": [
+              "MICHAEL"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:1a95e7b2-8c43-4c92-b883-65342a229a17",
+      "resource": {
+        "resourceType": "ServiceRequest",
+        "id": "sr-ct-5566",
+        "status": "active",
+        "intent": "order",
+        "identifier": [
+          {
+            "system": "http://gosmart.health/accession",
+            "value": "ACC-FHIR-CT-01"
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "24627-2",
+              "display": "CT Chest with contrast"
+            }
+          ],
+          "text": "CT Chest with IV contrast"
+        },
+        "subject": {
+          "reference": "urn:uuid:65cf2546-24a9-4674-8b65-e9df770d10b7"
+        },
+        "requester": {
+          "reference": "urn:uuid:d6e42b26-0e1f-45c5-a0c3-329b35b69038"
+        },
+        "occurrenceDateTime": "2026-09-07T16:00:00",
+        "reasonCode": [
+          {
+            "text": "Persistent cough evaluation"
+          }
+        ]
+      }
+    }
+  ]
+}
