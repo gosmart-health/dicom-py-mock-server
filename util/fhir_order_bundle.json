@@ -9,7 +9,7 @@
         "id": "pat-12345",
         "identifier": [
           {
-            "system": "http://hospital.org/mrn",
+            "system": "http://gosmart.health/mrn",
             "value": "MRN-FHIR-9988"
           }
         ],
@@ -51,7 +51,7 @@
         "intent": "order",
         "identifier": [
           {
-            "system": "http://hospital.org/accession",
+            "system": "http://gosmart.health/accession",
             "value": "ACC-FHIR-CT-01"
           }
         ],
