@@ -507,8 +507,8 @@ def test_microdicom_cstore_push_if_listening():
         pytest.skip(f"MicroDICOM push skipped due to connection error: {exc}")
 
 
-def test_microdicom_send_jpeg2000_lossless_from_ct_small_template():
-    """Test loading templates/CT_small.dcm, applying JPEG2000 Lossless generated image,
+def test_microdicom_send_jpeg2000_lossless_from_sample_ct_template():
+    """Test loading templates/sample_ct, applying JPEG2000 Lossless generated image,
     negotiating JPEG2000 Lossless transfer syntax, and sending directly to MicroDICOM Viewer at port 11113 (MDICOM).
     """
     import pytest
@@ -522,7 +522,7 @@ def test_microdicom_send_jpeg2000_lossless_from_ct_small_template():
 
     from pathlib import Path
 
-    template_path = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    template_path = sorted(Path("templates/sample_ct").glob("*.dcm"))[0]
 
     # 1. Create dataset from template with JPEG2000 Lossless compression & burned-in metadata
     ds = DicomGeneratorService.create_dicom_from_template(

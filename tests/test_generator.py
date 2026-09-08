@@ -151,8 +151,8 @@ def test_transfer_syntax_swapping_raw_jpeg_jpeg2000():
 
 
 def test_template_sop_synthesis():
-    """Test generating DICOM SOP instances using Toshiba_Aquilion as base template."""
-    ct_file = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    """Test generating DICOM SOP instances using sample_ct as base template."""
+    ct_file = sorted(Path("templates/sample_ct").glob("*.dcm"))[0]
     template_ds = pydicom.dcmread(ct_file, force=True)
     assert template_ds.Modality == "CT"
     assert template_ds.Rows == 512
@@ -161,7 +161,7 @@ def test_template_sop_synthesis():
     generator = DicomGeneratorService()
     request = MockDicomRequest(
         patient=PatientModel(patient_id="TEMPLATE-PAT-001", patient_name="Template^Synthesized"),
-        study=StudyModel(study_description="Synthesized from Toshiba template"),
+        study=StudyModel(study_description="Synthesized from sample_ct template"),
         series=SeriesModel(modality=str(template_ds.Modality)),
         num_instances=2,
         rows=int(template_ds.Rows),
@@ -360,7 +360,7 @@ def test_precomputed_background_caching():
 
 
 def test_template_jpeg2000_lossless_generation():
-    """Generate JPEG2000 Lossless DICOM Part-10 file based on templates/CT_small.dcm.
+    """Generate JPEG2000 Lossless DICOM Part-10 file based on templates/sample_ct.
 
     Swaps pixels with burned metadata text on precomputed background and saves
     to test_output/jpeg_2000_lossless.dcm without deletion for PACS viewer verification.
@@ -370,7 +370,7 @@ def test_template_jpeg2000_lossless_generation():
     out_dir = Path("test_output")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "jpeg_2000_lossless.dcm"
-    ct_sample = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    ct_sample = sorted(Path("templates/sample_ct").glob("*.dcm"))[0]
 
     ds = DicomGeneratorService.create_dicom_from_template(
         template=ct_sample,
@@ -405,7 +405,7 @@ def test_template_all_supported_compressions_generation():
 
     out_dir = Path("test_output")
     out_dir.mkdir(parents=True, exist_ok=True)
-    ct_sample = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    ct_sample = sorted(Path("templates/sample_ct").glob("*.dcm"))[0]
 
     cases = [
         ("jpeg_2000_lossless.dcm", "JPEG2000_LOSSLESS", JPEG2000Lossless, np.uint16),
@@ -442,7 +442,7 @@ def test_template_all_supported_compressions_generation():
 
 def test_create_dicom_from_template_date_time_sync():
     """Verify that create_dicom_from_template synchronizes all dates and times to the specified study date/time."""
-    ct_sample = sorted(Path("templates/Toshiba_Aquilion").glob("*.dcm"))[0]
+    ct_sample = sorted(Path("templates/sample_ct").glob("*.dcm"))[0]
     target_date = "20260907"
     target_time = "143000"
 

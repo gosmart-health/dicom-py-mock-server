@@ -13,20 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Template Directory Structure Requirement (Breaking Change)**:
   - Standalone DICOM files directly located in the `templates/` root folder are no longer accepted and will raise a `ValueError` to prevent ambiguity.
-  - Multi-slice templates must now be organized into dedicated subfolders per series/modality (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`).
+  - Multi-slice templates must now be organized into dedicated subfolders per series/modality (e.g. `templates/sample_ct/`, `templates/sample_mr/`).
 
 ### Added
 - **Multi-Slice CT & MR Template Loading**:
-  - Added multi-slice DICOM template loading from dedicated subfolders under `templates/` (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`).
+  - Added multi-slice DICOM template loading from dedicated subfolders under `templates/` (e.g. `templates/sample_ct/`, `templates/sample_mr/`).
   - Implemented strict folder structure validation: standalone files directly in `templates/` root are strictly rejected with `ValueError` to prevent ambiguity.
   - Implemented dynamic modality discovery from DICOM tag `(0008, 0060)` rather than directory names.
   - Enforced folder modality purity: subfolders containing datasets with mixed modalities raise a descriptive `ValueError`.
   - Added automatic non-image object exclusion: non-pixel objects, Presentation States (`PR`), Structured Reports (`SR`), and private raw objects (`XX_*`) are safely excluded from image slice series.
   - Added series grouping and deterministic slice sorting: DICOM instances within each template series are grouped by `SeriesInstanceUID` and sorted by `InstanceNumber`, `SliceLocation`, and image position `z` coordinate.
 - **Template Study Description Preservation in Non-Synthetic Mode**:
-  - In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), preserved the original `StudyDescription` loaded from template datasets (such as `"dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"` in `templates/MR`) across Modality Worklist (MWL) entries (`json_entry`, `dataset`, `entry_record`), C-FIND query responses, and synthesized DICOM SOP instances (`create_instances_from_mwl`).
+  - In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), preserved the original `StudyDescription` loaded from template datasets (such as `"dS Torso, T2W Tra, 3D MRCP, bTFE Cor, mDixon"` in `templates/sample_mr`) across Modality Worklist (MWL) entries (`json_entry`, `dataset`, `entry_record`), C-FIND query responses, and synthesized DICOM SOP instances (`create_instances_from_mwl`).
   - Prohibited swapping native template Study Descriptions with mockup/random descriptions from `MODALITY_STUDY_DESCRIPTIONS` when running in non-synthetic mode.
-  - For templates lacking an original `StudyDescription` (e.g. `templates/Toshiba_Aquilion`), prevented injecting mockup study descriptions, keeping `StudyDescription` unset or empty as in the source template.
+  - For templates lacking an original `StudyDescription` (e.g. `templates/sample_ct`), prevented injecting mockup study descriptions, keeping `StudyDescription` unset or empty as in the source template.
   - Supported explicit `custom["studyDescription"]` overrides in MWL requests while defaulting to the template dataset's native value.
   - In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), maintained standard synthetic generation of modality-aligned study descriptions when omitted.
   - Enhanced multi-slice scanning across all slices in `MwlGeneratorService._load_templates` to capture any present `StudyDescription` into `TemplateSeriesDataset.study_description`.
