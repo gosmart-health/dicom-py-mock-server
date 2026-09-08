@@ -14,7 +14,7 @@ SAMPLE_FHIR_CT_BUNDLE = {
     "type": "collection",
     "entry": [
         {
-            "fullUrl": "urn:uuid:patient-001",
+            "fullUrl": "urn:uuid:65cf2546-24a9-4674-8b65-e9df770d10b7",
             "resource": {
                 "resourceType": "Patient",
                 "id": "pat-12345",
@@ -31,7 +31,7 @@ SAMPLE_FHIR_CT_BUNDLE = {
             },
         },
         {
-            "fullUrl": "urn:uuid:practitioner-001",
+            "fullUrl": "urn:uuid:d6e42b26-0e1f-45c5-a0c3-329b35b69038",
             "resource": {
                 "resourceType": "Practitioner",
                 "id": "doc-678",
@@ -39,7 +39,7 @@ SAMPLE_FHIR_CT_BUNDLE = {
             },
         },
         {
-            "fullUrl": "urn:uuid:servicerequest-001",
+            "fullUrl": "urn:uuid:1a95e7b2-8c43-4c92-b883-65342a229a17",
             "resource": {
                 "resourceType": "ServiceRequest",
                 "id": "sr-ct-5566",
