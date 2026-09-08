@@ -3,7 +3,7 @@
   "type": "collection",
   "entry": [
     {
-      "fullUrl": "urn:uuid:patient-001",
+      "fullUrl": "urn:uuid:65cf2546-24a9-4674-8b65-e9df770d10b7",
       "resource": {
         "resourceType": "Patient",
         "id": "pat-12345",
@@ -28,7 +28,7 @@
       }
     },
     {
-      "fullUrl": "urn:uuid:practitioner-001",
+      "fullUrl": "urn:uuid:d6e42b26-0e1f-45c5-a0c3-329b35b69038",
       "resource": {
         "resourceType": "Practitioner",
         "id": "doc-678",
@@ -43,7 +43,7 @@
       }
     },
     {
-      "fullUrl": "urn:uuid:servicerequest-001",
+      "fullUrl": "urn:uuid:1a95e7b2-8c43-4c92-b883-65342a229a17",
       "resource": {
         "resourceType": "ServiceRequest",
         "id": "sr-ct-5566",
@@ -66,10 +66,10 @@
           "text": "CT Chest with IV contrast"
         },
         "subject": {
-          "reference": "Patient/pat-12345"
+          "reference": "urn:uuid:65cf2546-24a9-4674-8b65-e9df770d10b7"
         },
         "requester": {
-          "reference": "Practitioner/doc-678"
+          "reference": "urn:uuid:d6e42b26-0e1f-45c5-a0c3-329b35b69038"
         },
         "occurrenceDateTime": "2026-09-07T16:00:00",
         "reasonCode": [
