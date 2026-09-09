@@ -121,7 +121,14 @@ graph TD
     - Rendered Preview & Frame Retrieval (`GET .../rendered`, `GET .../frames/{frameList}`) returning dynamically negotiated and encoded frame streams (`image/jpeg`, `image/jp2`, `image/rle`, `application/octet-stream`) or rendered JPEG/PNG images.
   - **WADO-URI (DICOM PS3.18 Section 9)**:
     - Legacy single-object retrieval (`GET /dicomweb/wado?requestType=WADO&studyUID=...&seriesUID=...&objectUID=...&contentType=...&transferSyntax=...`).
-  - **Dual Data Sourcing**: Integrates seamlessly across in-memory synthesized MWL datasets and stored `.dcm` files on disk.
+  - **STOW-RS (Store Over the Web by RESTful Services - DICOM PS3.18 Section 10.5)**:
+    - Store Instances (`POST /dicomweb/studies`, `POST /dicomweb/studies/{studyUID}`, and `/studies` aliases).
+    - Accepts standard `multipart/related; type="application/dicom"`, `multipart/form-data`, and direct `application/dicom` payloads.
+    - Saves Part-10 files hierarchically into configured received directory (`GOSMART_MS_RECEIVED_DIR`, default `./received/{studyUID}/{seriesUID}/{sopUID}.dcm`).
+    - Retains instances in memory for immediate discovery and retrieval via QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE.
+    - Implements configurable duplicate handling policy (`GOSMART_MS_STOW_DUPLICATE_HANDLING`: `accept`, `warn`, `reject`).
+    - Returns standard DICOM JSON (`application/dicom+json`) with `00081199` `ReferencedSOPSequence` (including `RetrieveURL`) and `00081198` `FailedSOPSequence`.
+  - **Multi-Source Sourcing**: Integrates seamlessly across in-memory synthesized MWL datasets, disk-stored `.dcm` files, and received STOW-RS datasets.
 
 ### 3.9 High-Throughput Stress Mode Subsystem
 * **`GOSMART_MS_STRESS` Execution Lifecycle**:

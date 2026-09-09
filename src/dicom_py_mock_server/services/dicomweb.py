@@ -11,8 +11,8 @@ import numpy as np
 import pydicom
 import structlog
 from PIL import Image
-from pydicom.dataset import Dataset
-from pydicom.uid import JPEGBaseline8Bit
+from pydicom.dataset import Dataset, FileMetaDataset
+from pydicom.uid import ExplicitVRLittleEndian, JPEGBaseline8Bit
 
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.services.generator import (
@@ -33,16 +33,19 @@ class DicomWebService:
         mwl_service: MwlGeneratorService | None = None,
         generator_service: DicomGeneratorService | None = None,
         storage_dir: str | None = None,
+        received_dir: str | None = None,
     ) -> None:
         self.mwl_service = mwl_service
         self.generator_service = generator_service or DicomGeneratorService()
         self.storage_dir = Path(storage_dir or config.storage_dir)
+        self.received_dir = Path(received_dir or config.received_dir)
         self._study_transfer_syntaxes: dict[str, str] = {}
         self._stress_study_cache: dict[str, list[Dataset]] = {}
         self._study_cache: OrderedDict[tuple[str, str, bool], list[Dataset]] = OrderedDict()
         self._study_cache_max_size: int = 50
+        self._stow_datasets: dict[str, Dataset] = {}
 
-    def clear_cache(self, study_uid: str | None = None) -> None:
+    def clear_cache(self, study_uid: str | None = None, clear_stow: bool = False) -> None:
         """Clear cached transfer syntaxes and study instances."""
         if study_uid:
             keys_to_remove = [k for k in self._study_cache if k[0] == str(study_uid)]
@@ -50,10 +53,18 @@ class DicomWebService:
                 self._study_cache.pop(k, None)
             self._study_transfer_syntaxes.pop(study_uid, None)
             self._stress_study_cache.pop(study_uid, None)
+            if clear_stow:
+                self._stow_datasets = {
+                    k: v
+                    for k, v in self._stow_datasets.items()
+                    if str(getattr(v, "StudyInstanceUID", "")) != str(study_uid)
+                }
         else:
             self._study_cache.clear()
             self._study_transfer_syntaxes.clear()
             self._stress_study_cache.clear()
+            if clear_stow:
+                self._stow_datasets.clear()
 
     def clear_stress_cache(self) -> None:
         """Clear cached transfer syntaxes and study instances for stress mode and WADO requests."""
@@ -61,9 +72,12 @@ class DicomWebService:
 
     def _get_stored_files(self) -> list[Path]:
         """Get all stored .dcm files on disk."""
-        if not self.storage_dir.exists():
-            return []
-        return [p for p in self.storage_dir.rglob("*.dcm") if p.is_file()]
+        files: list[Path] = []
+        if self.storage_dir.exists():
+            files.extend([p for p in self.storage_dir.rglob("*.dcm") if p.is_file()])
+        if self.received_dir.exists():
+            files.extend([p for p in self.received_dir.rglob("*.dcm") if p.is_file()])
+        return files
 
     def _read_stored_datasets(self) -> list[Dataset]:
         """Read all stored DICOM datasets from storage directory."""
@@ -215,6 +229,13 @@ class DicomWebService:
                 seen_study_uids.add(study_uid)
                 study_datasets.append(ds)
 
+        # 3. Collect from STOW-RS stored instances
+        for ds in self._stow_datasets.values():
+            study_uid = str(getattr(ds, "StudyInstanceUID", ""))
+            if study_uid and study_uid not in seen_study_uids:
+                seen_study_uids.add(study_uid)
+                study_datasets.append(ds)
+
         # Apply filtering
         patient_id = query_params.get("PatientID") or query_params.get("patientID") or query_params.get("patient_id")
         patient_name = (
@@ -340,6 +361,15 @@ class DicomWebService:
                 seen_series_uids.add(s_uid)
                 series_datasets.append(ds)
 
+        # 3. Collect from STOW-RS stored instances
+        for ds in self._stow_datasets.values():
+            if study_uid and not self._matches_filter(getattr(ds, "StudyInstanceUID", None), study_uid):
+                continue
+            s_uid = str(getattr(ds, "SeriesInstanceUID", ""))
+            if s_uid and s_uid not in seen_series_uids:
+                seen_series_uids.add(s_uid)
+                series_datasets.append(ds)
+
         # Apply filtering
         modality = query_params.get("Modality") or query_params.get("modality")
         series_uid_q = query_params.get("SeriesInstanceUID") or query_params.get("seriesInstanceUID")
@@ -422,10 +452,22 @@ class DicomWebService:
                 seen_sop_uids.add(sop_uid)
                 instance_datasets.append(ds)
 
+        # 3. Collect from STOW-RS stored instances
+        for ds in self._stow_datasets.values():
+            if study_uid and not self._matches_filter(getattr(ds, "StudyInstanceUID", None), study_uid):
+                continue
+            if series_uid and not self._matches_filter(getattr(ds, "SeriesInstanceUID", None), series_uid):
+                continue
+            sop_uid = str(getattr(ds, "SOPInstanceUID", ""))
+            if sop_uid and sop_uid not in seen_sop_uids:
+                seen_sop_uids.add(sop_uid)
+                instance_datasets.append(ds)
+
         # Apply filtering
         sop_uid_q = query_params.get("SOPInstanceUID") or query_params.get("sopInstanceUID")
         sop_class_q = query_params.get("SOPClassUID") or query_params.get("sopClassUID")
         inst_num = query_params.get("InstanceNumber") or query_params.get("instanceNumber")
+        modality_q = query_params.get("Modality") or query_params.get("modality")
 
         matched: list[Dataset] = []
         for ds in instance_datasets:
@@ -434,6 +476,8 @@ class DicomWebService:
             if sop_class_q and not self._matches_filter(getattr(ds, "SOPClassUID", None), sop_class_q):
                 continue
             if inst_num and not self._matches_filter(getattr(ds, "InstanceNumber", None), inst_num):
+                continue
+            if modality_q and not self._matches_filter(getattr(ds, "Modality", None), modality_q):
                 continue
             matched.append(ds)
 
@@ -453,6 +497,8 @@ class DicomWebService:
             out_ds.SeriesInstanceUID = getattr(ds, "SeriesInstanceUID", series_uid or "")
             out_ds.SOPInstanceUID = getattr(ds, "SOPInstanceUID", "")
             out_ds.SOPClassUID = getattr(ds, "SOPClassUID", "1.2.840.10008.5.1.4.1.1.2")
+            if "Modality" in ds:
+                out_ds.Modality = ds.Modality
             if "InstanceNumber" in ds:
                 out_ds.InstanceNumber = int(ds.InstanceNumber)
             if "Rows" in ds:
@@ -467,6 +513,18 @@ class DicomWebService:
                 out_ds.HighBit = int(ds.HighBit)
             if "PixelRepresentation" in ds:
                 out_ds.PixelRepresentation = int(ds.PixelRepresentation)
+            for tag in (
+                "ContentLabel",
+                "ContentDescription",
+                "PresentationCreationDate",
+                "PresentationCreationTime",
+                "ContentCreatorName",
+                "ReferencedSeriesSequence",
+                "GraphicAnnotationSequence",
+                "GraphicLayerSequence",
+            ):
+                if tag in ds:
+                    setattr(out_ds, tag, getattr(ds, tag))
 
             result.append(out_ds.to_json_dict(suppress_invalid_tags=True))
 
@@ -552,10 +610,24 @@ class DicomWebService:
                 datasets.extend(inst_list)
 
         # 2. Check stored files on disk
-        if not datasets:
-            datasets = [
-                ds for ds in self._read_stored_datasets() if str(getattr(ds, "StudyInstanceUID", "")) == str(study_uid)
-            ]
+        disk_datasets = [
+            ds for ds in self._read_stored_datasets() if str(getattr(ds, "StudyInstanceUID", "")) == str(study_uid)
+        ]
+        if disk_datasets:
+            existing_sops = {str(getattr(d, "SOPInstanceUID", "")) for d in datasets}
+            for d_ds in disk_datasets:
+                if str(getattr(d_ds, "SOPInstanceUID", "")) not in existing_sops:
+                    datasets.append(d_ds)
+
+        # 3. Check in-memory STOW-RS received datasets
+        stow_instances = [
+            ds for ds in self._stow_datasets.values() if str(getattr(ds, "StudyInstanceUID", "")) == str(study_uid)
+        ]
+        if stow_instances:
+            existing_sops = {str(getattr(d, "SOPInstanceUID", "")) for d in datasets}
+            for s_ds in stow_instances:
+                if str(getattr(s_ds, "SOPInstanceUID", "")) not in existing_sops:
+                    datasets.append(s_ds)
 
         if is_stress and datasets:
             self._stress_study_cache[study_uid] = datasets
@@ -627,7 +699,8 @@ class DicomWebService:
                 if hasattr(ds, "file_meta"):
                     ds_copy.file_meta = ds.file_meta
 
-            if requested_transfer_syntax:
+            has_pixel_data = (0x7FE0, 0x0010) in ds or (0x7FE0, 0x0008) in ds or (0x7FE0, 0x0009) in ds
+            if requested_transfer_syntax and has_pixel_data:
                 target_uid = resolve_transfer_syntax(requested_transfer_syntax)
                 if hasattr(ds_copy, "file_meta"):
                     ds_copy.file_meta.TransferSyntaxUID = target_uid
@@ -640,6 +713,11 @@ class DicomWebService:
                     ds_copy.PhotometricInterpretation = "MONOCHROME2"
                     ds_copy.SamplesPerPixel = 1
                     ds_copy.PixelRepresentation = 0
+            elif not has_pixel_data:
+                if hasattr(ds_copy, "file_meta") and ds_copy.file_meta:
+                    curr_ts = getattr(ds_copy.file_meta, "TransferSyntaxUID", None)
+                    if not curr_ts or str(curr_ts) not in (str(ExplicitVRLittleEndian), "1.2.840.10008.1.2"):
+                        ds_copy.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
             metadata_list.append(ds_copy.to_json_dict(suppress_invalid_tags=True))
         return metadata_list
 
@@ -667,8 +745,16 @@ class DicomWebService:
 
         for ds in datasets:
             target_ts = effective_target_ts
+            has_pixel_data = (0x7FE0, 0x0010) in ds or (0x7FE0, 0x0008) in ds or (0x7FE0, 0x0009) in ds
+            target_ts = effective_target_ts if has_pixel_data else None
             if target_ts and getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None) != target_ts:
                 ds = DicomGeneratorService.apply_transfer_syntax(ds, target_ts)
+            elif not has_pixel_data:
+                if not hasattr(ds, "file_meta") or ds.file_meta is None:
+                    ds.file_meta = FileMetaDataset()
+                curr_ts = getattr(ds.file_meta, "TransferSyntaxUID", None)
+                if not curr_ts or str(curr_ts) not in (str(ExplicitVRLittleEndian), "1.2.840.10008.1.2"):
+                    ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
 
             # Get transfer syntax from dataset file_meta
             ts_uid = str(getattr(ds.file_meta, "TransferSyntaxUID", "1.2.840.10008.1.2.1"))
@@ -699,6 +785,10 @@ class DicomWebService:
         quality: int = 85,
     ) -> tuple[bytes, str]:
         """Render pixel array of DICOM dataset to JPEG/PNG bytes."""
+        has_pixel_data = (0x7FE0, 0x0010) in dataset or (0x7FE0, 0x0008) in dataset or (0x7FE0, 0x0009) in dataset
+        if not has_pixel_data:
+            raise ValueError("Dataset contains no pixel data to render")
+
         try:
             arr = dataset.pixel_array
         except Exception:
@@ -747,7 +837,12 @@ class DicomWebService:
         Returns (encoded_frame_bytes_list, content_type_str).
         """
         from pydicom.dataset import FileMetaDataset
-        from pydicom.encaps import generate_pixel_data_frame
+
+        try:
+            from pydicom.encaps import generate_frames
+        except ImportError:
+            from pydicom.encaps import generate_pixel_data_frame as generate_frames  # type: ignore
+
         from pydicom.uid import (
             JPEG2000,
             ExplicitVRLittleEndian,
@@ -757,6 +852,10 @@ class DicomWebService:
         )
 
         from dicom_py_mock_server.services.generator import resolve_transfer_syntax
+
+        has_pixel_data = (0x7FE0, 0x0010) in dataset or (0x7FE0, 0x0008) in dataset or (0x7FE0, 0x0009) in dataset
+        if not has_pixel_data:
+            return [], "application/octet-stream"
 
         current_ts = getattr(getattr(dataset, "file_meta", None), "TransferSyntaxUID", None)
         if requested_transfer_syntax:
@@ -777,7 +876,7 @@ class DicomWebService:
         # extract the requested frames directly without decompressing and re-encoding.
         if current_ts == target_uid and getattr(target_uid, "is_encapsulated", False) and hasattr(dataset, "PixelData"):
             try:
-                all_enc_frames = list(generate_pixel_data_frame(dataset.PixelData))
+                all_enc_frames = list(generate_frames(dataset.PixelData))
                 frames = []
                 for fn in frame_numbers:
                     idx = fn - 1
@@ -861,7 +960,7 @@ class DicomWebService:
                         temp_ds.compress(JPEG2000, j2k_cr=[10], generate_instance_uid=False)
                     else:
                         temp_ds.compress(JPEG2000Lossless, generate_instance_uid=False)
-                    enc_frame = next(generate_pixel_data_frame(temp_ds.PixelData))
+                    enc_frame = next(generate_frames(temp_ds.PixelData))
                     frames.append(enc_frame)
                 except Exception as exc:
                     logger.warning("j2k_frame_compression_failed_falling_back_to_raw", error=str(exc))
@@ -890,7 +989,7 @@ class DicomWebService:
                 temp_ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
                 try:
                     temp_ds.compress(RLELossless, generate_instance_uid=False)
-                    enc_frame = next(generate_pixel_data_frame(temp_ds.PixelData))
+                    enc_frame = next(generate_frames(temp_ds.PixelData))
                     frames.append(enc_frame)
                 except Exception as exc:
                     logger.warning("rle_frame_compression_failed_falling_back_to_raw", error=str(exc))
@@ -907,3 +1006,235 @@ class DicomWebService:
         """Extract raw pixel frame bytes for specified frame numbers (1-indexed)."""
         frames, _ = self.get_encoded_frames(dataset, frame_numbers, requested_transfer_syntax=None)
         return frames
+
+    # ---------------------------------------------------------------------------
+    # STOW-RS (Store Instances) Implementation
+    # ---------------------------------------------------------------------------
+
+    def parse_stow_payload(self, body: bytes, content_type: str) -> list[Dataset]:
+        """Parse DICOM datasets from a STOW-RS request body.
+
+        Supports standard multipart/related (type="application/dicom"), multipart/form-data,
+        and direct application/dicom or raw binary DICOM datasets.
+        """
+        if not body:
+            return []
+
+        datasets: list[Dataset] = []
+        boundary_match = re.search(r'boundary=(?:"([^"]+)"|([^\s;,]+))', content_type, re.IGNORECASE)
+
+        if boundary_match:
+            raw_boundary = boundary_match.group(1) if boundary_match.group(1) is not None else boundary_match.group(2)
+            boundary_bytes = raw_boundary.strip().encode("latin1")
+            delimiter = b"--" + boundary_bytes
+
+            parts = body.split(delimiter)
+            for raw_part in parts:
+                part = raw_part.strip()
+                if not part or part == b"--" or part.startswith(b"--"):
+                    continue
+
+                # Split headers and body
+                if b"\r\n\r\n" in part:
+                    _, _, part_body = part.partition(b"\r\n\r\n")
+                elif b"\n\n" in part:
+                    _, _, part_body = part.partition(b"\n\n")
+                else:
+                    part_body = part
+
+                if part_body.endswith(b"\r\n"):
+                    part_body = part_body[:-2]
+                elif part_body.endswith(b"\n"):
+                    part_body = part_body[:-1]
+
+                if not part_body:
+                    continue
+
+                try:
+                    ds = pydicom.dcmread(io.BytesIO(part_body), force=True)
+                    datasets.append(ds)
+                except Exception as exc:
+                    logger.warning("stow_payload_part_parse_failed", error=str(exc))
+        else:
+            # Try reading the entire body as a single Part-10 DICOM or raw dataset
+            try:
+                ds = pydicom.dcmread(io.BytesIO(body), force=True)
+                datasets.append(ds)
+            except Exception as exc:
+                logger.warning("stow_payload_direct_parse_failed", error=str(exc))
+
+        return datasets
+
+    def store_instance(
+        self,
+        dataset: Dataset,
+        target_study_uid: str | None = None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Store a single DICOM instance to disk (Part-10) and memory.
+
+        Returns (referenced_sop_dict, failed_sop_dict).
+        """
+        sop_class_uid = str(getattr(dataset, "SOPClassUID", "")).strip()
+        sop_instance_uid = str(getattr(dataset, "SOPInstanceUID", "")).strip()
+        study_uid = str(getattr(dataset, "StudyInstanceUID", "")).strip()
+        series_uid = str(getattr(dataset, "SeriesInstanceUID", "")).strip()
+
+        if not sop_class_uid or not sop_instance_uid or not study_uid:
+            return None, {
+                "ReferencedSOPClassUID": sop_class_uid or "1.2.840.10008.5.1.4.1.1.2",
+                "ReferencedSOPInstanceUID": sop_instance_uid or "0",
+                "FailureReason": 0x0110,  # Processing failure
+            }
+
+        if target_study_uid and study_uid != target_study_uid:
+            logger.warning(
+                "stow_study_instance_uid_mismatch",
+                target_study_uid=target_study_uid,
+                dataset_study_uid=study_uid,
+                sop_instance_uid=sop_instance_uid,
+            )
+            return None, {
+                "ReferencedSOPClassUID": sop_class_uid,
+                "ReferencedSOPInstanceUID": sop_instance_uid,
+                "FailureReason": 0x0122,  # Referenced Study does not match
+            }
+
+        dup_policy = getattr(config, "stow_duplicate_handling", "accept").lower().strip()
+        is_duplicate = sop_instance_uid in self._stow_datasets
+        warning_reason: int | None = None
+
+        if is_duplicate:
+            if dup_policy == "reject":
+                logger.warning(
+                    "stow_duplicate_instance_rejected",
+                    sop_instance_uid=sop_instance_uid,
+                    study_uid=study_uid,
+                )
+                return None, {
+                    "ReferencedSOPClassUID": sop_class_uid,
+                    "ReferencedSOPInstanceUID": sop_instance_uid,
+                    "FailureReason": 0x0111,  # Duplicate SOP Instance
+                }
+            elif dup_policy == "warn":
+                warning_reason = 0xB000  # Coercion of Data Elements / Duplicate
+
+        # Ensure Part-10 File Meta Information
+        if not hasattr(dataset, "file_meta") or not dataset.file_meta:
+            dataset.file_meta = FileMetaDataset()
+        if not getattr(dataset.file_meta, "MediaStorageSOPClassUID", None):
+            dataset.file_meta.MediaStorageSOPClassUID = sop_class_uid
+        if not getattr(dataset.file_meta, "MediaStorageSOPInstanceUID", None):
+            dataset.file_meta.MediaStorageSOPInstanceUID = sop_instance_uid
+        if not getattr(dataset.file_meta, "TransferSyntaxUID", None):
+            dataset.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+
+        # Save Part-10 file to received folder: ./received/{study}/{series}/{sop}.dcm
+        study_folder = study_uid if study_uid else "unknown_study"
+        series_folder = series_uid if series_uid else "unknown_series"
+        out_dir = self.received_dir / study_folder / series_folder
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            file_path = out_dir / f"{sop_instance_uid}.dcm"
+            dataset.save_as(file_path, enforce_file_format=True)
+        except Exception as exc:
+            logger.error("stow_file_save_failed", path=str(out_dir), error=str(exc))
+            return None, {
+                "ReferencedSOPClassUID": sop_class_uid,
+                "ReferencedSOPInstanceUID": sop_instance_uid,
+                "FailureReason": 0x0110,
+            }
+
+        # Cache in memory
+        self._stow_datasets[sop_instance_uid] = dataset
+        self.clear_cache(study_uid)
+
+        logger.info(
+            "stow_instance_stored",
+            sop_instance_uid=sop_instance_uid,
+            study_uid=study_uid,
+            series_uid=series_uid,
+            path=str(file_path),
+            is_duplicate=is_duplicate,
+            warning_reason=warning_reason,
+        )
+
+        retrieve_url = f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances/{sop_instance_uid}"
+        ref_dict: dict[str, Any] = {
+            "ReferencedSOPClassUID": sop_class_uid,
+            "ReferencedSOPInstanceUID": sop_instance_uid,
+            "RetrieveURL": retrieve_url,
+        }
+        if warning_reason is not None:
+            ref_dict["WarningReason"] = warning_reason
+
+        return ref_dict, None
+
+    def process_stow_request(
+        self,
+        target_study_uid: str | None,
+        content_type: str | None,
+        body: bytes,
+    ) -> tuple[int, dict[str, Any]]:
+        """Process a STOW-RS request and return (status_code, dicom_json_response)."""
+        if not body or len(body) == 0:
+            resp_ds = Dataset()
+            resp_ds.FailedSOPSequence = []
+            f_item = Dataset()
+            f_item.ReferencedSOPClassUID = "1.2.840.10008.5.1.4.1.1.2"
+            f_item.ReferencedSOPInstanceUID = "0"
+            f_item.FailureReason = 0x0110
+            resp_ds.FailedSOPSequence.append(f_item)
+            return 400, resp_ds.to_json_dict(suppress_invalid_tags=True)
+
+        datasets = self.parse_stow_payload(body, content_type or "")
+        if not datasets:
+            resp_ds = Dataset()
+            resp_ds.FailedSOPSequence = []
+            f_item = Dataset()
+            f_item.ReferencedSOPClassUID = "1.2.840.10008.5.1.4.1.1.2"
+            f_item.ReferencedSOPInstanceUID = "0"
+            f_item.FailureReason = 0x0110
+            resp_ds.FailedSOPSequence.append(f_item)
+            return 400, resp_ds.to_json_dict(suppress_invalid_tags=True)
+
+        referenced_sops: list[dict[str, Any]] = []
+        failed_sops: list[dict[str, Any]] = []
+
+        for ds in datasets:
+            ref_item, failed_item = self.store_instance(ds, target_study_uid=target_study_uid)
+            if ref_item:
+                referenced_sops.append(ref_item)
+            if failed_item:
+                failed_sops.append(failed_item)
+
+        if not referenced_sops:
+            all_conflicts = all(f.get("FailureReason") in (0x0122, 0x0111) for f in failed_sops)
+            status_code = 409 if all_conflicts else 400
+        elif failed_sops:
+            status_code = 202
+        else:
+            status_code = 200
+
+        resp_ds = Dataset()
+        if referenced_sops:
+            resp_ds.ReferencedSOPSequence = []
+            for ref in referenced_sops:
+                item = Dataset()
+                item.ReferencedSOPClassUID = ref["ReferencedSOPClassUID"]
+                item.ReferencedSOPInstanceUID = ref["ReferencedSOPInstanceUID"]
+                if "RetrieveURL" in ref:
+                    item.RetrieveURL = ref["RetrieveURL"]
+                if "WarningReason" in ref:
+                    item.WarningReason = int(ref["WarningReason"])
+                resp_ds.ReferencedSOPSequence.append(item)
+
+        if failed_sops:
+            resp_ds.FailedSOPSequence = []
+            for fl in failed_sops:
+                item = Dataset()
+                item.ReferencedSOPClassUID = fl["ReferencedSOPClassUID"]
+                item.ReferencedSOPInstanceUID = fl["ReferencedSOPInstanceUID"]
+                item.FailureReason = int(fl["FailureReason"])
+                resp_ds.FailedSOPSequence.append(item)
+
+        return status_code, resp_ds.to_json_dict(suppress_invalid_tags=True)

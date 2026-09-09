@@ -826,7 +826,7 @@ class MwlGeneratorService:
             "dataset": dataset,
             "template_series": selected_template_series,
             "template_dataset": dicom_template,
-            "created_at": scheduled_at or now,
+            "created_at": now if custom else (scheduled_at or now),
             "patient_id": json_entry["00100020"]["Value"][0],
             "patient_name": json_entry["00100010"]["Value"][0].get("Alphabetic", ""),
             "accession": json_entry["00080050"]["Value"][0],

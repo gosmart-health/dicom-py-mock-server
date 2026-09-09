@@ -16,7 +16,7 @@ class AppConfig(BaseSettings):
     )
 
     app_name: str = "DICOM Mock Server"
-    app_version: str = "0.3.0"
+    app_version: str = "0.3.1"
     host: str = "127.0.0.1"
     port: int = 8000
     scp_ae_title: str = Field(
@@ -33,6 +33,16 @@ class AppConfig(BaseSettings):
         default="./data/dicom_storage",
         validation_alias=AliasChoices("GOSMART_MS_STORAGE_DIR", "STORAGE_DIR"),
         description="Path to store DICOM files",
+    )
+    received_dir: str = Field(
+        default="./received",
+        validation_alias=AliasChoices("GOSMART_MS_RECEIVED_DIR", "RECEIVED_DIR"),
+        description="Path to store received STOW-RS DICOM files",
+    )
+    stow_duplicate_handling: str = Field(
+        default="accept",
+        validation_alias=AliasChoices("GOSMART_MS_STOW_DUPLICATE_HANDLING", "STOW_DUPLICATE_HANDLING"),
+        description="STOW-RS duplicate instance handling policy: 'accept', 'warn', or 'reject'",
     )
     log_level: str = Field(
         default="INFO",

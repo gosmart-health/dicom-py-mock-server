@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.3.1] - 2026-09-09
+
+### Added
+- **DICOMweb STOW-RS Storage Over the Web (PS 3.18)**:
+  - Added REST endpoints for storing DICOM SOP instances: `POST /studies` and `POST /studies/{studyInstanceUID}` (with `/dicomweb/...` and `/api/v1/dicomweb/...` routing aliases).
+  - Supported standard `multipart/related; type="application/dicom"` request payloads containing multiple DICOM Part 10 datasets, as well as direct raw `application/dicom` binary requests.
+  - Implemented standard DICOM JSON response structure (`application/dicom+json`) with `ReferencedSOPSequence` (0008,1199) containing successful SOP Instance UIDs, SOP Class UIDs, and `RetrieveURL` (0008,1190) endpoints.
+  - Added `FailedSOPSequence` (0008,1198) with DICOM failure status codes (e.g. `0111H` for duplicates or `0272H` for study UID conflicts).
+  - Stored incoming Part 10 instances persistently on disk under `{received_dir}/{StudyInstanceUID}/{SeriesInstanceUID}/{SOPInstanceUID}.dcm`.
+- **Configurable Duplicate SOP Handling Policies**:
+  - Implemented configurable duplicate handling via `GOSMART_MS_STOW_DUPLICATE_HANDLING` (or `STOW_DUPLICATE_HANDLING`):
+    - `REJECT` (default): Rejects duplicate SOP instance UIDs with HTTP 409 Conflict and failure status `0111H`.
+    - `OVERWRITE`: Overwrites existing files on disk and replaces in-memory instances, returning HTTP 200 OK.
+    - `IGNORE`: Retains original instance and returns HTTP 200 OK with `FailedSOPSequence` reporting `0111H` (Duplicate SOP Instance).
+- **Cross-Protocol DIMSE & DICOMweb Integration for Stored Objects**:
+  - Received STOW-RS instances are immediately discoverable via DIMSE C-FIND and retrievable via DIMSE C-MOVE / C-GET.
+  - Received instances are queryable via QIDO-RS (`/studies`, `/series`, `/instances`) and retrievable via WADO-RS (`/studies/{study_uid}`, `/metadata`, `/instances/{sop_uid}`, `/rendered`).
+
+### Fixed
+- **Stored Disk Dataset & GSPS Presentation State Discovery in WADO-RS**:
+  - Fixed `_get_stored_files()` in `DicomWebService` to scan both `storage_dir` (`./data/dicom_storage`) and `received_dir` (`./received`).
+  - Fixed `get_study_datasets()` to merge disk-stored datasets with active MWL generator entries (deduplicating by `SOPInstanceUID`) instead of skipping disk search when MWL instances exist.
+  - Resolved `404 Series not found` errors when retrieving WADO-RS series metadata (`/studies/{study_uid}/series/{series_uid}/metadata`) for stored Grayscale Softcopy Presentation State (GSPS / `PR`) objects on studies originated from MWL.
+  - Preserved uncompressed transfer syntaxes for non-image objects (e.g. GSPS `PR`) during WADO-RS compressed transfer syntax negotiation, avoiding inappropriate pixel compression headers or tag injection.
+
 ## [0.3.0] - 2026-09-07
 
 ### Changed
