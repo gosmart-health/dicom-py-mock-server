@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from pydicom.dataset import Dataset
 from pydicom.uid import (
     JPEG2000,
     ExplicitVRLittleEndian,
@@ -91,10 +92,12 @@ class DicomScpService:
         ae_title: str = "MOCK_SCP",
         port: int = 11112,
         mwl_service=None,
+        dicomweb_service=None,
     ) -> None:
         self.ae_title = ae_title
         self.port = port
         self.mwl_service = mwl_service
+        self.dicomweb_service = dicomweb_service
         self.ae: AE | None = None
         self.server = None
         self.is_running = False
@@ -181,17 +184,62 @@ class DicomScpService:
                 self.mwl_service.purge_expired_entries()
                 matched_entries = self.mwl_service._entries
 
+            seen_uids: set[str] = set()
             for entry in matched_entries:
                 if qr_level == "SERIES":
                     cfind_ds = self.mwl_service.to_series_cfind_dataset(entry)
+                    seen_uids.add(str(getattr(cfind_ds, "SeriesInstanceUID", "")))
                     yield (0xFF00, cfind_ds)
                 elif qr_level in ("IMAGE", "INSTANCE"):
                     image_datasets = self.mwl_service.to_image_cfind_datasets(entry)
                     for img_ds in image_datasets:
+                        seen_uids.add(str(getattr(img_ds, "SOPInstanceUID", "")))
                         yield (0xFF00, img_ds)
                 else:
                     cfind_ds = self.mwl_service.to_study_cfind_dataset(entry)
+                    seen_uids.add(str(getattr(cfind_ds, "StudyInstanceUID", "")))
                     yield (0xFF00, cfind_ds)
+
+            # Query STOW-RS received instances
+            if self.dicomweb_service and hasattr(self.dicomweb_service, "_stow_datasets"):
+                for ds in self.dicomweb_service._stow_datasets.values():
+                    if study_uid and str(getattr(ds, "StudyInstanceUID", "")) != str(study_uid):
+                        continue
+                    if series_uid and str(getattr(ds, "SeriesInstanceUID", "")) != str(series_uid):
+                        continue
+                    if patient_id and str(getattr(ds, "PatientID", "")) != str(patient_id):
+                        continue
+                    if accession and str(getattr(ds, "AccessionNumber", "")) != str(accession):
+                        continue
+
+                    if qr_level == "SERIES":
+                        s_uid = str(getattr(ds, "SeriesInstanceUID", ""))
+                        if s_uid and s_uid not in seen_uids:
+                            seen_uids.add(s_uid)
+                            out_ds = Dataset()
+                            out_ds.QueryRetrieveLevel = "SERIES"
+                            out_ds.StudyInstanceUID = getattr(ds, "StudyInstanceUID", "")
+                            out_ds.SeriesInstanceUID = s_uid
+                            out_ds.Modality = getattr(ds, "Modality", "OT")
+                            out_ds.SeriesNumber = getattr(ds, "SeriesNumber", 1)
+                            yield (0xFF00, out_ds)
+                    elif qr_level in ("IMAGE", "INSTANCE"):
+                        sop_uid = str(getattr(ds, "SOPInstanceUID", ""))
+                        if sop_uid and sop_uid not in seen_uids:
+                            seen_uids.add(sop_uid)
+                            yield (0xFF00, ds)
+                    else:
+                        st_uid = str(getattr(ds, "StudyInstanceUID", ""))
+                        if st_uid and st_uid not in seen_uids:
+                            seen_uids.add(st_uid)
+                            out_ds = Dataset()
+                            out_ds.QueryRetrieveLevel = "STUDY"
+                            out_ds.StudyInstanceUID = st_uid
+                            out_ds.PatientID = getattr(ds, "PatientID", "")
+                            out_ds.PatientName = getattr(ds, "PatientName", "")
+                            out_ds.StudyDate = getattr(ds, "StudyDate", "")
+                            out_ds.AccessionNumber = getattr(ds, "AccessionNumber", "")
+                            yield (0xFF00, out_ds)
 
             yield (0x0000, None)
 
@@ -249,34 +297,50 @@ class DicomScpService:
             else None
         )
 
-        matched_entries = []
-        if self.mwl_service:
-            matched_entries = self.mwl_service.find_entries(
-                study_uid=study_uid, series_uid=series_uid, patient_id=patient_id, accession=accession
-            )
-            if not matched_entries and not study_uid and not series_uid and not patient_id and not accession:
-                self.mwl_service.purge_expired_entries()
-                matched_entries = self.mwl_service._entries
-            elif not matched_entries and (study_uid or patient_id or accession):
-                # Dynamically synthesize a mock study matching the requested query parameters
-                new_entry = self.mwl_service.add_entry(
-                    custom={
-                        "studyUid": study_uid,
-                        "patientId": patient_id,
-                        "accession": accession,
-                    }
+        stow_matched: list[Dataset] = []
+        if self.dicomweb_service and hasattr(self.dicomweb_service, "_stow_datasets"):
+            for ds in self.dicomweb_service._stow_datasets.values():
+                if study_uid and str(getattr(ds, "StudyInstanceUID", "")) != str(study_uid):
+                    continue
+                if series_uid and str(getattr(ds, "SeriesInstanceUID", "")) != str(series_uid):
+                    continue
+                if patient_id and str(getattr(ds, "PatientID", "")) != str(patient_id):
+                    continue
+                if accession and str(getattr(ds, "AccessionNumber", "")) != str(accession):
+                    continue
+                stow_matched.append(ds)
+
+        if stow_matched:
+            all_datasets = stow_matched
+        else:
+            matched_entries = []
+            if self.mwl_service:
+                matched_entries = self.mwl_service.find_entries(
+                    study_uid=study_uid, series_uid=series_uid, patient_id=patient_id, accession=accession
                 )
-                matched_entries = [new_entry]
+                if not matched_entries and not study_uid and not series_uid and not patient_id and not accession:
+                    self.mwl_service.purge_expired_entries()
+                    matched_entries = self.mwl_service._entries
+                elif not matched_entries and (study_uid or patient_id or accession):
+                    # Dynamically synthesize a mock study matching the requested query parameters
+                    new_entry = self.mwl_service.add_entry(
+                        custom={
+                            "studyUid": study_uid,
+                            "patientId": patient_id,
+                            "accession": accession,
+                        }
+                    )
+                    matched_entries = [new_entry]
 
-        if not matched_entries:
-            logger.warning("dicom_c_move_no_matching_studies", study_uid=study_uid, patient_id=patient_id)
-            yield 0
-            return
+            if not matched_entries:
+                logger.warning("dicom_c_move_no_matching_studies", study_uid=study_uid, patient_id=patient_id)
+                yield 0
+                return
 
-        all_datasets = []
-        for entry in matched_entries:
-            datasets = DicomGeneratorService.create_instances_from_mwl(entry)
-            all_datasets.extend(datasets)
+            all_datasets = []
+            for entry in matched_entries:
+                datasets = DicomGeneratorService.create_instances_from_mwl(entry)
+                all_datasets.extend(datasets)
 
         total_instances = len(all_datasets)
         # 2nd yield: total sub-operations count
@@ -404,43 +468,60 @@ class DicomScpService:
         study_uid: str | None = None,
     ) -> dict[str, Any]:
         """Push a study (matching patient_id, accession, or study_uid) to a target DICOM Storage SCP."""
-        matched_entries = []
-        if self.mwl_service:
-            matched_entries = self.mwl_service.find_entries(
-                study_uid=study_uid, patient_id=patient_id, accession=accession
-            )
-            if not matched_entries and not study_uid and not patient_id and not accession:
-                self.mwl_service.purge_expired_entries()
-                matched_entries = self.mwl_service._entries
-            elif not matched_entries and (study_uid or patient_id or accession):
-                # Dynamically synthesize on demand
-                new_entry = self.mwl_service.add_entry(
-                    custom={
-                        "studyUid": study_uid,
-                        "patientId": patient_id,
-                        "accession": accession,
-                    }
+        stow_matched: list[Dataset] = []
+        if self.dicomweb_service and hasattr(self.dicomweb_service, "_stow_datasets"):
+            for ds in self.dicomweb_service._stow_datasets.values():
+                if study_uid and str(getattr(ds, "StudyInstanceUID", "")) != str(study_uid):
+                    continue
+                if patient_id and str(getattr(ds, "PatientID", "")) != str(patient_id):
+                    continue
+                if accession and str(getattr(ds, "AccessionNumber", "")) != str(accession):
+                    continue
+                stow_matched.append(ds)
+
+        if stow_matched:
+            all_datasets = stow_matched
+            first_ds = all_datasets[0]
+            first_meta = getattr(first_ds, "file_meta", None)
+            preferred_syntax = getattr(first_meta, "TransferSyntaxUID", None) or config.transfer_syntax
+        else:
+            matched_entries = []
+            if self.mwl_service:
+                matched_entries = self.mwl_service.find_entries(
+                    study_uid=study_uid, patient_id=patient_id, accession=accession
                 )
-                matched_entries = [new_entry]
+                if not matched_entries and not study_uid and not patient_id and not accession:
+                    self.mwl_service.purge_expired_entries()
+                    matched_entries = self.mwl_service._entries
+                elif not matched_entries and (study_uid or patient_id or accession):
+                    # Dynamically synthesize on demand
+                    new_entry = self.mwl_service.add_entry(
+                        custom={
+                            "studyUid": study_uid,
+                            "patientId": patient_id,
+                            "accession": accession,
+                        }
+                    )
+                    matched_entries = [new_entry]
 
-        if not matched_entries:
-            return {
-                "success": False,
-                "message": "No studies found matching query criteria to move",
-                "instances_sent": 0,
-                "target_ae_title": target_ae_title,
-                "target_host": target_host,
-                "target_port": target_port,
-            }
+            if not matched_entries:
+                return {
+                    "success": False,
+                    "message": "No studies found matching query criteria to move",
+                    "instances_sent": 0,
+                    "target_ae_title": target_ae_title,
+                    "target_host": target_host,
+                    "target_port": target_port,
+                }
 
-        all_datasets = []
-        for entry in matched_entries:
-            datasets = DicomGeneratorService.create_instances_from_mwl(entry)
-            all_datasets.extend(datasets)
+            all_datasets = []
+            for entry in matched_entries:
+                datasets = DicomGeneratorService.create_instances_from_mwl(entry)
+                all_datasets.extend(datasets)
+            preferred_syntax = matched_entries[0].get("transfer_syntax") or config.transfer_syntax
 
         # Connect as SCU to target
         ae = AE(ae_title=self.ae_title)
-        preferred_syntax = matched_entries[0].get("transfer_syntax") or config.transfer_syntax
         target_syntax = get_prioritized_transfer_syntaxes(preferred_syntax)[0]
         for cx in StoragePresentationContexts:
             ae.add_requested_context(cx.abstract_syntax, [target_syntax])

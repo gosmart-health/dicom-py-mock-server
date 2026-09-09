@@ -51,6 +51,7 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
   - Verify C-STORE association audit CSV generation for SCU move/push, C-MOVE retrieve, and incoming Storage SCP operations across statuses (`Accepted`, `Rejected`, `No Connection`, `Dropped`).
   - Execute headless CI/CD automated test suite without manual UI interactions.
   - Verify High-Throughput Stress Mode (`GOSMART_MS_STRESS=true`): single frame compressed once per study/series, patient demographics burned in, slice number overlay omitted, negotiated transfer syntax applied, and all instances retain unique SOPInstanceUIDs and sequential InstanceNumbers.
+  - Verify DICOMweb STOW-RS store services (`POST /dicomweb/studies`, `POST /dicomweb/studies/{studyUID}`): multipart/related parsing, Part-10 file composition in `./received`, in-memory indexing, duplicate handling (`accept`, `warn`, `reject`), and cross-protocol retrieval via QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE.
   - Run high-concurrency stress tests verifying ephemeral on-the-fly DICOM generation does not saturate local disk storage.
 
 ---
@@ -63,7 +64,8 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
 | **Lockfile Synchronization** | `uv lock --check` | Verifies lockfile integrity and consistency with `pyproject.toml`. |
 | **Package Security Vulnerability Audit** | `uv run pip-audit` | Audits dependencies against known vulnerability advisories (PyPI / OSV). |
 | **Software Bill of Materials (SBOM)** | `uv run cyclonedx-py environment --pyproject pyproject.toml .venv -o sbom.json --validate` | Generates and validates standard CycloneDX 1.6 SBOM. |
-| **Unit & Integration Test Suite** | `uv run pytest` | Executes complete pytest suite across models, generator, API, scheduler, MCP SSE, and SCP. |
+| **Unit & Integration Test Suite** | `uv run pytest` | Executes complete pytest suite across models, generator, API, scheduler, MCP SSE, SCP, and DICOMweb (QIDO/WADO/STOW). |
+| **STOW-RS & DICOMweb Test Suite** | `uv run pytest tests/test_stow_rs.py tests/test_dicomweb.py` | Executes targeted DICOMweb QIDO-RS, WADO-RS, and STOW-RS verification test suite. |
 | **CLI Application Verification** | `uv run dicom-py-mock-server` | Verifies installed CLI entry point and Uvicorn server startup. |
 | **HL7 Message Pusher Verification** | `uv run push-hl7` / `python util/push_hl7.py` | Verifies HL7 v2 ORM message MLLP transmission and MWL creation. |
 | **FHIR Order Pusher Verification** | `./util/push_fhir.sh` | Verifies FHIR ServiceRequest bundle ingestion via HTTP POST. |

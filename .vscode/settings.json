@@ -9,5 +9,6 @@
         "pydicom",
         "pynetdicom",
         "Worklist"
-    ]
+    ],
+    "dicom.showPrivateTags": true
 }

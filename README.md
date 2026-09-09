@@ -103,6 +103,8 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_SCP_AE_TITLE` | `GOSMART_MS_AE_TITLE`, `SCP_AE_TITLE`, `AE_TITLE` | `GOSMART_SCP` | Application Entity (AE) Title for the DICOM SCP listener. |
 | `GOSMART_MS_SCP_PORT` | `SCP_PORT` | `11112` | DICOM SCP listening port (C-ECHO, C-FIND, C-MOVE, C-STORE, MWL). |
 | `GOSMART_MS_STORAGE_DIR` | `STORAGE_DIR` | `./data/dicom_storage` | Local directory path to store generated DICOM files. |
+| `GOSMART_MS_RECEIVED_DIR` | `RECEIVED_DIR` | `./received` | Local directory path to store received STOW-RS Part-10 DICOM files. |
+| `GOSMART_MS_STOW_DUPLICATE_HANDLING` | `STOW_DUPLICATE_HANDLING` | `accept` | Policy for STOW-RS duplicate SOP instances: `accept` (overwrite), `warn` (overwrite with WarningReason 0xB000), or `reject` (reject with FailureReason 0x0111). |
 | `GORMART_MS_CSV_PATH` | `GOSMART_MS_CSV_PATH`, `CSV_PATH` | `./csv` | Local directory path to store C-STORE association audit CSV files (`yyyymmddhhmmss_<AE_Title>.csv`). |
 | `GOSMART_TEMPLATES_PATH` | `GOSMART_MS_TEMPLATES_PATH`, `TEMPLATES_PATH` | `./templates` | Directory containing modality subfolders with multi-slice DICOM (`.dcm`, `.dicom`) templates. |
 | `GOSMART_MS_LOG_LEVEL` | `LOG_LEVEL` | `INFO` | Logging verbosity level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). |
@@ -221,7 +223,37 @@ curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
 
 ---
 
-### 3. WADO-URI (Legacy Single-Object Retrieval)
+### 3. STOW-RS (Store Instances)
+
+| Endpoint | Description | Request Type | Response Type |
+| :--- | :--- | :--- | :--- |
+| `POST /dicomweb/studies` | Store instances across studies | `multipart/related; type="application/dicom"` or `application/dicom` | `application/dicom+json` |
+| `POST /dicomweb/studies/{studyUID}` | Store instances to a specific study | `multipart/related; type="application/dicom"` or `application/dicom` | `application/dicom+json` |
+
+- **Storage Destination**: Composes valid Part-10 `.dcm` files into `./received/{StudyInstanceUID}/{SeriesInstanceUID}/{SOPInstanceUID}.dcm`.
+- **In-Memory Retention**: Stored instances are indexed in memory immediately, enabling instant discovery and retrieval via QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE.
+- **Duplicate Policy**: Configurable via `GOSMART_MS_STOW_DUPLICATE_HANDLING`:
+  - `accept` (default): Overwrites existing instances and returns `200 OK` with `ReferencedSOPSequence`.
+  - `warn`: Overwrites existing instances and returns `200 OK` with `WarningReason = 0xB000`.
+  - `reject`: Rejects duplicate instances and returns `409 Conflict` with `FailureReason = 0x0111`.
+
+#### Example STOW-RS Requests
+
+```bash
+# Upload a single DICOM file directly
+curl -X POST "http://127.0.0.1:8000/dicomweb/studies" \
+     -H "Content-Type: application/dicom" \
+     --data-binary "@image.dcm"
+
+# Upload multipart/related DICOM batch
+curl -X POST "http://127.0.0.1:8000/dicomweb/studies" \
+     -H 'Content-Type: multipart/related; type="application/dicom"; boundary="myboundary"' \
+     --data-binary "@stow_batch.mime"
+```
+
+---
+
+### 4. WADO-URI (Legacy Single-Object Retrieval)
 
 ```bash
 curl -X GET "http://127.0.0.1:8000/dicomweb/wado?requestType=WADO&studyUID=2.25.123&seriesUID=2.25.456&objectUID=2.25.789&contentType=application/dicom" \

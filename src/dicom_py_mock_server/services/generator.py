@@ -413,6 +413,18 @@ class DicomGeneratorService:
     @classmethod
     def apply_transfer_syntax(cls, ds: FileDataset, syntax_name: str | None = None) -> FileDataset:
         """Convert or set dataset Transfer Syntax UID and encode pixel data accordingly."""
+        has_pixel_data = (0x7FE0, 0x0010) in ds or (0x7FE0, 0x0008) in ds or (0x7FE0, 0x0009) in ds
+        if not has_pixel_data:
+            # Non-image objects (GSPS, SR, etc.) do not have pixel data and cannot be compressed with image codecs.
+            if not hasattr(ds, "file_meta") or ds.file_meta is None:
+                ds.file_meta = FileMetaDataset()
+            curr_ts = getattr(ds.file_meta, "TransferSyntaxUID", None)
+            if not curr_ts or str(curr_ts) not in (str(ExplicitVRLittleEndian), str(ImplicitVRLittleEndian)):
+                ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+            ds.is_little_endian = True
+            ds.is_implicit_VR = str(ds.file_meta.TransferSyntaxUID) == str(ImplicitVRLittleEndian)
+            return ds
+
         target_uid = resolve_transfer_syntax(syntax_name or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS"))
 
         current_uid = getattr(ds.file_meta, "TransferSyntaxUID", None)
