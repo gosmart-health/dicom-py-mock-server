@@ -2,10 +2,10 @@
 
 **Document Title:** DICOM Conformance Statement for GoSmart.Health DICOM Mock Server  
 **Software Name:** `dicom-py-mock-server`  
-**Software Release:** Version 0.3.0  
-**Document Release Date:** 2026-09-07  
+**Software Release:** Version 0.3.1  
+**Document Release Date:** 2026-09-09  
 **Standard Compliance:** NEMA PS 3.1 – PS 3.22 (DICOM Standard 2024c / 2025)  
-**Document Identifier:** DCS-GSMS-030  
+**Document Identifier:** DCS-GSMS-031  
 
 ---
 
@@ -144,6 +144,7 @@ The server supports negotiation and automatic on-the-fly transcoding across the 
 
 | Document Version | Date | Software Version | Author | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| **1.1.0** | 2026-09-09 | v0.3.1 | GoSmart.Health Engineering Team | Added DICOMweb STOW-RS (Store Over the Web, PS 3.18) storage service supporting multipart/related and raw application/dicom ingestion, configurable duplicate SOP handling policies, and stored GSPS presentation state discovery. |
 | **1.0.0** | 2026-09-07 | v0.3.0 | GoSmart.Health Engineering Team | Initial formal release of DICOM Conformance Statement covering DIMSE (C-ECHO, C-FIND, C-MOVE, C-STORE, MWL), DICOMweb (QIDO-RS, WADO-RS, WADO-URI), multi-slice template loading, transfer syntaxes (RAW, JPEG, JPEG2000, RLE), HL7 v2 MLLP, and FHIR ServiceRequest order integration. |
 
 ### 3.2 Audience
@@ -328,8 +329,8 @@ The `MOCK_SCP` Application Entity provides Standard Conformance to the following
 - Asynchronous operations window negotiation is not supported. All associations operate synchronously.
 
 ###### 4.2.1.2.4 Implementation Identifying Information
-- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.0`
-- Implementation Version Name: `GOSMART_MS_030`
+- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.1`
+- Implementation Version Name: `GOSMART_MS_031`
 
 ##### 4.2.1.3 Association Acceptance Policy
 

@@ -135,7 +135,7 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_HL7_FACILITY` | `HL7_FACILITY` | `GOSMART_HOSP` | Receiving Facility name for HL7 MSH and ACK segments. |
 | `GOSMART_MS_FHIR_ENABLED` | `FHIR_ENABLED` | `true` | Enable FHIR ServiceRequest / Bundle REST endpoints. |
 | `GOSMART_MS_APP_NAME` | `APP_NAME` | `DICOM Mock Server` | Application display name. |
-| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.3.0` | Application version string. |
+| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.3.1` | Application version string. |
 
 ---
 
