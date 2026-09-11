@@ -566,6 +566,11 @@ class DicomGeneratorService:
         ds.ContentDate = study_date
         ds.ContentTime = study_time
 
+        if getattr(ds, "Modality", None) == "PR" or hasattr(ds, "PresentationCreationDate"):
+            ds.PresentationCreationDate = study_date
+        if getattr(ds, "Modality", None) == "PR" or hasattr(ds, "PresentationCreationTime"):
+            ds.PresentationCreationTime = study_time
+
         if hasattr(ds, "InstanceCreationDate"):
             ds.InstanceCreationDate = study_date
         if hasattr(ds, "InstanceCreationTime"):

@@ -7,6 +7,7 @@ import numpy as np
 import pydicom
 import pytest
 from fastapi.testclient import TestClient
+from pydicom.dataset import Dataset
 
 from dicom_py_mock_server.api.routes import mwl_service
 from dicom_py_mock_server.main import app
@@ -775,3 +776,80 @@ def test_wado_retrieve_ct_frames_j2k_and_rle_integrity(client):
     assert arr_rle.min() < -500
     assert arr_rle.max() > 200
     assert (arr_rle[256:, :] != 0).any()  # Bottom half must not be blank
+
+
+def test_qido_search_series_pr_presentation_creation_date_time(client):
+    """Verify QIDO-RS search series includes PresentationCreationDate and Time for PR series."""
+    from dicom_py_mock_server.api.dicomweb_routes import dicomweb_service
+
+    pr_ds = Dataset()
+    pr_ds.StudyInstanceUID = "2.25.70082.1.1"
+    pr_ds.SeriesInstanceUID = "2.25.70082.1.2"
+    pr_ds.SOPInstanceUID = "2.25.70082.1.3"
+    pr_ds.Modality = "PR"
+    pr_ds.SeriesNumber = 2
+    pr_ds.SeriesDate = "20260909"
+    pr_ds.SeriesTime = "164053"
+    pr_ds.PresentationCreationDate = "20260909"
+    pr_ds.PresentationCreationTime = "164053"
+
+    dicomweb_service._stow_datasets[pr_ds.SOPInstanceUID] = pr_ds
+
+    resp = client.get(f"/dicomweb/studies/{pr_ds.StudyInstanceUID}/series")
+    assert resp.status_code == 200
+    series_list = resp.json()
+    assert len(series_list) >= 1
+    s_0 = series_list[0]
+    assert s_0["00700082"]["Value"][0] == "20260909"  # PresentationCreationDate
+    assert s_0["00700083"]["Value"][0] == "164053"  # PresentationCreationTime
+    assert s_0["00080021"]["Value"][0] == "20260909"  # SeriesDate
+    assert s_0["00080031"]["Value"][0] == "164053"  # SeriesTime
+
+    # Fallback test: PR dataset without explicit PresentationCreationDate/Time
+    pr_ds_fallback = Dataset()
+    pr_ds_fallback.StudyInstanceUID = "2.25.70082.2.1"
+    pr_ds_fallback.SeriesInstanceUID = "2.25.70082.2.2"
+    pr_ds_fallback.SOPInstanceUID = "2.25.70082.2.3"
+    pr_ds_fallback.Modality = "PR"
+    pr_ds_fallback.SeriesNumber = 3
+    pr_ds_fallback.SeriesDate = "20260910"
+    pr_ds_fallback.SeriesTime = "120000"
+
+    dicomweb_service._stow_datasets[pr_ds_fallback.SOPInstanceUID] = pr_ds_fallback
+
+    resp_fb = client.get(f"/dicomweb/studies/{pr_ds_fallback.StudyInstanceUID}/series")
+    assert resp_fb.status_code == 200
+    series_fb = resp_fb.json()[0]
+    assert series_fb["00700082"]["Value"][0] == "20260910"
+    assert series_fb["00700083"]["Value"][0] == "120000"
+
+    dicomweb_service.clear_cache(clear_stow=True)
+
+
+def test_qido_search_series_includefield(client):
+    """Verify QIDO-RS search series supports includefield=00700082,00700083 and includefield=all."""
+    from dicom_py_mock_server.api.dicomweb_routes import dicomweb_service
+
+    pr_ds = Dataset()
+    pr_ds.StudyInstanceUID = "2.25.70082.3.1"
+    pr_ds.SeriesInstanceUID = "2.25.70082.3.2"
+    pr_ds.SOPInstanceUID = "2.25.70082.3.3"
+    pr_ds.Modality = "PR"
+    pr_ds.PresentationCreationDate = "20260909"
+    pr_ds.PresentationCreationTime = "164053"
+
+    dicomweb_service._stow_datasets[pr_ds.SOPInstanceUID] = pr_ds
+
+    resp = client.get(f"/dicomweb/studies/{pr_ds.StudyInstanceUID}/series?includefield=00700082,00700083")
+    assert resp.status_code == 200
+    s_inc = resp.json()[0]
+    assert "00700082" in s_inc
+    assert "00700083" in s_inc
+
+    resp_all = client.get(f"/dicomweb/studies/{pr_ds.StudyInstanceUID}/series?includefield=all")
+    assert resp_all.status_code == 200
+    s_all = resp_all.json()[0]
+    assert "00700082" in s_all
+    assert "00700083" in s_all
+
+    dicomweb_service.clear_cache(clear_stow=True)

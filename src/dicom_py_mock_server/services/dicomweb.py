@@ -397,6 +397,28 @@ class DicomWebService:
         elif offset > 0:
             matched = matched[offset:]
 
+        inc_param = (
+            query_params.get("includefield") or query_params.get("includeField") or query_params.get("includefields")
+        )
+        req_fields: set[str] = set()
+        include_all = False
+        if inc_param:
+            if isinstance(inc_param, str):
+                raw_tokens = [t.strip() for t in inc_param.split(",") if t.strip()]
+            elif isinstance(inc_param, (list, tuple)):
+                raw_tokens = []
+                for item in inc_param:
+                    raw_tokens.extend([t.strip() for t in str(item).split(",") if t.strip()])
+            else:
+                raw_tokens = []
+
+            for tok in raw_tokens:
+                if tok.lower() == "all":
+                    include_all = True
+                    break
+                clean_tok = tok.replace(",", "").replace(":", "")
+                req_fields.add(clean_tok.lower())
+
         result = []
         for ds in matched:
             out_ds = Dataset()
@@ -414,6 +436,48 @@ class DicomWebService:
                 out_ds.InstitutionName = ds.InstitutionName
             if "NumberOfSeriesRelatedInstances" in ds:
                 out_ds.NumberOfSeriesRelatedInstances = int(ds.NumberOfSeriesRelatedInstances)
+
+            # Dates and Times (SeriesDate / SeriesTime)
+            if "SeriesDate" in ds and ds.SeriesDate:
+                out_ds.SeriesDate = ds.SeriesDate
+            elif "StudyDate" in ds and ds.StudyDate:
+                out_ds.SeriesDate = ds.StudyDate
+
+            if "SeriesTime" in ds and ds.SeriesTime:
+                out_ds.SeriesTime = ds.SeriesTime
+            elif "StudyTime" in ds and ds.StudyTime:
+                out_ds.SeriesTime = ds.StudyTime
+
+            # PresentationCreationDate (0070,0082) & PresentationCreationTime (0070,0083)
+            modality_val = str(getattr(ds, "Modality", "")).upper()
+            if "PresentationCreationDate" in ds and ds.PresentationCreationDate:
+                out_ds.PresentationCreationDate = ds.PresentationCreationDate
+            elif modality_val == "PR":
+                if "SeriesDate" in out_ds and out_ds.SeriesDate:
+                    out_ds.PresentationCreationDate = out_ds.SeriesDate
+                elif "StudyDate" in ds and ds.StudyDate:
+                    out_ds.PresentationCreationDate = ds.StudyDate
+
+            if "PresentationCreationTime" in ds and ds.PresentationCreationTime:
+                out_ds.PresentationCreationTime = ds.PresentationCreationTime
+            elif modality_val == "PR":
+                if "SeriesTime" in out_ds and out_ds.SeriesTime:
+                    out_ds.PresentationCreationTime = out_ds.SeriesTime
+                elif "StudyTime" in ds and ds.StudyTime:
+                    out_ds.PresentationCreationTime = ds.StudyTime
+
+            # If includefield is specified, also copy any additional requested fields present in ds
+            if include_all or req_fields:
+                for elem in ds:
+                    tag_hex = f"{elem.tag.group:04x}{elem.tag.element:04x}".lower()
+                    tag_keyword = elem.keyword.lower() if hasattr(elem, "keyword") else ""
+                    if include_all or tag_hex in req_fields or (tag_keyword and tag_keyword in req_fields):
+                        if (
+                            hasattr(elem, "keyword")
+                            and elem.keyword
+                            and elem.keyword not in ("PixelData", "OverlayData")
+                        ):
+                            setattr(out_ds, elem.keyword, elem.value)
 
             result.append(out_ds.to_json_dict(suppress_invalid_tags=True))
 

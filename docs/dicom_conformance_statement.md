@@ -329,8 +329,8 @@ The `MOCK_SCP` Application Entity provides Standard Conformance to the following
 - Asynchronous operations window negotiation is not supported. All associations operate synchronously.
 
 ###### 4.2.1.2.4 Implementation Identifying Information
-- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.1`
-- Implementation Version Name: `GOSMART_MS_031`
+- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.2`
+- Implementation Version Name: `GOSMART_MS_032`
 
 ##### 4.2.1.3 Association Acceptance Policy
 
@@ -569,6 +569,8 @@ Modality codes adhere to standard PS 3.16 CID 29 (Acquisition Modality): `CT`, `
 #### 8.5.1 QIDO-RS Parameters & Responses
 - Media Type: `application/dicom+json`
 - Supports query filtering on: `PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`, `ModalitiesInStudy`, `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID`, `limit`, and `offset`.
+- Series Query Attributes & Fallbacks: Series queries (`/studies/{studyUID}/series`, `/series`) include `SeriesDate` (0008,0021), `SeriesTime` (0008,0031), `PresentationCreationDate` (0070,0082), and `PresentationCreationTime` (0070,0083). For PR series lacking explicit `PresentationCreationDate`/`PresentationCreationTime`, values gracefully fall back to `SeriesDate`/`SeriesTime` or `StudyDate`/`StudyTime`.
+- Supports `includefield` query parameter (e.g. `includefield=00700082,00700083` or `includefield=all`).
 
 #### 8.5.2 WADO-RS Retrieve Services
 - Media Types:
