@@ -2,10 +2,10 @@
 
 **Document Title:** DICOM Conformance Statement for GoSmart.Health DICOM Mock Server  
 **Software Name:** `dicom-py-mock-server`  
-**Software Release:** Version 0.3.0  
-**Document Release Date:** 2026-09-07  
+**Software Release:** Version 0.3.1  
+**Document Release Date:** 2026-09-09  
 **Standard Compliance:** NEMA PS 3.1 – PS 3.22 (DICOM Standard 2024c / 2025)  
-**Document Identifier:** DCS-GSMS-030  
+**Document Identifier:** DCS-GSMS-031  
 
 ---
 
@@ -61,7 +61,11 @@ The following table summarizes the network services and SOP Classes supported by
 | Positron Emission Tomography Image Storage | `1.2.840.10008.5.1.4.1.1.128` | **Yes** | **Yes** |
 | X-Ray Angiographic Image Storage | `1.2.840.10008.5.1.4.1.1.12.1` | **Yes** | **Yes** |
 | X-Ray Radiofluoroscopic Image Storage | `1.2.840.10008.5.1.4.1.1.12.2` | **Yes** | **Yes** |
+| Grayscale Softcopy Presentation State Storage (GSPS) | `1.2.840.10008.5.1.4.1.1.11.1` | **Yes** | **Yes** |
 | All Other Standard Composite Storage SOP Classes | Any valid composite storage UID | **Yes** | **Yes** |
+
+> [!NOTE]
+> Non-image composite objects (such as Grayscale Softcopy Presentation State / GSPS) do not contain pixel data and are transmitted and served as uncompressed metadata (`Explicit VR Little Endian` / `Implicit VR Little Endian`) without pixel transcoding, decompression, or frame decode attempts.
 
 ### 1.2 Supported Transfer Syntaxes
 
@@ -69,17 +73,18 @@ The server supports negotiation and automatic on-the-fly transcoding across the 
 
 | Transfer Syntax Name | Transfer Syntax UID | Supported Roles | Transcoding Engine |
 | :--- | :--- | :---: | :--- |
-| **JPEG 2000 Lossless** (Lossless Only) | `1.2.840.10008.1.2.4.90` | SCP / SCU / WADO-RS | `pylibjpeg-openjpeg` (OpenJPEG C library) |
-| **JPEG 2000 Lossy** | `1.2.840.10008.1.2.4.91` | SCP / SCU / WADO-RS | `pylibjpeg-openjpeg` (OpenJPEG C library) |
-| **RLE Lossless** | `1.2.840.10008.1.2.5` | SCP / SCU / WADO-RS | `pylibjpeg-rle` (Multi-segment PackBits) |
-| **JPEG Baseline (Process 1)** | `1.2.840.10008.1.2.4.50` | SCP / SCU / WADO-RS | `Pillow` (8-bit lossy ISO/IEC 10918-1) |
-| **Explicit VR Little Endian** | `1.2.840.10008.1.2.1` | SCP / SCU / WADO-RS | Native `pydicom` uncompressed binary |
-| **Implicit VR Little Endian** (Default) | `1.2.840.10008.1.2` | SCP / SCU / WADO-RS | Native `pydicom` uncompressed binary |
+| **JPEG 2000 Lossless** (Lossless Only) | `1.2.840.10008.1.2.4.90` | SCP / SCU / WADO-RS / STOW-RS | `pylibjpeg-openjpeg` (OpenJPEG C library) |
+| **JPEG 2000 Lossy** | `1.2.840.10008.1.2.4.91` | SCP / SCU / WADO-RS / STOW-RS | `pylibjpeg-openjpeg` (OpenJPEG C library) |
+| **RLE Lossless** | `1.2.840.10008.1.2.5` | SCP / SCU / WADO-RS / STOW-RS | `pylibjpeg-rle` (Multi-segment PackBits) |
+| **JPEG Baseline (Process 1)** | `1.2.840.10008.1.2.4.50` | SCP / SCU / WADO-RS / STOW-RS | `Pillow` (8-bit lossy ISO/IEC 10918-1) |
+| **Explicit VR Little Endian** | `1.2.840.10008.1.2.1` | SCP / SCU / WADO-RS / STOW-RS | Native `pydicom` uncompressed binary |
+| **Implicit VR Little Endian** (Default) | `1.2.840.10008.1.2` | SCP / SCU / WADO-RS / STOW-RS | Native `pydicom` uncompressed binary |
 
 ### 1.3 Supported DICOMweb Services (PS 3.18)
 
 | DICOMweb Service | Protocol / Specification | Supported URI Paths & Capabilities |
 | :--- | :--- | :--- |
+| **STOW-RS** | PS 3.18 Section 10.5 | `POST /dicomweb/studies`<br>`POST /dicomweb/studies/{studyUID}`<br>*(Accepts `multipart/related; type="application/dicom"` or raw DICOM; composes and saves Part-10 files to `./received`; retains in memory for QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE retrieval; returns standard `application/dicom+json` receipt with `ReferencedSOPSequence` and `FailedSOPSequence`)* |
 | **QIDO-RS** | PS 3.18 Section 10.6 | `GET /dicomweb/studies`<br>`GET /dicomweb/studies/{studyUID}/series`<br>`GET /dicomweb/series`<br>`GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances`<br>`GET /dicomweb/instances`<br>*(Returns `application/dicom+json` with wildcard filtering, pagination, and sorting)* |
 | **WADO-RS** | PS 3.18 Section 10.4 | `GET /dicomweb/studies/{studyUID}`<br>`GET /dicomweb/studies/{studyUID}/series/{seriesUID}`<br>`GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}`<br>`GET /dicomweb/studies/{studyUID}/.../frames/{frameList}`<br>`GET /dicomweb/studies/{studyUID}/.../metadata`<br>`GET /dicomweb/studies/{studyUID}/.../rendered`<br>*(Multipart DICOM, JSON metadata, raw/transcoded frames, JPEG/PNG previews)* |
 | **WADO-URI** | PS 3.18 Section 9 | `GET /dicomweb/wado?requestType=WADO&studyUID=...&seriesUID=...&objectUID=...`<br>*(Single-part Part 10 DICOM or rendered JPEG preview)* |
@@ -139,6 +144,7 @@ The server supports negotiation and automatic on-the-fly transcoding across the 
 
 | Document Version | Date | Software Version | Author | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| **1.1.0** | 2026-09-09 | v0.3.1 | GoSmart.Health Engineering Team | Added DICOMweb STOW-RS (Store Over the Web, PS 3.18) storage service supporting multipart/related and raw application/dicom ingestion, configurable duplicate SOP handling policies, and stored GSPS presentation state discovery. |
 | **1.0.0** | 2026-09-07 | v0.3.0 | GoSmart.Health Engineering Team | Initial formal release of DICOM Conformance Statement covering DIMSE (C-ECHO, C-FIND, C-MOVE, C-STORE, MWL), DICOMweb (QIDO-RS, WADO-RS, WADO-URI), multi-slice template loading, transfer syntaxes (RAW, JPEG, JPEG2000, RLE), HL7 v2 MLLP, and FHIR ServiceRequest order integration. |
 
 ### 3.2 Audience
@@ -260,19 +266,25 @@ flowchart TD
     VIEWER -- "QIDO Search" --> QIDO
     VIEWER -- "WADO Retrieval" --> WADO_RS
     VIEWER -- "Rendered Preview" --> WADO_URI
+    CLIENT -- "STOW Store" --> STOW_RS
     QIDO <--> MWL_SVC
     QIDO <--> DISK_STORE
+    QIDO <--> STOW_MEM
     WADO_RS <--> GEN_SVC
     WADO_RS <--> DISK_STORE
+    WADO_RS <--> STOW_MEM
+    STOW_RS --> RECEIVED_STORE
+    STOW_RS --> STOW_MEM
 ```
 
 #### 4.1.2 Functional Definitions of Application Entities
 
 - **Verification SCP (`_handle_echo`)**: Accepts presentation contexts for Verification SOP Class and returns Success (`0x0000`).
-- **Query/Retrieve C-FIND SCP (`_handle_find`)**: Accepts presentation contexts for Patient Root, Study Root, and Modality Worklist Find models. Evaluates incoming query identifiers against active in-memory MWL entries and local storage records. Returns matches using status Pending (`0xFF00`) and concludes with Success (`0x0000`).
-- **Query/Retrieve C-MOVE SCP (`_handle_move`)**: Accepts presentation contexts for Patient Root and Study Root Move models. Looks up destination host and port from configuration (`config.move_destinations` or requestor IP), synthesizes matching DICOM instances via `DicomGeneratorService`, yields total sub-operations count, and initiates outgoing C-STORE SCU sub-operations to the destination AE.
+- **Query/Retrieve C-FIND SCP (`_handle_find`)**: Accepts presentation contexts for Patient Root, Study Root, and Modality Worklist Find models. Evaluates incoming query identifiers against active in-memory MWL entries, local storage records, and in-memory STOW-RS received datasets. Returns matches using status Pending (`0xFF00`) and concludes with Success (`0x0000`).
+- **Query/Retrieve C-MOVE SCP (`_handle_move`)**: Accepts presentation contexts for Patient Root and Study Root Move models. Evaluates requested studies against received STOW-RS datasets and MWL entries, synthesizes or extracts matching instances, and initiates outgoing C-STORE SCU sub-operations to the destination AE.
 - **Storage C-STORE SCP (`_handle_store`)**: Accepts presentation contexts for all standard DICOM composite storage SOP classes and writes incoming datasets to Part 10 compliant files on disk under `config.storage_dir`.
 - **Storage C-STORE SCU (`push_study_to_destination`)**: Initiates DICOM associations to remote Storage SCPs to transfer generated or retrieved image series, transcoding images to the peer's negotiated transfer syntax on the fly.
+- **DICOMweb STOW-RS Provider (`stow_store_instances`)**: Accepts HTTP POST requests containing multipart/related Part-10 DICOM objects or raw datasets, saves them into the configured received folder (`./received`), indexes them in memory, and allows immediate retrieval via QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE. Duplicate SOP instances are managed via configurable policy (`accept`, `warn`, `reject`).
 
 #### 4.1.3 Sequencing of Real-World Activities
 
@@ -317,8 +329,8 @@ The `MOCK_SCP` Application Entity provides Standard Conformance to the following
 - Asynchronous operations window negotiation is not supported. All associations operate synchronously.
 
 ###### 4.2.1.2.4 Implementation Identifying Information
-- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.0`
-- Implementation Version Name: `GOSMART_MS_030`
+- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.2`
+- Implementation Version Name: `GOSMART_MS_032`
 
 ##### 4.2.1.3 Association Acceptance Policy
 
@@ -435,6 +447,8 @@ All parameters are configurable via environment variables (with `GOSMART_MS_` pr
 | **Default Transfer Syntax** | `GOSMART_MS_TRANSFER_SYNTAX` | `JPEG2000_LOSSLESS` | Target transfer syntax for generated images |
 | **Move Destinations** | `GOSMART_MS_MOVE_DESTINATIONS` | `{}` | JSON map of destination AE titles to host/port |
 | **Storage Directory** | `GOSMART_MS_STORAGE_DIR` | `./data/dicom_storage` | Target path for C-STORE received datasets |
+| **Received Directory** | `GOSMART_MS_RECEIVED_DIR`<br>`RECEIVED_DIR` | `./received` | Target path for STOW-RS received Part-10 DICOM files |
+| **STOW Duplicate Handling** | `GOSMART_MS_STOW_DUPLICATE_HANDLING`<br>`STOW_DUPLICATE_HANDLING` | `accept` | Policy for duplicate SOP Instances (`accept`, `warn`, `reject`) |
 | **Templates Path** | `GOSMART_MS_TEMPLATES_PATH` | `./templates` | Directory containing multi-slice template subfolders |
 | **Synthetic Mode** | `GOSMART_MS_SYNTHETIC_MODE` | `false` | Enable synthetic volume slice generation |
 | **Stress Mode** | `GOSMART_MS_STRESS` | `false` | Enable single-frame compression cloning |
@@ -555,6 +569,8 @@ Modality codes adhere to standard PS 3.16 CID 29 (Acquisition Modality): `CT`, `
 #### 8.5.1 QIDO-RS Parameters & Responses
 - Media Type: `application/dicom+json`
 - Supports query filtering on: `PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`, `ModalitiesInStudy`, `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID`, `limit`, and `offset`.
+- Series Query Attributes & Fallbacks: Series queries (`/studies/{studyUID}/series`, `/series`) include `SeriesDate` (0008,0021), `SeriesTime` (0008,0031), `PresentationCreationDate` (0070,0082), and `PresentationCreationTime` (0070,0083). For PR series lacking explicit `PresentationCreationDate`/`PresentationCreationTime`, values gracefully fall back to `SeriesDate`/`SeriesTime` or `StudyDate`/`StudyTime`.
+- Supports `includefield` query parameter (e.g. `includefield=00700082,00700083` or `includefield=all`).
 
 #### 8.5.2 WADO-RS Retrieve Services
 - Media Types:

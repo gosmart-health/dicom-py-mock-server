@@ -826,7 +826,7 @@ class MwlGeneratorService:
             "dataset": dataset,
             "template_series": selected_template_series,
             "template_dataset": dicom_template,
-            "created_at": scheduled_at or now,
+            "created_at": now if custom else (scheduled_at or now),
             "patient_id": json_entry["00100020"]["Value"][0],
             "patient_name": json_entry["00100010"]["Value"][0].get("Alphabetic", ""),
             "accession": json_entry["00080050"]["Value"][0],
@@ -1048,8 +1048,26 @@ class MwlGeneratorService:
 
         ds.AccessionNumber = entry.get("accession", "")
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
-        ds.StudyDate = sps_seq.get("00400002", {}).get("Value", [""])[0]
-        ds.StudyTime = sps_seq.get("00400003", {}).get("Value", [""])[0]
+        s_date = sps_seq.get("00400002", {}).get("Value", [""])[0] or entry.get("series_date") or ""
+        s_time = sps_seq.get("00400003", {}).get("Value", [""])[0] or entry.get("series_time") or ""
+        if s_date:
+            ds.StudyDate = s_date
+            ds.SeriesDate = s_date
+        if s_time:
+            ds.StudyTime = s_time
+            ds.SeriesTime = s_time
+
+        pr_date = entry.get("presentation_creation_date") or json_e.get("00700082", {}).get("Value", [""])[0]
+        pr_time = entry.get("presentation_creation_time") or json_e.get("00700083", {}).get("Value", [""])[0]
+        if not pr_date and (modality == "PR" or entry.get("presentation_creation_date")):
+            pr_date = s_date
+        if not pr_time and (modality == "PR" or entry.get("presentation_creation_time")):
+            pr_time = s_time
+
+        if pr_date:
+            ds.PresentationCreationDate = pr_date
+        if pr_time:
+            ds.PresentationCreationTime = pr_time
 
         return ds
 

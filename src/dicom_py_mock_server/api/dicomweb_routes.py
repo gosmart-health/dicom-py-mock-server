@@ -6,7 +6,7 @@ import structlog
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
-from dicom_py_mock_server.api.routes import generator_service, mwl_service
+from dicom_py_mock_server.api.routes import generator_service, mwl_service, scp_service
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.services.dicomweb import DicomWebService
 from dicom_py_mock_server.services.generator import DicomGeneratorService
@@ -19,7 +19,9 @@ dicomweb_service = DicomWebService(
     mwl_service=mwl_service,
     generator_service=generator_service,
     storage_dir=config.storage_dir,
+    received_dir=config.received_dir,
 )
+scp_service.dicomweb_service = dicomweb_service
 
 
 def get_dicomweb_service() -> DicomWebService:
@@ -68,6 +70,13 @@ def qido_search_study_series(
 ):
     """QIDO-RS: Search for series within a specified study and return standard DICOM JSON."""
     params = dict(request.query_params)
+    inc_fields = (
+        request.query_params.getlist("includefield")
+        + request.query_params.getlist("includeField")
+        + request.query_params.getlist("includefields")
+    )
+    if inc_fields:
+        params["includefield"] = inc_fields
     results = dicomweb_service.search_series(study_instance_uid, params)
     return JSONResponse(content=results, media_type="application/dicom+json")
 
@@ -86,6 +95,13 @@ def qido_search_series(
 ):
     """QIDO-RS: Search for series across all studies and return standard DICOM JSON."""
     params = dict(request.query_params)
+    inc_fields = (
+        request.query_params.getlist("includefield")
+        + request.query_params.getlist("includeField")
+        + request.query_params.getlist("includefields")
+    )
+    if inc_fields:
+        params["includefield"] = inc_fields
     results = dicomweb_service.search_series(None, params)
     return JSONResponse(content=results, media_type="application/dicom+json")
 
@@ -408,6 +424,10 @@ def wado_retrieve_rendered(
     if not dataset:
         raise HTTPException(status_code=404, detail="Instance not found")
 
+    has_pixel_data = (0x7FE0, 0x0010) in dataset or (0x7FE0, 0x0008) in dataset or (0x7FE0, 0x0009) in dataset
+    if not has_pixel_data:
+        raise HTTPException(status_code=400, detail="Instance does not contain pixel data to render")
+
     img_bytes, media_type = dicomweb_service.render_instance(dataset, frame=frame, image_format=format, quality=quality)
     return Response(content=img_bytes, media_type=media_type)
 
@@ -449,6 +469,10 @@ def wado_retrieve_frames(
     )
     if not dataset:
         raise HTTPException(status_code=404, detail="Instance not found")
+
+    has_pixel_data = (0x7FE0, 0x0010) in dataset or (0x7FE0, 0x0008) in dataset or (0x7FE0, 0x0009) in dataset
+    if not has_pixel_data:
+        raise HTTPException(status_code=404, detail="Instance does not contain pixel data")
 
     raw_frames, part_content_type = dicomweb_service.get_encoded_frames(
         dataset, frames, requested_transfer_syntax=req_ts
@@ -496,6 +520,10 @@ def wado_retrieve_frame_rendered(
     if not dataset:
         raise HTTPException(status_code=404, detail="Instance not found")
 
+    has_pixel_data = (0x7FE0, 0x0010) in dataset or (0x7FE0, 0x0008) in dataset or (0x7FE0, 0x0009) in dataset
+    if not has_pixel_data:
+        raise HTTPException(status_code=400, detail="Instance does not contain pixel data to render")
+
     img_bytes, media_type = dicomweb_service.render_instance(
         dataset, frame=frame_number, image_format=format, quality=quality
     )
@@ -529,6 +557,9 @@ def wado_uri_retrieve(
         raise HTTPException(status_code=404, detail="Requested DICOM object not found")
 
     if content_type.lower() in ("image/jpeg", "image/png"):
+        has_pixel_data = (0x7FE0, 0x0010) in dataset or (0x7FE0, 0x0008) in dataset or (0x7FE0, 0x0009) in dataset
+        if not has_pixel_data:
+            raise HTTPException(status_code=400, detail="Instance does not contain pixel data to render")
         fmt = "PNG" if "png" in content_type.lower() else "JPEG"
         img_bytes, media_type = dicomweb_service.render_instance(dataset, frame=1, image_format=fmt)
         return Response(content=img_bytes, media_type=media_type)
@@ -540,3 +571,38 @@ def wado_uri_retrieve(
     buf = io.BytesIO()
     dataset.save_as(buf, enforce_file_format=True)
     return Response(content=buf.getvalue(), media_type="application/dicom")
+
+
+# ---------------------------------------------------------------------------
+# STOW-RS (Store Instances)
+# ---------------------------------------------------------------------------
+
+
+@dicomweb_router.post("/studies", response_class=JSONResponse)
+@dicomweb_router.post("/api/v1/dicomweb/studies", response_class=JSONResponse)
+@dicomweb_router.post("/dicomweb/studies", response_class=JSONResponse)
+async def stow_store_instances(request: Request) -> JSONResponse:
+    """STOW-RS: Store DICOM instances across studies."""
+    content_type = request.headers.get("content-type", "")
+    body = await request.body()
+    status_code, response_dict = dicomweb_service.process_stow_request(
+        target_study_uid=None,
+        content_type=content_type,
+        body=body,
+    )
+    return JSONResponse(status_code=status_code, content=response_dict, media_type="application/dicom+json")
+
+
+@dicomweb_router.post("/studies/{study_instance_uid}", response_class=JSONResponse)
+@dicomweb_router.post("/api/v1/dicomweb/studies/{study_instance_uid}", response_class=JSONResponse)
+@dicomweb_router.post("/dicomweb/studies/{study_instance_uid}", response_class=JSONResponse)
+async def stow_store_study_instances(study_instance_uid: str, request: Request) -> JSONResponse:
+    """STOW-RS: Store DICOM instances to a specific study."""
+    content_type = request.headers.get("content-type", "")
+    body = await request.body()
+    status_code, response_dict = dicomweb_service.process_stow_request(
+        target_study_uid=study_instance_uid,
+        content_type=content_type,
+        body=body,
+    )
+    return JSONResponse(status_code=status_code, content=response_dict, media_type="application/dicom+json")
