@@ -70,6 +70,13 @@ def qido_search_study_series(
 ):
     """QIDO-RS: Search for series within a specified study and return standard DICOM JSON."""
     params = dict(request.query_params)
+    inc_fields = (
+        request.query_params.getlist("includefield")
+        + request.query_params.getlist("includeField")
+        + request.query_params.getlist("includefields")
+    )
+    if inc_fields:
+        params["includefield"] = inc_fields
     results = dicomweb_service.search_series(study_instance_uid, params)
     return JSONResponse(content=results, media_type="application/dicom+json")
 
@@ -88,6 +95,13 @@ def qido_search_series(
 ):
     """QIDO-RS: Search for series across all studies and return standard DICOM JSON."""
     params = dict(request.query_params)
+    inc_fields = (
+        request.query_params.getlist("includefield")
+        + request.query_params.getlist("includeField")
+        + request.query_params.getlist("includefields")
+    )
+    if inc_fields:
+        params["includefield"] = inc_fields
     results = dicomweb_service.search_series(None, params)
     return JSONResponse(content=results, media_type="application/dicom+json")
 

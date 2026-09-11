@@ -135,7 +135,7 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_HL7_FACILITY` | `HL7_FACILITY` | `GOSMART_HOSP` | Receiving Facility name for HL7 MSH and ACK segments. |
 | `GOSMART_MS_FHIR_ENABLED` | `FHIR_ENABLED` | `true` | Enable FHIR ServiceRequest / Bundle REST endpoints. |
 | `GOSMART_MS_APP_NAME` | `APP_NAME` | `DICOM Mock Server` | Application display name. |
-| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.3.1` | Application version string. |
+| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.3.2` | Application version string. |
 
 ---
 
@@ -172,14 +172,18 @@ The server exposes standard DICOMweb REST services mounted at `/dicomweb/...` (a
 | Endpoint | Description | Response Type |
 | :--- | :--- | :--- |
 | `GET /dicomweb/studies` | Search for studies with query filters (`PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`, `ModalitiesInStudy`, `limit`, `offset`) | `application/dicom+json` |
-| `GET /dicomweb/studies/{studyUID}/series` | Search for series within a study | `application/dicom+json` |
-| `GET /dicomweb/series` | Search for series across all studies | `application/dicom+json` |
+| `GET /dicomweb/studies/{studyUID}/series` | Search for series within a study (includes `SeriesDate`, `SeriesTime`, `PresentationCreationDate`, `PresentationCreationTime`, and supports `includefield`) | `application/dicom+json` |
+| `GET /dicomweb/series` | Search for series across all studies (includes `SeriesDate`, `SeriesTime`, `PresentationCreationDate`, `PresentationCreationTime`, and supports `includefield`) | `application/dicom+json` |
 | `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances` | Search for instances within a series | `application/dicom+json` |
 | `GET /dicomweb/instances` | Search for instances across all studies | `application/dicom+json` |
 
 #### Example QIDO-RS Request
 ```bash
 curl -X GET "http://127.0.0.1:8000/dicomweb/studies?PatientID=GSH*&limit=10" \
+     -H "Accept: application/dicom+json"
+
+# Search series with PR tags requested
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345/series?includefield=00700082,00700083" \
      -H "Accept: application/dicom+json"
 ```
 

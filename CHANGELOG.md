@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.3.2] - 2026-09-11
+
+### Added
+- **DICOM Presentation State (PR) PresentationCreationDate & Time Support in QIDO-RS**:
+  - Added support for `(0070,0082) PresentationCreationDate` (VR: `DA`) and `(0070,0083) PresentationCreationTime` (VR: `TM`) in QIDO-RS series responses (`GET /studies/{studyUID}/series` and `GET /series`).
+  - Added support for `(0008,0021) SeriesDate` (VR: `DA`) and `(0008,0031) SeriesTime` (VR: `TM`) in QIDO-RS series search responses.
+  - Implemented automatic fallback to `SeriesDate`/`SeriesTime` or `StudyDate`/`StudyTime` when `PresentationCreationDate`/`PresentationCreationTime` are omitted on `PR` datasets.
+  - Added support for `includefield` query parameters (e.g. `includefield=00700082,00700083`, `includefield=PresentationCreationDate,PresentationCreationTime`, and `includefield=all`) in QIDO-RS series queries.
+  - Updated `MwlGeneratorService.to_series_cfind_dataset()` and `DicomGeneratorService.sync_dicom_dates_and_times()` to populate and synchronize `PresentationCreationDate` and `PresentationCreationTime`.
+
 ## [0.3.1] - 2026-09-09
 
 ### Added
