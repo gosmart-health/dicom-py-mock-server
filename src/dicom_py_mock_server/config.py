@@ -19,6 +19,16 @@ class AppConfig(BaseSettings):
     app_version: str = "0.3.2"
     host: str = "127.0.0.1"
     port: int = 8000
+    host: str = Field(
+        default="127.0.0.1",
+        validation_alias=AliasChoices("GOSMART_MS_HOST", "HOST"),
+        description="HTTP host address",
+    )
+    port: int = Field(
+        default=8000,
+        validation_alias=AliasChoices("GOSMART_MS_PORT", "PORT"),
+        description="HTTP port",
+    )
     scp_ae_title: str = Field(
         default="GOSMART_SCP",
         validation_alias=AliasChoices("GOSMART_MS_SCP_AE_TITLE", "GOSMART_MS_AE_TITLE", "SCP_AE_TITLE", "AE_TITLE"),

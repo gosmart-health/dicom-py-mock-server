@@ -1,0 +1,22 @@
+# Git and IDE
+.git
+.github
+.idea
+.vscode
+.DS_Store
+
+# Python & Virtual Environments
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+
+# Local Runtime and output data
+received/
+test_output/
+logs/
+.env
+
