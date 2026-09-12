@@ -3,7 +3,7 @@ set -e
 
 # Default settings
 REPO="${1:-imanabu/dicom-py-mock-server}"
-VERSION="${2:-0.3.2}"
+VERSION="${2:-0.3.3}"
 
 echo "=================================================="
 echo "Pushing DICOM Mock Server to Docker Registry"

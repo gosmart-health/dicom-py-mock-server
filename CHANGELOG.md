@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.3.3] - 2026-09-11
+
+### Added
+- **Containerization & Docker Support**:
+  - Added multi-stage `Dockerfile` based on `python:3.14-slim` using Astral `uv` for fast, reproducible dependency builds.
+  - Added `docker-compose.yaml` (and `doccker-compose.yaml` symlink) with port mappings for Port 8000 (FastAPI / DICOMweb / MCP SSE) and Port 11112 (DICOM SCP: C-FIND, C-MOVE, C-STORE, MWL), persistence volume mounts, and automated container health checks.
+  - Added `.dockerignore` to keep build context lean and fast.
+  - Added `DOCKER_HUB.md` repository information overview page documentation with ready-to-run compose configurations.
+  - Added `util/push_docker.sh` image tagging and registry deployment utility.
+- **Configuration Enhancements**:
+  - Added `HOST` and `PORT` environment variable aliases alongside `GOSMART_MS_HOST` and `GOSMART_MS_PORT` in `AppConfig`.
+- **Startup Script Improvements**:
+  - Updated `start.sh` with POSIX `exec` signal forwarding for graceful shutdown in Docker and command argument pass-through.
+- **Documentation**:
+  - Added Docker and Docker Compose execution guides and network port mapping details in `README.md`.
+
 ## [0.3.2] - 2026-09-11
 
 ### Added
