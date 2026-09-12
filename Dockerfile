@@ -18,6 +18,7 @@ ENV PYTHONUNBUFFERED=1 \
     GOSMART_MS_HOST=0.0.0.0 \
     GOSMART_MS_PORT=8000 \
     GOSMART_MS_SCP_PORT=11112 \
+    GOSMART_MS_HL7_PORT=2575 \
     PATH="/app/.venv/bin:$PATH"
 
 # Install dependencies with caching before copying application code
@@ -30,8 +31,8 @@ COPY . .
 # Finalize project installation
 RUN uv sync --frozen && chmod +x /app/start.sh
 
-# Expose HTTP (FastAPI / DICOMweb / MCP SSE) and DICOM SCP ports
-EXPOSE 8000 11112
+# Expose HTTP (FastAPI / DICOMweb / MCP SSE), DICOM SCP, and HL7 MLLP ports
+EXPOSE 8000 11112 2575
 
 # Launch application via start.sh
 CMD ["/app/start.sh"]

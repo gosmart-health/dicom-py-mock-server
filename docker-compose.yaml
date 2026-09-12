@@ -8,10 +8,12 @@ services:
     ports:
       - "8000:8000"
       - "11112:11112"
+      - "2575:2575"
     environment:
       - GOSMART_MS_HOST=0.0.0.0
       - GOSMART_MS_PORT=8000
       - GOSMART_MS_SCP_PORT=11112
+      - GOSMART_MS_HL7_PORT=2575
       - GOSMART_MS_LOG_LEVEL=INFO
     volumes:
       - ./data/dicom_storage:/app/data/dicom_storage
