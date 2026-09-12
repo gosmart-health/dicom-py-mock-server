@@ -135,7 +135,7 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_HL7_FACILITY` | `HL7_FACILITY` | `GOSMART_HOSP` | Receiving Facility name for HL7 MSH and ACK segments. |
 | `GOSMART_MS_FHIR_ENABLED` | `FHIR_ENABLED` | `true` | Enable FHIR ServiceRequest / Bundle REST endpoints. |
 | `GOSMART_MS_APP_NAME` | `APP_NAME` | `DICOM Mock Server` | Application display name. |
-| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.3.2` | Application version string. |
+| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.3.3` | Application version string. |
 
 ---
 
@@ -412,6 +412,15 @@ A developer utility script and sample bundle are included in the `util/` folder:
 ## Running the Server
 
 Start the FastAPI application and DICOM mock services:
+### Local Execution via `start.sh` or `uv`
+
+Start the FastAPI application and DICOM mock services using the startup script:
+
+```bash
+./start.sh
+```
+
+Or run directly via uv:
 
 ```bash
 uv run dicom-py-mock-server
@@ -422,6 +431,51 @@ Or run via python module:
 ```bash
 python -m dicom_py_mock_server.main
 ```
+
+### Running with Docker
+
+Build and run the containerized service:
+
+```bash
+# Build Docker image
+docker build -t dicom-py-mock-server:latest .
+
+# Run container exposing Port 8000 (HTTP / DICOMweb / MCP SSE) and Port 11112 (DICOM SCP)
+docker run -d \
+  --name dicom-py-mock-server \
+  -p 8000:8000 \
+  -p 11112:11112 \
+  -v $(pwd)/data/dicom_storage:/app/data/dicom_storage \
+  -v $(pwd)/received:/app/received \
+  -v $(pwd)/logs:/app/logs \
+  imanabu/dicom-py-mock-server:latest
+```
+
+### Running with Docker Compose
+
+Start the service with `docker-compose.yaml`:
+
+```bash
+# Start container in detached mode
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop container
+docker compose down
+```
+
+### Pushing Docker Image to Registry
+
+Use the push utility script to tag and push updates to the registry:
+
+```bash
+# Push to Docker Hub repository (defaults to imanabu/dicom-py-mock-server)
+./util/push_docker.sh
+```
+
+A Docker Hub repository overview page document is maintained in [DOCKER_HUB.md](./DOCKER_HUB.md).
 
 ## Running Tests & Quality Checks
 

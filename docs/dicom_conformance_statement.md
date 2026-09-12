@@ -329,8 +329,8 @@ The `MOCK_SCP` Application Entity provides Standard Conformance to the following
 - Asynchronous operations window negotiation is not supported. All associations operate synchronously.
 
 ###### 4.2.1.2.4 Implementation Identifying Information
-- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.2`
-- Implementation Version Name: `GOSMART_MS_032`
+- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.3`
+- Implementation Version Name: `GOSMART_MS_033`
 
 ##### 4.2.1.3 Association Acceptance Policy
 

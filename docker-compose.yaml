@@ -1,0 +1,27 @@
+services:
+  dicom-mock-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dicom-py-mock-server:latest
+    container_name: dicom-py-mock-server
+    ports:
+      - "8000:8000"
+      - "11112:11112"
+    environment:
+      - GOSMART_MS_HOST=0.0.0.0
+      - GOSMART_MS_PORT=8000
+      - GOSMART_MS_SCP_PORT=11112
+      - GOSMART_MS_LOG_LEVEL=INFO
+    volumes:
+      - ./data/dicom_storage:/app/data/dicom_storage
+      - ./received:/app/received
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
