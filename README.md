@@ -13,24 +13,24 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 > **TEMPLATE DICOM DE-IDENTIFICATION NOTICE**
 > 
 > - The generator **does NOT perform de-identification** on template DICOM files.
-> - Patient Name, Patient ID, Patient Sex, Study Date and Time, all DICOM UIDs (Study/Series/SOP Instance UIDs), and image pixel data will be generated and replaced.
-> - **All other DICOM elements are passed through "as is"**, including any pre-existing private data elements, vendor-specific attributes, and secondary metadata present in template files. Users must ensure templates do not contain sensitive PHI or non-de-identified patient information prior to loading.
->- A full standard compliant DICOM de-identification process is available using [GoSmart.Health DICOM RS Transformer](https://github.com/gosmart-health/dicom-rs-transformer)
+> - Patient Name, Patient ID, Patient Sex, Study Date/Time, all DICOM UIDs, and pixel data are generated or replaced.
+> - **All other DICOM elements pass through "as is"**, including pre-existing private data elements, vendor attributes, and secondary metadata. Users must ensure templates contain no sensitive PHI prior to loading.
+> - A standards-compliant DICOM de-identification process is available via [GoSmart.Health DICOM RS Transformer](https://github.com/gosmart-health/dicom-rs-transformer).
 
 ---
 
 ## Capabilities & Features
 
-1. **Synthetic DICOM Generation**: Generate customizable DICOM P10 objects with specified Patient, Study, Series, and instance metadata.
-2. **Deterministic DICOM UID Generation (ITU-T X.667 / ISO/IEC 9834-8)**: Generates standards-compliant `2.25.<u128>` UIDs using SHA-1 (UUIDv5) or MD5 (UUIDv3) over a persistent namespace, preventing PHI exposure while maintaining hierarchical reproducibility (Study -> Series -> Instance).
-3. **DICOM SCP Services**: Built-in DICOM C-FIND, C-MOVE/GET, and MWL (Modality Worklist) SCP network listeners.
-4. **Modality Worklist (MWL) Synthesis**: Automated business-hours MWL entry creation and retention window management.
-5. **MCP Integration Provisioning**: Exposes server capabilities to AI Assistants (AGY, Claude Desktop, Cursor, etc.) over Server-Sent Events (SSE) transport.
-6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice DICOM datasets from subdirectories under `templates/` (e.g. `templates/Toshiba_Aquilion/`, `templates/MR/`) with dynamic modality detection and folder purity validation. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), the server delivers exact series slice counts with round-robin template picking, preserves the template's original Study Description (without swapping with mock up values), and maintains pixel preservation. In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), slices rotate cyclically conforming to configurable slice ranges and generate synthetic study descriptions. Supported compression syntaxes include `JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, and `IMPLICIT_VR_LITTLE_ENDIAN`.
-6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice DICOM datasets from subdirectories under `templates/` (e.g. `templates/sample_ct/`, `templates/sample_mr/`) with dynamic modality detection and folder purity validation. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), the server delivers exact series slice counts with round-robin template picking, preserves the template's original Study Description (without swapping with mock up values), and maintains pixel preservation. In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), slices rotate cyclically conforming to configurable slice ranges and generate synthetic study descriptions. Supported compression syntaxes include `JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, and `IMPLICIT_VR_LITTLE_ENDIAN`.
-7. **Template SOP Compression & PACS Verification**: Synthesize valid DICOM Part-10 files directly from templates (such as `templates/sample_ct` and `templates/sample_mr`) with burned metadata text, precomputed background test patterns, and supported compression syntaxes (`JPEG2000_LOSSLESS`, `JPEG2000_LOSSY`, `JPEG`, `RLE`, `EXPLICIT_VR_LITTLE_ENDIAN`, `IMPLICIT_VR_LITTLE_ENDIAN`) saved to `test_output/` for PACS viewer inspection.
-8. **Zero-Dependency HL7 v2 MLLP Socket Listener**: Ingests raw `ORM^O01` radiology order messages over TCP/IP via MLLP framing on port `2575`, registers MWL items without demographic alteration/anonymization, handles order cancellation (`ORC-1 = CA`), rejects unsupported modalities without template images, and transmits MLLP-framed `ACK^O01` responses.
-9. **FHIR ServiceRequest Bundle Ingestion**: Accepts FHIR R4/R5 imaging order bundles via `POST /api/v1/fhir_service_request` (and aliases `/api/v1/fhir/Bundle` and `/api/v1/fhir/ServiceRequest`), maps patient demographics, procedure codes, and timing directly into MWL entries, and triggers order revocation.
+1. **Synthetic DICOM Generation**: Generate customizable DICOM Part-10 objects with configurable Patient, Study, Series, and instance metadata.
+2. **Deterministic UID Generation (ITU-T X.667 / ISO/IEC 9834-8)**: Generates reproducible, standards-compliant `2.25.<u128>` UIDs using SHA-1 (UUIDv5) or MD5 (UUIDv3) over a persistent namespace.
+3. **DICOM DIMSE Network Services**: Built-in C-ECHO, C-FIND, C-MOVE/GET, C-STORE, and Modality Worklist (MWL) SCP listeners with association audit CSV logging.
+4. **DICOMweb RESTful Services (PS3.18)**: Full support for QIDO-RS (search), WADO-RS (retrieve objects, metadata, rendered frames), WADO-URI, and STOW-RS (store instances) with dynamic transfer syntax transcoding.
+5. **Modality Worklist (MWL) Engine**: Automated scheduled MWL entry generation, active retention window management, and ad-hoc query support.
+6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice template datasets by modality folder (`templates/sample_ct/`, `templates/sample_mr/`). Supports exact template slice delivery (non-synthetic) or cyclic slice volume expansion with burned-in annotations (synthetic).
+7. **High-Throughput Stress Mode**: Caches compressed frames and reuses payloads across instances to maximize retrieval benchmark throughput.
+8. **Zero-Dependency HL7 v2 MLLP Socket Listener**: Ingests raw `ORM^O01` order messages on TCP port `2575` via MLLP framing, maps demographics into MWL entries, handles order cancellations, and returns `ACK^O01` responses.
+9. **FHIR ServiceRequest & Bundle Ingestion**: REST endpoints for FHIR R4/R5 imaging order bundles (`Bundle`, `ServiceRequest`) that map demographics directly into MWL entries and handle order revocations.
+10. **Model Context Protocol (MCP) Integration**: Exposes server inspection, MWL controls, DICOM generation, and study move tools to AI agents (AGY, Claude Desktop, Cursor) over Server-Sent Events (SSE).
 
 ---
 
@@ -172,8 +172,8 @@ The server exposes standard DICOMweb REST services mounted at `/dicomweb/...` (a
 | Endpoint | Description | Response Type |
 | :--- | :--- | :--- |
 | `GET /dicomweb/studies` | Search for studies with query filters (`PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`, `ModalitiesInStudy`, `limit`, `offset`) | `application/dicom+json` |
-| `GET /dicomweb/studies/{studyUID}/series` | Search for series within a study (includes `SeriesDate`, `SeriesTime`, `PresentationCreationDate`, `PresentationCreationTime`, and supports `includefield`) | `application/dicom+json` |
-| `GET /dicomweb/series` | Search for series across all studies (includes `SeriesDate`, `SeriesTime`, `PresentationCreationDate`, `PresentationCreationTime`, and supports `includefield`) | `application/dicom+json` |
+| `GET /dicomweb/studies/{studyUID}/series` | Search for series within a study (supports `includefield` and PR tags) | `application/dicom+json` |
+| `GET /dicomweb/series` | Search for series across all studies (supports `includefield` and PR tags) | `application/dicom+json` |
 | `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances` | Search for instances within a series | `application/dicom+json` |
 | `GET /dicomweb/instances` | Search for instances across all studies | `application/dicom+json` |
 
@@ -201,27 +201,15 @@ curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345/series?includefie
 | `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}/frames/{frameList}` | Retrieve raw pixel data for specific frames | `multipart/related; type="application/octet-stream"` |
 
 #### Transfer Syntax Negotiation & Transcoding
-WADO-RS endpoints automatically transcode instances on-the-fly to the requested transfer syntax specified in the `Accept` header (`transfer-syntax="..."`), direct request headers (`transfer-syntax`, `X-Transfer-Syntax`), or query parameters (`transferSyntax`, `transfer-syntax`, `transfer_syntax`). Supported values include friendly aliases (`JPEG200`, `JPEG200_LOSSLESS`, `JPEG2000`, `JPEG2000_LOSSLESS`, `RLE`, `RLE_LOSSLESS`, `RAW`, `JPEG`) as well as standard DICOM Transfer Syntax UIDs:
+WADO-RS endpoints automatically transcode instances on-the-fly to the requested transfer syntax specified via `Accept` header (`transfer-syntax="..."`), request header (`transfer-syntax`), or query parameter (`transferSyntax`). Supported values include friendly aliases (`JPEG2000`, `JPEG2000_LOSSLESS`, `RLE`, `RAW`, `JPEG`) and standard DICOM Transfer Syntax UIDs:
 
 ```bash
-# Retrieve JPEG 2000 Lossless instances via Accept header alias
+# Retrieve via Accept header (alias or UID)
 curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
-     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="JPEG200"'
+     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="JPEG2000_LOSSLESS"'
 
-# Retrieve JPEG 2000 Lossless instances via UID
-curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
-     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.4.90"'
-
-# Retrieve RLE Lossless instances via query parameter
+# Retrieve via query parameter (e.g. RLE, RAW, JPEG)
 curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345?transferSyntax=RLE"
-
-# Retrieve Explicit VR Little Endian (RAW) instances
-curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
-     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="RAW"'
-
-# Retrieve JPEG Baseline 8-bit instances
-curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
-     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="1.2.840.10008.1.2.4.50"'
 ```
 
 
@@ -391,9 +379,9 @@ Orders with `status` set to `revoked` or `entered-in-error` automatically remove
 ### Identifier Parsing Behavior & Enterprise Hospital Note
 > [!NOTE]
 > **Identifier Extraction Strategy**:
-> To maximize developer friendliness and accommodate varied test harnesses, the built-in FHIR parser extracts the **first available identifier** (`patient.identifier[0].value` for Patient ID / MRN, and the first in `serviceRequest.identifier` for Accession Number, falling back to resource `.id` if omitted). It does not enforce specific hospital `system` URIs (such as `http://hospital.org` or `http://gosmart.health`).
+> The FHIR parser extracts the first available identifier (`patient.identifier[0].value` for Patient ID/MRN and `serviceRequest.identifier[0].value` for Accession Number, falling back to resource `.id` if omitted) without requiring specific hospital `system` URIs.
 >
-> In real-world enterprise hospital environments (e.g. Epic, Cerner/Oracle Health), FHIR resources typically carry multiple identifiers (Enterprise Master Patient Index / EMPI, facility-specific MRNs, internal Community IDs, etc.) differentiated by authority OIDs (e.g. `urn:oid:1.2.840.114350...`) or HL7 v2 Table 0203 type codes (`code = "MR"` for Medical Record Number, `code = "ACSN"` for Accession Number). Developers adapting this mock server to simulate complex multi-identifier enterprise workflows can easily customize `FhirParserService` in `src/dicom_py_mock_server/services/fhir_parser.py` to match on specific `system` URIs or `type.coding` elements.
+> In enterprise environments with multiple identifiers (e.g., Epic, Cerner), customize `FhirParserService` in `src/dicom_py_mock_server/services/fhir_parser.py` to match specific `system` URIs or HL7 v2 Table 0203 type codes (`MR`, `ACSN`).
 
 ### FHIR Order Bundle Pusher Shell Script (`push_fhir.sh`)
 
@@ -411,7 +399,6 @@ A developer utility script and sample bundle are included in the `util/` folder:
 
 ## Running the Server
 
-Start the FastAPI application and DICOM mock services:
 ### Local Execution via `start.sh` or `uv`
 
 Start the FastAPI application and DICOM mock services using the startup script:
@@ -420,16 +407,11 @@ Start the FastAPI application and DICOM mock services using the startup script:
 ./start.sh
 ```
 
-Or run directly via uv:
+Or run directly via `uv` or Python module:
 
 ```bash
 uv run dicom-py-mock-server
-```
-
-Or run via python module:
-
-```bash
-python -m dicom_py_mock_server.main
+# or: python -m dicom_py_mock_server.main
 ```
 
 ### Running with Docker
@@ -517,5 +499,5 @@ Releases are distributed strictly as source-code releases. For details on versio
 
 ## Contacting the Developer Community
 
-* Join [Discussions](https://github.com/gosmart-health/dicom-py-mock-server/discussions) 
+* Join [Discussions](https://github.com/gosmart-health/dicom-py-mock-server/discussions)
 * Add or Inspect [Issues](https://github.com/gosmart-health/dicom-py-mock-server/issues)
