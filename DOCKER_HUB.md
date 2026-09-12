@@ -20,10 +20,12 @@ services:
     ports:
       - "8000:8000"
       - "11112:11112"
+      - "2575:2575"
     environment:
       - GOSMART_MS_HOST=0.0.0.0
       - GOSMART_MS_PORT=8000
       - GOSMART_MS_SCP_PORT=11112
+      - GOSMART_MS_HL7_PORT=2575
       - GOSMART_MS_SCP_AE_TITLE=GOSMART_SCP
       - GOSMART_MS_LOG_LEVEL=INFO
       - GOSMART_MS_TRANSFER_SYNTAX=JPEG2000_LOSSLESS
@@ -61,6 +63,7 @@ docker run -d \
   --name dicom-py-mock-server \
   -p 8000:8000 \
   -p 11112:11112 \
+  -p 2575:2575 \
   -v $(pwd)/data/dicom_storage:/app/data/dicom_storage \
   -v $(pwd)/received:/app/received \
   -v $(pwd)/logs:/app/logs \

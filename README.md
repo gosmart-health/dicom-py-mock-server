@@ -422,11 +422,12 @@ Build and run the containerized service:
 # Build Docker image
 docker build -t dicom-py-mock-server:latest .
 
-# Run container exposing Port 8000 (HTTP / DICOMweb / MCP SSE) and Port 11112 (DICOM SCP)
+# Run container exposing Port 8000 (HTTP / DICOMweb / MCP SSE), Port 11112 (DICOM SCP), and Port 2575 (HL7 MLLP)
 docker run -d \
   --name dicom-py-mock-server \
   -p 8000:8000 \
   -p 11112:11112 \
+  -p 2575:2575 \
   -v $(pwd)/data/dicom_storage:/app/data/dicom_storage \
   -v $(pwd)/received:/app/received \
   -v $(pwd)/logs:/app/logs \
@@ -435,7 +436,7 @@ docker run -d \
 
 ### Running with Docker Compose
 
-Start the service with `docker-compose.yaml`:
+Start the service with `docker-compose.yaml` (configured with Ports 8000, 11112, and 2575):
 
 ```bash
 # Start container in detached mode
