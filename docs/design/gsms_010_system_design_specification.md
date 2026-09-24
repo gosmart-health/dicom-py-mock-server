@@ -175,6 +175,22 @@ graph TD
 
 ---
 
+
+### 3.12 Model Context Protocol (MCP) Subsystem (`src/dicom_py_mock_server/services/mcp.py`, `api/mcp_routes.py`, `mcp_stdio.py`)
+* **Dynamic Configuration Management (`get_config`, `update_config` / `set_config`)**:
+  - Exposes runtime configuration inspection and mutation across all `AppConfig` fields.
+  - Dynamically propagates modified settings into active singleton services (`config`, `MwlGeneratorService`, `DicomScpService`, root log level).
+* **Clinical Scanning Order Generation (`generate_scanning_order`)**:
+  - Exposes a dedicated high-level tool tailored for AI agents to schedule patient exams.
+  - Requires `patient_name`, `patient_id`, `accession_number`, and `modality`, with optional `study_description` and physician demographics.
+  - Directly registers the scheduled order into the active Modality Worklist.
+* **Worklist Inspection & Cancellation (`get_worklist` / `list_mwl_entries`, `remove_accession_number` / `remove_mwl_entry`)**:
+  - Exposes natural language queries for active worklist inspection ("show me current worklist").
+  - Provides instantaneous cancellation and removal of active worklist orders by accession number ("remove accession number <value>").
+* **Transports**:
+  - SSE & Streamable HTTP (`GET/POST /sse`, `POST /mcp`, `GET /mcp`) with session header routing.
+  - Stdio transport CLI (`python -m dicom_py_mock_server.mcp_stdio`) for local console agents.
+
 ## 4. Concurrency & Safety Contracts
 
 1. **Thread Isolation**: The DICOM SCP network server and background auto-push scheduler run in background threads, preventing blockages on the main Uvicorn event loop.

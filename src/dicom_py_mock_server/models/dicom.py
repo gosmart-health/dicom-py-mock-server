@@ -1,6 +1,6 @@
 """Pydantic models for DICOM metadata and requests."""
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from dicom_py_mock_server.config import config
 
@@ -129,24 +129,126 @@ class ScpStatusResponse(BaseModel):
 class MwlGenerateRequest(BaseModel):
     """Optional customization parameters for MWL entry generation."""
 
-    patient_name: str | None = Field(default=None, alias="patientName")
-    patient_id: str | None = Field(default=None, alias="patientId")
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    patient_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("patient_name", "patientName", "patient"),
+    )
+    patient_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("patient_id", "patientId", "mrn"),
+    )
     mrn: str | None = None
     dob: str | None = None
     sex: str | None = None
     gender: str | None = None
     modality: str | None = None
-    accession: str | None = None
-    study_uid: str | None = Field(default=None, alias="studyUid")
+    accession: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("accession", "accession_number", "accessionNumber"),
+    )
+    study_uid: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("study_uid", "studyUid"),
+    )
     reason: str | None = None
-    study_description: str | None = Field(default=None, alias="studyDescription")
+    study_description: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("study_description", "studyDescription", "description", "reason"),
+    )
     department: str | None = None
-    num_instances: int | None = Field(default=None, alias="numInstances")
-    institution_name: str | None = Field(default=None, alias="institutionName")
+    num_instances: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("num_instances", "numInstances"),
+    )
+    institution_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("institution_name", "institutionName", "institution"),
+    )
     institution: str | None = None
-    referring_physician: str | None = Field(default=None, alias="referringPhysician")
-    performing_physician: str | None = Field(default=None, alias="performingPhysician")
-    reading_physician: str | None = Field(default=None, alias="readingPhysician")
+    referring_physician: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("referring_physician", "referringPhysician"),
+    )
+    performing_physician: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("performing_physician", "performingPhysician", "attendingPhysician"),
+    )
+    reading_physician: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("reading_physician", "readingPhysician"),
+    )
+
+
+class ScanningOrderRequest(BaseModel):
+    """Request schema for generating a scanning order (MWL scheduled procedure step)."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    patient_name: str = Field(
+        ...,
+        validation_alias=AliasChoices("patient_name", "patientName", "patient"),
+        description="Patient Full Name",
+    )
+    patient_id: str = Field(
+        ...,
+        validation_alias=AliasChoices("patient_id", "patientId", "mrn"),
+        description="Patient ID / MRN",
+    )
+    accession_number: str = Field(
+        ...,
+        validation_alias=AliasChoices("accession_number", "accessionNumber", "accession"),
+        description="Accession Number",
+    )
+    modality: str = Field(..., description="Imaging Modality (e.g. CT, MR, US, CR, DX)")
+    study_description: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("study_description", "studyDescription", "description", "reason"),
+        description="Optional Study Description phrase / clinical indication",
+    )
+    dob: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("dob", "birth_date", "birthDate"),
+        description="Patient Date of Birth (YYYYMMDD)",
+    )
+    sex: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("sex", "gender"),
+        description="Patient Sex (M, F, O)",
+    )
+    institution_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("institution_name", "institutionName", "institution"),
+        description="Institution Name",
+    )
+    referring_physician: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("referring_physician", "referringPhysician"),
+        description="Referring Physician Name",
+    )
+    performing_physician: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("performing_physician", "performingPhysician"),
+        description="Performing Physician Name",
+    )
+    reading_physician: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("reading_physician", "readingPhysician"),
+        description="Reading Physician Name",
+    )
+
+
+class RemoveAccessionRequest(BaseModel):
+    """Request schema for removing a worklist entry by accession number."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    accession_number: str = Field(
+        ...,
+        validation_alias=AliasChoices("accession_number", "accessionNumber", "accession"),
+        description="Accession number of worklist entry to remove",
+    )
 
 
 class MwlStatusResponse(BaseModel):
@@ -169,6 +271,7 @@ class MwlEntrySummary(BaseModel):
     accession: str
     modality: str
     study_uid: str
+    study_description: str | None = None
     referring_physician: str | None = None
     performing_physician: str | None = None
     reading_physician: str | None = None

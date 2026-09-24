@@ -493,18 +493,28 @@ class MwlGeneratorService:
         # Apply overrides if custom dictionary provided
         custom_study_uid = None
         if custom:
-            patient_name = custom.get("patientName") or patient_name
-            patient_id = custom.get("patientId") or custom.get("mrn") or patient_id
-            if custom.get("dob"):
-                if isinstance(custom["dob"], (datetime, date)):
-                    dob_str = custom["dob"].strftime("%Y%m%d")
+            patient_name = (
+                custom.get("patient_name") or custom.get("patientName") or custom.get("patient") or patient_name
+            )
+            patient_id = custom.get("patient_id") or custom.get("patientId") or custom.get("mrn") or patient_id
+            if custom.get("dob") or custom.get("birth_date") or custom.get("birthDate"):
+                dob_val = custom.get("dob") or custom.get("birth_date") or custom.get("birthDate")
+                if isinstance(dob_val, (datetime, date)):
+                    dob_str = dob_val.strftime("%Y%m%d")
                 else:
-                    dob_str = str(custom["dob"]).replace("-", "")
+                    dob_str = str(dob_val).replace("-", "")
             sex = custom.get("sex") or custom.get("gender") or sex
             modality = custom.get("modality") or modality
-            accession = custom.get("accession") or accession
+            accession = (
+                custom.get("accession_number") or custom.get("accessionNumber") or custom.get("accession") or accession
+            )
             custom_study_uid = custom.get("studyUid") or custom.get("study_uid")
-            custom_desc = custom.get("studyDescription") or custom.get("study_description") or custom.get("reason")
+            custom_desc = (
+                custom.get("studyDescription")
+                or custom.get("study_description")
+                or custom.get("description")
+                or custom.get("reason")
+            )
             if custom_desc is not None:
                 description = custom_desc
             department_name = custom.get("department") or department_name
@@ -888,6 +898,7 @@ class MwlGeneratorService:
                 "accession": e["accession"],
                 "modality": e["modality"],
                 "study_uid": e["study_uid"],
+                "study_description": e.get("study_description"),
                 "series_uid": e.get("series_uid", ""),
                 "series_number": e.get("series_number", 1),
                 "series_description": e.get("series_description", ""),

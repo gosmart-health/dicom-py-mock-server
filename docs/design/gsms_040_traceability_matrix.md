@@ -49,6 +49,9 @@ This matrix establishes complete bi-directional traceability linking **Software 
 | **REQ-REG-001** | DICOM Part 10 Format | `src/dicom_py_mock_server/services/generator.py` | HAZ-001 / HAZ-002 | `enforce_file_format=True` setting | Unit test `test_generator.py::test_dicom_file_generation` | Pass |
 | **REQ-REG-004** | Local Network Intended Use | `src/dicom_py_mock_server/main.py` | HAZ-010 | Non-clinical warning banner & OpenAPI disclaimers | Unit test `test_main.py::test_non_clinical_disclaimer` | Pass |
 | **REQ-REG-005** | ITU-T X.667 / ISO/IEC 9834-8 & DICOM PS 3.5 Annex B.2 | `src/dicom_py_mock_server/services/uid_generator.py` | HAZ-001 | Version/variant bitfields, 2.25 prefix, length <= 64 validation | Unit test `test_uid_generator.py::test_uuid_bitfields_itu_t_x667_compliance` | Pass |
+| **REQ-FUN-035** | MCP Dynamic Server Configuration Management | `src/dicom_py_mock_server/services/mcp.py` | - | Dynamic AppConfig inspection & update across services | Integration test `test_mcp_sse.py::test_mcp_tools_and_prompts` | Pass |
+| **REQ-FUN-036** | MCP Clinical Scanning Order Generation | `src/dicom_py_mock_server/services/mcp.py` & `mwl_generator.py` | HAZ-006 | Scanning order MWL entry generation with required clinical fields | Integration test `test_mcp_sse.py::test_mcp_tools_and_prompts` | Pass |
+| **REQ-FUN-037** | MCP Active Worklist Inspection & Order Purge | `src/dicom_py_mock_server/services/mcp.py` & `mwl_generator.py` | HAZ-003 | Worklist inspection & order cancellation by accession number | Integration test `test_mcp_sse.py::test_mcp_tools_and_prompts` | Pass |
 
 
 
