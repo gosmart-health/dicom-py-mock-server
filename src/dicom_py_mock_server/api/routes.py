@@ -12,6 +12,7 @@ from dicom_py_mock_server.models.dicom import (
     MwlGenerateRequest,
     MwlStatusResponse,
     RawImageGeneratorRequest,
+    ScanningOrderRequest,
     ScpStatusResponse,
 )
 from dicom_py_mock_server.services.generator import DicomGeneratorService
@@ -107,6 +108,40 @@ def generate_mwl_entry(request: MwlGenerateRequest | None = None):
         "study_uid": record["study_uid"],
         "json_entry": record["json_entry"],
     }
+
+
+@router.post("/api/v1/orders/scanning")
+def generate_scanning_order(request: ScanningOrderRequest):
+    """Generate a clinical scanning order (MWL scheduled procedure step)."""
+    custom_dict = request.model_dump(by_alias=True, exclude_none=True)
+    if "accession_number" in custom_dict:
+        custom_dict["accession"] = custom_dict["accession_number"]
+    record = mwl_service.add_entry(custom=custom_dict)
+    if not record:
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to generate scanning order MWL entry.",
+        )
+    return {
+        "success": True,
+        "patient_name": record["patient_name"],
+        "patient_id": record["patient_id"],
+        "accession_number": record["accession"],
+        "modality": record["modality"],
+        "study_description": record.get("study_description"),
+        "study_uid": record["study_uid"],
+        "scheduled_procedure_step_id": str(record.get("series_number", 1)),
+        "json_entry": record["json_entry"],
+    }
+
+
+@router.delete("/api/v1/mwl/{accession}")
+def remove_mwl_entry(accession: str):
+    """Remove an active worklist entry by accession number."""
+    removed = mwl_service.remove_entry(accession=accession)
+    if removed == 0:
+        raise HTTPException(status_code=404, detail=f"No active worklist entry found with accession '{accession}'.")
+    return {"success": True, "accession_number": accession, "removed_count": removed}
 
 
 @router.post("/api/v1/mwl/start", response_model=MwlStatusResponse)
