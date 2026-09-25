@@ -16,7 +16,7 @@ class AppConfig(BaseSettings):
     )
 
     app_name: str = "DICOM Mock Server"
-    app_version: str = "0.3.3"
+    app_version: str = "0.3.4"
     host: str = Field(
         default="127.0.0.1",
         validation_alias=AliasChoices("GOSMART_MS_HOST", "HOST"),

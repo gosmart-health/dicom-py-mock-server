@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.3.4] - 2026-09-24
+
+### Added
+- **Model Context Protocol (MCP) Subsystem & Dynamic Configuration**:
+  - **Dynamic Configuration Management (`get_config`, `update_config` / `set_config`)**:
+    - Exposed inspection of current server settings and selective key retrieval via `get_config`.
+    - Implemented dynamic runtime updates across all `AppConfig` parameters via `update_config` / `set_config`, propagating immediately into singleton services (`config`, `mwl_service.config`, `scp_service.ae_title`, `scp_service.port`, and logger root level).
+  - **Clinical Scanning Order Generation (`generate_scanning_order`)**:
+    - Added structured tool tailored for AI agents to schedule patient exams requiring `patient_name`, `patient_id`, `accession_number`, and `modality`.
+    - Supported optional `study_description` phrase, birth date, sex, institution name, and physician demographics.
+    - Seamlessly registers scheduled procedure steps into the active Modality Worklist (MWL) for modality simulation.
+  - **Active Worklist Inspection & Order Purge**:
+    - Added `get_worklist` (alias `list_mwl_entries`, `show_worklist`) to list active orders responding to natural queries like "show me current worklist".
+    - Added `remove_accession_number` (alias `remove_mwl_entry`, `cancel_order`) to purge scheduled procedure orders by accession number responding to queries like "remove accession number <value>".
+  - **Stdio Transport Runner**:
+    - Added `src/dicom_py_mock_server/mcp_stdio.py` CLI runner for direct local stdio MCP transport integration with agent environments and IDE tools.
+- **Docker & Container Port Mappings**:
+  - Exposed HL7 v2 MLLP port `2575` in `Dockerfile` and `docker-compose.yaml` to ensure HL7 order ingestion is accessible in containerized deployments.
+  - Updated container documentation and quick-start references.
+
+### Changed
+- **Design & Requirements Documentation**:
+  - Updated Software Requirements Specification (`docs/design/gsms_000_software_requirements_spec.md`) with functional requirements `REQ-FUN-035` (dynamic config management), `REQ-FUN-036` (scanning order generation), and `REQ-FUN-037` (worklist inspection & purge).
+  - Updated System Design Specification (`docs/design/gsms_010_system_design_specification.md`) with Section 3.12 (Model Context Protocol Subsystem).
+  - Updated Traceability Matrix (`docs/design/gsms_040_traceability_matrix.md`) mapping requirements to verification test cases.
+  - Cleaned up `README.md` redundancy and expanded MCP tool usage examples.
+
 ## [0.3.3] - 2026-09-11
 
 ### Added

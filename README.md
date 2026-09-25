@@ -34,7 +34,9 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 
 ---
 
-## MCP SSE Integration
+## MCP SSE Integration3
+
+**IMPORTANT**: Start the Mock Server first. The MCP integration uses SSE over HTTP (e.g., `./start.sh`)
 
 The MCP SSE server transport provides two endpoints:
 - **SSE Stream Endpoint**: `GET /sse` or `GET /api/v1/sse`
@@ -59,6 +61,8 @@ The MCP SSE server transport provides two endpoints:
 ---
 
 ## AI Agent Integration (AGY, Claude Desktop, Cursor)
+
+
 
 To connect an MCP-compatible AI agent to the server via SSE, add the following entry to your MCP configuration:
 
