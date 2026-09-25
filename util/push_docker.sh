@@ -15,7 +15,7 @@ echo "=================================================="
 # Ensure local image exists or build it
 if ! docker image inspect dicom-py-mock-server:latest >/dev/null 2>&1; then
     echo "Local image dicom-py-mock-server:latest not found. Building..."
-    docker build -t dicom-py-mock-server:latest .
+    docker build --platform linux/amd64 -t dicom-py-mock-server:latest .
 fi
 
 # Tag version and latest
