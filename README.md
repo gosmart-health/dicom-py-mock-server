@@ -34,7 +34,7 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 
 ---
 
-## MCP SSE Integration3
+## MCP SSE Integrations
 
 **IMPORTANT**: Start the Mock Server first. The MCP integration uses SSE over HTTP (e.g., `./start.sh`)
 
