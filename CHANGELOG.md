@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.3.5] - 2026-10-02
+
+### Added
+- **Automated Study Push (Auto-Push) Engine (`/api/v1/scp/auto-push`)**:
+  - Implemented automated periodic generation and push of complete DICOM studies (including all series, instances, and synthesized/template pixel frames) to a target Application Entity via DIMSE C-STORE.
+  - Added dedicated REST endpoints:
+    - `POST /api/v1/scp/auto-push`: Configures and starts auto-push delivery using the target AE schema.
+    - `GET /api/v1/scp/auto-push`: Retrieves current auto-push status, target AE title, host, port, interval, and running state.
+  - Added `AutoPushRequest` and `AutoPushResponse` models supporting camelCase fields (`intervalSec`, `targetAeTitle`, `targetHost`, `targetPort`) alongside aliases for snake_case and alternate field names (`interval_sec`, `target_ae_title`, `target_host`, `target_port`, `ae_title`, `aeTitle`, `destination`, `host`, `port`).
+  - Added configuration parameters `auto_push_host` (`GOSMART_MS_AUTO_PUSH_HOST` / `AUTO_PUSH_HOST`, default `"127.0.0.1"`) and `auto_push_port` (`GOSMART_MS_AUTO_PUSH_PORT` / `AUTO_PUSH_PORT`, default `11113`).
+  - Added `auto_push_host` and `auto_push_port` to `ScpStatusResponse` on `GET /api/v1/scp/status`.
+  - Added `tests/rest-client/config.http` sample HTTP requests for direct IDE REST client interaction.
+- **Model Context Protocol (MCP) Auto-Push Tool (`auto_push`)**:
+  - Added `auto_push` MCP tool enabling AI agents to schedule periodic study pushes using queries like "auto push to {AE Title} every {interval} seconds".
+  - Schema accepts `targetAeTitle`, `intervalSec`, optional `targetHost`, and optional `targetPort`. Setting `intervalSec: 0` disables auto-push.
+  - Updated MCP `update_config` tool to dynamically configure `auto_push_host` and `auto_push_port` at runtime.
+
+### Changed
+- **Decoupled Background Worker Execution**:
+  - Migrated the auto-push engine from an asyncio event-loop scheduled task to a dedicated background worker thread (`threading.Thread` with a `threading.Event` stop signal).
+  - Eliminated event loop coupling issues when calling auto-push from FastAPI synchronous threadpool endpoints, Starlette `TestClient`, Uvicorn, or MCP stdio/SSE runners.
+  - Provides instant cancellation and clean thread shutdown upon calling `stop_auto_push()`.
+- **System Specifications & Documentation**:
+  - Updated Software Requirements Specification (`docs/design/gsms_000_software_requirements_spec.md`) with `REQ-FUN-038` and `REQ-FUN-039`.
+  - Updated System Design Specification (`docs/design/gsms_010_system_design_specification.md`) Sections 3.4.3 & 3.12.
+  - Updated Requirements Traceability Matrix (`docs/design/gsms_040_traceability_matrix.md`) mapping `REQ-FUN-038` and `REQ-FUN-039` to integration tests.
+  - Updated DICOM Conformance Statement (`docs/dicom_conformance_statement.md`) to version 0.3.5 (revision 1.3.0).
+
+### Fixed
+- **FastAPI Lifespan Startup**: Added missing `import asyncio` in `src/dicom_py_mock_server/main.py` required for lifespan event loop initialization.
+- **Auto-Push Event Loop Warning**: Fixed `no_running_event_loop_for_dicom_auto_push` warning when posting to `/api/v1/scp/auto-push`.
+
 ## [0.3.4] - 2026-09-24
 
 ### Added

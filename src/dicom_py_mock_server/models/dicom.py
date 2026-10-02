@@ -124,6 +124,11 @@ class ScpStatusResponse(BaseModel):
     port: int
     is_running: bool
     supported_services: list[str]
+    auto_push_ae: str = ""
+    auto_push_host: str = "127.0.0.1"
+    auto_push_port: int = 11113
+    auto_push_sec: float = 0.0
+    is_auto_pushing: bool = False
 
 
 class MwlGenerateRequest(BaseModel):
@@ -307,3 +312,71 @@ class DicomMoveResponse(BaseModel):
     target_ae_title: str
     target_host: str
     target_port: int
+
+
+class AutoPushRequest(BaseModel):
+    """Request schema for configuring auto-push of generated DICOM studies."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    interval_sec: float = Field(
+        default=0.0,
+        ge=0,
+        alias="intervalSec",
+        validation_alias=AliasChoices("intervalSec", "interval_sec", "interval", "seconds"),
+        description="Interval in seconds; 0 will disable auto push",
+    )
+    target_ae_title: str = Field(
+        ...,
+        alias="targetAeTitle",
+        validation_alias=AliasChoices("targetAeTitle", "target_ae_title", "ae_title", "aeTitle", "destination"),
+        description="The target AE title to push to",
+    )
+    target_host: str = Field(
+        default="127.0.0.1",
+        alias="targetHost",
+        validation_alias=AliasChoices("targetHost", "target_host", "host"),
+        description="Target host / IP address for DICOM push",
+    )
+    target_port: int = Field(
+        default=11113,
+        alias="targetPort",
+        validation_alias=AliasChoices("targetPort", "target_port", "port"),
+        description="Target DICOM port for push",
+    )
+
+    @property
+    def ae_title(self) -> str:
+        """Backward-compatibility property for ae_title."""
+        return self.target_ae_title
+
+
+class AutoPushResponse(BaseModel):
+    """Response schema for auto-push status."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    success: bool = True
+    message: str
+    interval_sec: float = Field(
+        default=0.0,
+        alias="intervalSec",
+        validation_alias=AliasChoices("intervalSec", "interval_sec", "interval"),
+    )
+    target_ae_title: str = Field(
+        default="",
+        alias="targetAeTitle",
+        validation_alias=AliasChoices("targetAeTitle", "target_ae_title", "ae_title", "aeTitle"),
+    )
+    target_host: str = Field(
+        default="127.0.0.1",
+        alias="targetHost",
+        validation_alias=AliasChoices("targetHost", "target_host", "host"),
+    )
+    target_port: int = Field(
+        default=11113,
+        alias="targetPort",
+        validation_alias=AliasChoices("targetPort", "target_port", "port"),
+    )
+    is_auto_pushing: bool = False
+    ae_title: str = Field(default="", description="Backward-compatibility alias for target_ae_title")

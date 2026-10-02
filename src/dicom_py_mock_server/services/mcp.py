@@ -133,6 +133,22 @@ class McpService:
                         "scp_ae_title": {"type": "string", "description": "Application Entity Title for SCP"},
                         "scp_port": {"type": "integer", "description": "DICOM SCP port"},
                         "move_destinations": {"type": "object", "description": "Mapping of destination AE titles"},
+                        "auto_push_ae": {
+                            "type": "string",
+                            "description": "Target AE title for auto-push of generated studies",
+                        },
+                        "auto_push_host": {
+                            "type": "string",
+                            "description": "Target host / IP for auto-push of generated studies",
+                        },
+                        "auto_push_port": {
+                            "type": "integer",
+                            "description": "Target port for auto-push of generated studies",
+                        },
+                        "auto_push_sec": {
+                            "type": "number",
+                            "description": "Interval in seconds between auto pushes (0 disables)",
+                        },
                         "dicom_namespace_uuid": {
                             "type": "string",
                             "description": "UUID namespace for deterministic UIDs",
@@ -443,6 +459,36 @@ class McpService:
                     "required": ["target_ae_title"],
                 },
             },
+            {
+                "name": "auto_push",
+                "description": (
+                    "Configure auto push of generated studies (associated series and images) to a destination "
+                    "at a configured interval in seconds. Permit auto push to {AE Title} every {interval} seconds. "
+                    "Set intervalSec to 0 to disable auto push."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "targetAeTitle": {
+                            "type": "string",
+                            "description": "Target Application Entity (AE) Title (e.g. 'VIEWER_AE', 'ORTHANC')",
+                        },
+                        "intervalSec": {
+                            "type": "number",
+                            "description": "Interval in seconds between study pushes (0 disables auto push)",
+                        },
+                        "targetHost": {
+                            "type": "string",
+                            "description": "Target host or IP address (default: 127.0.0.1)",
+                        },
+                        "targetPort": {
+                            "type": "integer",
+                            "description": "Target DICOM port (default: 11113)",
+                        },
+                    },
+                    "required": ["targetAeTitle", "intervalSec"],
+                },
+            },
         ]
 
     async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -481,6 +527,26 @@ class McpService:
                             lvl = getattr(logging, str(v).upper(), None)
                             if lvl is not None:
                                 logging.getLogger().setLevel(lvl)
+                        if k == "auto_push_ae" and hasattr(self.scp_service, "auto_push_ae"):
+                            self.scp_service.auto_push_ae = str(v)
+                        if k == "auto_push_host" and hasattr(self.scp_service, "auto_push_host"):
+                            self.scp_service.auto_push_host = str(v)
+                        if k == "auto_push_port" and hasattr(self.scp_service, "auto_push_port"):
+                            self.scp_service.auto_push_port = int(v)
+                        if k == "auto_push_sec" and hasattr(self.scp_service, "auto_push_sec"):
+                            self.scp_service.auto_push_sec = float(v)
+                        if k in ("auto_push_ae", "auto_push_host", "auto_push_port", "auto_push_sec") and hasattr(
+                            self, "scp_service"
+                        ):
+                            if self.config.auto_push_ae and self.config.auto_push_sec > 0:
+                                self.scp_service.start_auto_push(
+                                    target_ae_title=self.config.auto_push_ae,
+                                    interval_sec=self.config.auto_push_sec,
+                                    target_host=self.config.auto_push_host,
+                                    target_port=self.config.auto_push_port,
+                                )
+                            else:
+                                self.scp_service.stop_auto_push()
                         updated[k] = v
 
                 if not updated:
@@ -605,6 +671,52 @@ class McpService:
                     patient_id=patient_id,
                     accession=accession,
                     study_uid=study_uid,
+                )
+            elif name in ("auto_push", "configure_auto_push", "set_auto_push", "auto_push_studies"):
+                ae_title = (
+                    (arguments or {}).get("targetAeTitle")
+                    or (arguments or {}).get("target_ae_title")
+                    or (arguments or {}).get("ae_title")
+                    or (arguments or {}).get("aeTitle")
+                    or (arguments or {}).get("destination")
+                    or ""
+                )
+                interval_raw = (
+                    (arguments or {}).get("intervalSec")
+                    if (arguments or {}).get("intervalSec") is not None
+                    else (arguments or {}).get("interval_sec")
+                    if (arguments or {}).get("interval_sec") is not None
+                    else (arguments or {}).get("interval")
+                    if (arguments or {}).get("interval") is not None
+                    else (arguments or {}).get("seconds")
+                    if (arguments or {}).get("seconds") is not None
+                    else 0.0
+                )
+                target_host = (
+                    (arguments or {}).get("targetHost")
+                    or (arguments or {}).get("target_host")
+                    or (arguments or {}).get("host")
+                    or "127.0.0.1"
+                )
+                target_port = (
+                    (arguments or {}).get("targetPort")
+                    if (arguments or {}).get("targetPort") is not None
+                    else (arguments or {}).get("target_port")
+                    if (arguments or {}).get("target_port") is not None
+                    else (arguments or {}).get("port")
+                    if (arguments or {}).get("port") is not None
+                    else 11113
+                )
+                try:
+                    interval_sec = float(interval_raw)
+                except (ValueError, TypeError):
+                    interval_sec = 0.0
+
+                result = self.scp_service.configure_auto_push(
+                    target_ae_title=str(ae_title),
+                    interval_sec=interval_sec,
+                    target_host=str(target_host),
+                    target_port=int(target_port),
                 )
             else:
                 return {

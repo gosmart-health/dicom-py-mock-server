@@ -2,8 +2,8 @@
 
 **Document Title:** DICOM Conformance Statement for GoSmart.Health DICOM Mock Server  
 **Software Name:** `dicom-py-mock-server`  
-**Software Release:** Version 0.3.4  
-**Document Release Date:** 2026-09-09  
+**Software Release:** Version 0.3.5  
+**Document Release Date:** 2026-10-02  
 **Standard Compliance:** NEMA PS 3.1 – PS 3.22 (DICOM Standard 2024c / 2025)  
 **Document Identifier:** DCS-GSMS-031  
 
@@ -144,6 +144,7 @@ The server supports negotiation and automatic on-the-fly transcoding across the 
 
 | Document Version | Date | Software Version | Author | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| **1.3.0** | 2026-10-02 | v0.3.5 | GoSmart.Health Engineering Team | Added automated study push (auto-push) C-STORE transmission with configurable target AE schema, intervalSec, targetHost, targetPort, dedicated background thread worker execution, and MCP auto_push tool integration. |
 | **1.2.0** | 2026-09-24 | v0.3.4 | GoSmart.Health Engineering Team | Added Model Context Protocol (MCP) dynamic configuration management, scanning order generation, active worklist inspection and cancellation, and Docker HL7 port mapping. |
 | **1.1.0** | 2026-09-09 | v0.3.1 | GoSmart.Health Engineering Team | Added DICOMweb STOW-RS (Store Over the Web, PS 3.18) storage service supporting multipart/related and raw application/dicom ingestion, configurable duplicate SOP handling policies, and stored GSPS presentation state discovery. |
 | **1.0.0** | 2026-09-07 | v0.3.0 | GoSmart.Health Engineering Team | Initial formal release of DICOM Conformance Statement covering DIMSE (C-ECHO, C-FIND, C-MOVE, C-STORE, MWL), DICOMweb (QIDO-RS, WADO-RS, WADO-URI), multi-slice template loading, transfer syntaxes (RAW, JPEG, JPEG2000, RLE), HL7 v2 MLLP, and FHIR ServiceRequest order integration. |
@@ -330,8 +331,8 @@ The `MOCK_SCP` Application Entity provides Standard Conformance to the following
 - Asynchronous operations window negotiation is not supported. All associations operate synchronously.
 
 ###### 4.2.1.2.4 Implementation Identifying Information
-- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.4`
-- Implementation Version Name: `GOSMART_MS_034`
+- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.5`
+- Implementation Version Name: `GOSMART_MS_035`
 
 ##### 4.2.1.3 Association Acceptance Policy
 
@@ -447,6 +448,8 @@ All parameters are configurable via environment variables (with `GOSMART_MS_` pr
 | **HL7 MLLP Port** | `GOSMART_MS_HL7_PORT` | `2575` | HL7 v2 MLLP listen port |
 | **Default Transfer Syntax** | `GOSMART_MS_TRANSFER_SYNTAX` | `JPEG2000_LOSSLESS` | Target transfer syntax for generated images |
 | **Move Destinations** | `GOSMART_MS_MOVE_DESTINATIONS` | `{}` | JSON map of destination AE titles to host/port |
+| **Auto Push Destination AE** | `GOSMART_MS_AUTO_PUSH_AE`<br>`AUTO_PUSH_AE` | `""` | Target AE title for automatic study pushing |
+| **Auto Push Interval (Seconds)** | `GOSMART_MS_AUTO_PUSH_SEC`<br>`AUTO_PUSH_SEC` | `0` | Interval in seconds between auto pushes (0 disables) |
 | **Storage Directory** | `GOSMART_MS_STORAGE_DIR` | `./data/dicom_storage` | Target path for C-STORE received datasets |
 | **Received Directory** | `GOSMART_MS_RECEIVED_DIR`<br>`RECEIVED_DIR` | `./received` | Target path for STOW-RS received Part-10 DICOM files |
 | **STOW Duplicate Handling** | `GOSMART_MS_STOW_DUPLICATE_HANDLING`<br>`STOW_DUPLICATE_HANDLING` | `accept` | Policy for duplicate SOP Instances (`accept`, `warn`, `reject`) |
@@ -469,6 +472,7 @@ All parameters are configurable via environment variables (with `GOSMART_MS_` pr
 The server supports off-line media interchange and file generation via its REST API:
 - `POST /api/v1/generate`: Generates synthetic Part 10 DICOM files into local disk folders.
 - `POST /api/v1/generate_raw`: Generates raw/custom DICOM instances with specific pixel parameters.
+- `POST /api/v1/scp/auto-push`: Configures automated C-STORE push of generated studies (series and images) at periodic intervals.
 - Files conform to DICOM Part 10 with a 128-byte preamble, `'DICM'` prefix, and explicit File Meta Information headers.
 
 ### 5.2 Supported Profiles

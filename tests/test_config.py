@@ -23,6 +23,10 @@ def test_default_config_values():
     assert cfg.id_prefix == "GSH-"
     assert cfg.transfer_syntax == "JPEG2000_LOSSLESS"
     assert cfg.stress is False
+    assert cfg.auto_push_ae == ""
+    assert cfg.auto_push_host == "127.0.0.1"
+    assert cfg.auto_push_port == 11113
+    assert cfg.auto_push_sec == 0.0
 
 
 def test_env_variables_override(monkeypatch):
@@ -40,6 +44,10 @@ def test_env_variables_override(monkeypatch):
     monkeypatch.setenv("GOSMART_MS_PN_SUFFIX", "_PHY")
     monkeypatch.setenv("GORMART_MS_INSTITUTION_NAME", "MY CLINIC")
     monkeypatch.setenv("GOSMART_MS_ID_PREFIX", "TEST-")
+    monkeypatch.setenv("GOSMART_MS_AUTO_PUSH_AE", "AUTO_DEST_AE")
+    monkeypatch.setenv("GOSMART_MS_AUTO_PUSH_HOST", "192.168.1.100")
+    monkeypatch.setenv("GOSMART_MS_AUTO_PUSH_PORT", "11114")
+    monkeypatch.setenv("GOSMART_MS_AUTO_PUSH_SEC", "15")
 
     cfg = AppConfig()
     assert cfg.scp_ae_title == "CUSTOM_AE"
@@ -56,6 +64,10 @@ def test_env_variables_override(monkeypatch):
     assert cfg.pn_suffix == "_PHY"
     assert cfg.institution_name == "MY CLINIC"
     assert cfg.id_prefix == "TEST-"
+    assert cfg.auto_push_ae == "AUTO_DEST_AE"
+    assert cfg.auto_push_host == "192.168.1.100"
+    assert cfg.auto_push_port == 11114
+    assert cfg.auto_push_sec == 15.0
 
 
 def test_empty_string_env_variables_override(monkeypatch):
@@ -68,6 +80,20 @@ def test_empty_string_env_variables_override(monkeypatch):
     assert cfg.patient_suffix == ""
     assert cfg.pn_suffix == ""
     assert cfg.id_prefix == ""
+
+
+def test_auto_push_env_aliases(monkeypatch):
+    """Test overriding auto-push settings using alias env variables."""
+    monkeypatch.setenv("AUTO_PUSH_AE", "ALIAS_DEST_AE")
+    monkeypatch.setenv("AUTO_PUSH_HOST", "10.0.0.50")
+    monkeypatch.setenv("AUTO_PUSH_PORT", "11115")
+    monkeypatch.setenv("AUTO_PUSH_SEC", "30")
+
+    cfg = AppConfig()
+    assert cfg.auto_push_ae == "ALIAS_DEST_AE"
+    assert cfg.auto_push_host == "10.0.0.50"
+    assert cfg.auto_push_port == 11115
+    assert cfg.auto_push_sec == 30.0
 
 
 def test_env_file_reading(tmp_path, monkeypatch):

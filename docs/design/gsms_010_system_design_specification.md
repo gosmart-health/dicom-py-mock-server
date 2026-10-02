@@ -46,9 +46,9 @@ graph TD
   - `GET /health`: Health status.
   - `POST /api/v1/generate`: Triggers synthetic SOP instance creation.
   - `POST /api/v1/worklist/generate`: Triggers synthetic Modality Worklist (MWL) item creation from SOP templates.
-  - `POST /api/v1/autopush/start` / `POST /api/v1/autopush/stop`: Controls automated background 9-5 peak and off-peak push scheduling.
+  - `POST /api/v1/scp/auto-push` / `GET /api/v1/scp/auto-push`: Configures and queries automated C-STORE pushing of generated studies (associated series and images) to a target AE Title at a periodic interval.
   - `GET /api/v1/scp/status`: Returns DICOM SCP listener status.
-  - `POST /api/v1/scp/start` / `POST /api/v1/scp/stop`: Lifecycle control for SCP listener.
+  - `POST /api/v1/scp/start` / `POST /api/v1/scp/stop`: Lifecycle control for SCP listener and background tasks.
 
 ### 3.2 Models Subsystem (`src/dicom_py_mock_server/models/`)
 * **`PatientModel`**: Patient demographics (`patient_id`, `patient_name`, `patient_birth_date`, `patient_sex`).
@@ -57,7 +57,9 @@ graph TD
 * **`WorklistTemplateModel`**: Configures template SOP baseline, scheduled procedure step specs, and gender-aligned name selection criteria (loaded from JSON lists of gender-specific first names and common US last names).
 * **`MockDicomRequest`**: Validates generation specs (`num_instances`, `rows`, `columns`, OCR burned-in text options, patient/study/series specs).
 * **`MockDicomResponse`**: Returns generation results, file paths, and UIDs.
-* **`ScpStatusResponse`**: Returns AE Title, port, running state, and supported DICOM services (C-ECHO, C-FIND, C-MOVE, C-GET, MWL, C-STORE).
+* **`ScpStatusResponse`**: Returns AE Title, port, running state, auto-push status, and supported DICOM services (C-ECHO, C-FIND, C-MOVE, C-GET, MWL, C-STORE).
+* **`AutoPushRequest`**: Configuration payload for periodic auto-push with target AE schema (`intervalSec`, `targetAeTitle`, `targetHost`, `targetPort`).
+* **`AutoPushResponse`**: Status and execution response for auto-push (`success`, `message`, `intervalSec`, `targetAeTitle`, `targetHost`, `targetPort`, `is_auto_pushing`).
 
 ### 3.3 Generator Subsystem (`src/dicom_py_mock_server/services/generator.py` & `mwl_generator.py` & `person_generator.py`)
 * **`PersonGenerator`**:
