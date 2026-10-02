@@ -502,29 +502,6 @@
       "version": "8.5.0"
     },
     {
-      "bom-ref": "colorama==0.4.6",
-      "description": "Cross-platform colored terminal text.",
-      "externalReferences": [
-        {
-          "comment": "from packaging metadata Project-URL: Homepage",
-          "type": "website",
-          "url": "https://github.com/tartley/colorama"
-        }
-      ],
-      "licenses": [
-        {
-          "license": {
-            "acknowledgement": "declared",
-            "name": "License :: OSI Approved :: BSD License"
-          }
-        }
-      ],
-      "name": "colorama",
-      "purl": "pkg:pypi/colorama@0.4.6",
-      "type": "library",
-      "version": "0.4.6"
-    },
-    {
       "bom-ref": "cyclonedx-bom==7.3.1",
       "description": "CycloneDX Software Bill of Materials (SBOM) generator for Python projects and environments",
       "externalReferences": [
@@ -1925,6 +1902,29 @@
       "version": "2.5.0"
     },
     {
+      "bom-ref": "pylibjpeg-rle==2.2.0",
+      "description": "Python bindings for a fast RLE decoder/encoder, with a focus on use as a plugin for pylibjpeg",
+      "externalReferences": [
+        {
+          "comment": "from packaging metadata Project-URL: homepage",
+          "type": "website",
+          "url": "https://github.com/pydicom/pylibjpeg-rle"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "pylibjpeg-rle",
+      "purl": "pkg:pypi/pylibjpeg-rle@2.2.0",
+      "type": "library",
+      "version": "2.2.0"
+    },
+    {
       "bom-ref": "pynetdicom==3.0.4",
       "description": "A Python implementation of the DICOM networking protocol",
       "externalReferences": [
@@ -2734,7 +2734,7 @@
       "version": "1.3.0"
     },
     {
-      "bom-ref": "urllib3==2.7.0",
+      "bom-ref": "urllib3==2.8.0",
       "description": "HTTP library with thread-safe connection pooling, file post, and more.",
       "externalReferences": [
         {
@@ -2753,6 +2753,11 @@
           "url": "https://github.com/urllib3/urllib3"
         },
         {
+          "comment": "from packaging metadata Project-URL: Security policy",
+          "type": "other",
+          "url": "https://urllib3.readthedocs.io/en/latest/security.html"
+        },
+        {
           "comment": "from packaging metadata Project-URL: Changelog",
           "type": "release-notes",
           "url": "https://github.com/urllib3/urllib3/blob/main/CHANGES.rst"
@@ -2767,9 +2772,9 @@
         }
       ],
       "name": "urllib3",
-      "purl": "pkg:pypi/urllib3@2.7.0",
+      "purl": "pkg:pypi/urllib3@2.8.0",
       "type": "library",
-      "version": "2.7.0"
+      "version": "2.8.0"
     },
     {
       "bom-ref": "uvicorn==0.52.4",
@@ -2814,6 +2819,35 @@
       "purl": "pkg:pypi/uvicorn@0.52.4",
       "type": "library",
       "version": "0.52.4"
+    },
+    {
+      "bom-ref": "uvloop==0.22.1",
+      "description": "Fast implementation of asyncio event loop on top of libuv",
+      "externalReferences": [
+        {
+          "comment": "from packaging metadata Project-URL: github",
+          "type": "vcs",
+          "url": "https://github.com/MagicStack/uvloop"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "MIT"
+          }
+        },
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "name": "License :: OSI Approved :: Apache Software License"
+          }
+        }
+      ],
+      "name": "uvloop",
+      "purl": "pkg:pypi/uvloop@0.22.1",
+      "type": "library",
+      "version": "0.22.1"
     },
     {
       "bom-ref": "watchfiles==1.2.0",
@@ -2956,9 +2990,6 @@
       "ref": "PyYAML==6.0.3"
     },
     {
-      "dependsOn": [
-        "colorama==0.4.6"
-      ],
       "ref": "Pygments==2.21.0"
     },
     {
@@ -3002,9 +3033,6 @@
     },
     {
       "ref": "click==8.5.0"
-    },
-    {
-      "ref": "colorama==0.4.6"
     },
     {
       "dependsOn": [
@@ -3271,8 +3299,17 @@
     {
       "dependsOn": [
         "numpy==2.5.2",
+        "pydicom==3.0.2",
+        "pytest==9.1.1"
+      ],
+      "ref": "pylibjpeg-rle==2.2.0"
+    },
+    {
+      "dependsOn": [
+        "numpy==2.5.2",
         "pylibjpeg-libjpeg==2.4.0",
         "pylibjpeg-openjpeg==2.5.0",
+        "pylibjpeg-rle==2.2.0",
         "pytest==9.1.1"
       ],
       "ref": "pylibjpeg==2.1.0"
@@ -3292,7 +3329,6 @@
       "dependsOn": [
         "Pygments==2.21.0",
         "attrs==26.1.0",
-        "colorama==0.4.6",
         "iniconfig==2.3.0",
         "packaging==26.3",
         "pluggy==1.6.0",
@@ -3327,7 +3363,7 @@
         "chardet==5.2.0",
         "charset-normalizer==3.5.1",
         "idna==3.19",
-        "urllib3==2.7.0"
+        "urllib3==2.8.0"
       ],
       "ref": "requests==2.34.2"
     },
@@ -3364,6 +3400,7 @@
         "pydicom==3.0.2",
         "pylibjpeg-libjpeg==2.4.0",
         "pylibjpeg-openjpeg==2.5.0",
+        "pylibjpeg-rle==2.2.0",
         "pylibjpeg==2.1.0",
         "pynetdicom==3.0.4",
         "structlog==26.1.0",
@@ -3420,7 +3457,7 @@
       "ref": "uri-template==1.3.0"
     },
     {
-      "ref": "urllib3==2.7.0"
+      "ref": "urllib3==2.8.0"
     },
     {
       "dependsOn": [
@@ -3430,10 +3467,14 @@
         "httptools==0.8.0",
         "python-dotenv==1.2.3",
         "typing_extensions==4.16.0",
+        "uvloop==0.22.1",
         "watchfiles==1.2.0",
         "websockets==17.1"
       ],
       "ref": "uvicorn==0.52.4"
+    },
+    {
+      "ref": "uvloop==0.22.1"
     },
     {
       "dependsOn": [
@@ -3462,9 +3503,9 @@
       ],
       "name": "dicom-py-mock-server",
       "type": "application",
-      "version": "0.1.0"
+      "version": "0.3.5"
     },
-    "timestamp": "2026-08-29T01:15:17.645372+00:00",
+    "timestamp": "2026-10-02T15:24:12.247761+00:00",
     "tools": {
       "components": [
         {
@@ -3568,7 +3609,7 @@
       ]
     }
   },
-  "serialNumber": "urn:uuid:af334846-6b6e-445b-b2ec-679b4a602e34",
+  "serialNumber": "urn:uuid:1c2448d0-d6c2-4f4c-9bab-89cf26f44840",
   "version": 1,
   "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
   "bomFormat": "CycloneDX",
