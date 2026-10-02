@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated DICOM Conformance Statement (`docs/dicom_conformance_statement.md`) to version 0.3.5 (revision 1.3.0).
 
 ### Fixed
+- **Security Vulnerability Remediation**: Upgraded `urllib3` to `2.8.0` to resolve known vulnerabilities (`PYSEC-2026-4175`, `PYSEC-2026-4176`, and `PYSEC-2026-4177`) and regenerated validated CycloneDX SBOM (`sbom.json`).
 - **FastAPI Lifespan Startup**: Added missing `import asyncio` in `src/dicom_py_mock_server/main.py` required for lifespan event loop initialization.
 - **Auto-Push Event Loop Warning**: Fixed `no_running_event_loop_for_dicom_auto_push` warning when posting to `/api/v1/scp/auto-push`.
 
