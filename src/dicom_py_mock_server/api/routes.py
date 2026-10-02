@@ -4,6 +4,8 @@ from fastapi import APIRouter, HTTPException
 
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.models.dicom import (
+    AutoPushRequest,
+    AutoPushResponse,
     DicomMoveRequest,
     DicomMoveResponse,
     MockDicomRequest,
@@ -145,13 +147,13 @@ def remove_mwl_entry(accession: str):
 
 
 @router.post("/api/v1/mwl/start", response_model=MwlStatusResponse)
-def start_mwl_auto_generation():
+async def start_mwl_auto_generation():
     """Start background MWL entry creation loop."""
     return mwl_service.start_auto_generation()
 
 
 @router.post("/api/v1/mwl/stop", response_model=MwlStatusResponse)
-def stop_mwl_auto_generation():
+async def stop_mwl_auto_generation():
     """Stop background MWL entry creation loop."""
     return mwl_service.stop_auto_generation()
 
@@ -171,3 +173,21 @@ def move_study(request: DicomMoveRequest):
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("message"))
     return res
+
+
+@router.post("/api/v1/scp/auto-push", response_model=AutoPushResponse)
+async def configure_auto_push(request: AutoPushRequest):
+    """Configure auto push of generated DICOM studies to a target destination AE at a configured interval."""
+    result = scp_service.configure_auto_push(
+        target_ae_title=request.target_ae_title,
+        interval_sec=request.interval_sec,
+        target_host=request.target_host,
+        target_port=request.target_port,
+    )
+    return result
+
+
+@router.get("/api/v1/scp/auto-push", response_model=AutoPushResponse)
+async def get_auto_push_status():
+    """Get current auto-push status."""
+    return scp_service.get_auto_push_status()

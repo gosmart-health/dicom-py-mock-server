@@ -31,6 +31,7 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 8. **Zero-Dependency HL7 v2 MLLP Socket Listener**: Ingests raw `ORM^O01` order messages on TCP port `2575` via MLLP framing, maps demographics into MWL entries, handles order cancellations, and returns `ACK^O01` responses.
 9. **FHIR ServiceRequest & Bundle Ingestion**: REST endpoints for FHIR R4/R5 imaging order bundles (`Bundle`, `ServiceRequest`) that map demographics directly into MWL entries and handle order revocations.
 10. **Model Context Protocol (MCP) Integration**: Exposes server inspection, MWL controls, DICOM generation, and study move tools to AI agents (AGY, Claude Desktop, Cursor) over Server-Sent Events (SSE).
+11. **Automated Study Push (Auto-Push)**: Periodically generate and push DICOM studies (associated series and images) to a configured destination AE at a configured interval in seconds via C-STORE.
 
 ---
 
@@ -47,16 +48,21 @@ The MCP SSE server transport provides two endpoints:
 | MCP Tool Name | Description |
 | :--- | :--- |
 | `health_check` | Check service health status and application metadata. |
+| `get_config` | Inspect current server configuration settings and retrieve specific config parameters. |
+| `update_config` | Dynamically update server configuration settings (e.g. log levels, retention windows, auto-push destinations) at runtime. |
 | `generate_mock_dicom` | Generate synthetic DICOM P10 objects with custom metadata and save to disk. |
 | `get_scp_status` | Get DICOM SCP (C-FIND, C-MOVE, MWL) listener status. |
 | `start_scp` | Start the DICOM SCP listener service. |
 | `stop_scp` | Stop the DICOM SCP listener service. |
 | `get_mwl_status` | Get Modality Worklist (MWL) generator status and active entry counts. |
-| `list_mwl_entries` | List currently active Modality Worklist (MWL) entries within retention window. |
+| `get_worklist` / `list_mwl_entries` | List currently active Modality Worklist (MWL) entries within retention window. |
+| `generate_scanning_order` | Schedule a clinical scanning order into the active Modality Worklist with patient, exam, and physician details. |
 | `generate_mwl_entry` | Manually generate a new MWL entry with optional custom fields. |
+| `remove_accession_number` | Remove/cancel an active Modality Worklist order by accession number. |
 | `start_mwl_auto_generation` | Start background MWL automated entry generation loop. |
 | `stop_mwl_auto_generation` | Stop background MWL automated entry generation loop. |
 | `move_study` | Move/push DICOM study instances matching Patient ID, Accession Number, or Study UID to a destination DICOM SCP (AE Title, Host, Port). |
+| `auto_push` | Configure auto push of generated studies (associated series and images) to a destination AE at a configured interval in seconds. Permit "auto push to {AE Title} every {interval} seconds" with optional targetHost and targetPort (intervalSec 0 disables). |
 
 ---
 
@@ -126,6 +132,10 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_TRANSFER_SYNTAX` | `TRANSFER_SYNTAX` | `JPEG2000_LOSSLESS` | Default DICOM Transfer Syntax (`RAW`, `JPEG`, `JPEG2000`, `JPEG2000_LOSSLESS`, `RLE`). |
 | `GOSMART_MS_STRESS` | `STRESS` | `false` | Enable high-throughput stress mode (single compressed frame computation, demographics burned in, slice number overlay omitted, negotiated transfer syntax reuse). |
 | `GOSMART_MS_MOVE_DESTINATIONS` | `MOVE_DESTINATIONS` | `{}` | JSON string mapping C-MOVE destination AE Titles to target host/port objects. |
+| `GOSMART_MS_AUTO_PUSH_AE` | `AUTO_PUSH_AE` | `""` | Destination Application Entity (AE) title to push to (default empty string, disabled). |
+| `GOSMART_MS_AUTO_PUSH_HOST` | `AUTO_PUSH_HOST` | `127.0.0.1` | Destination host / IP address for auto-push C-STORE delivery. |
+| `GOSMART_MS_AUTO_PUSH_PORT` | `AUTO_PUSH_PORT` | `11113` | Destination TCP port for auto-push C-STORE delivery. |
+| `GOSMART_MS_AUTO_PUSH_SEC` | `AUTO_PUSH_SEC` | `0` | Number of seconds interval between auto-pushes (default 0, disabled). |
 | `GOSMART_MS_PATIENT_SUFFIX` | `PATIENT_SUFFIX` | `_GSH` | Suffix appended to synthetic patient last name to avoid PACS collisions (empty strings permitted). |
 | `GOSMART_MS_PN_SUFFIX` | `PN_SUFFIX` | `_GSH` | Suffix appended to generated physician names (Referring, Performing, Reading) to avoid PACS collisions (empty strings permitted). |
 | `GORMART_MS_INSTITUTION_NAME` | `GOSMART_MS_INSTITUTION_NAME`, `INSTITUTION_NAME` | `GO SMART CLINIC` | Default Institution Name attribute for synthesized studies and MWL entries. |
@@ -398,6 +408,58 @@ A developer utility script and sample bundle are included in the `util/` folder:
 # Or specify a custom bundle JSON and endpoint URL:
 ./util/push_fhir.sh path/to/order_bundle.json http://127.0.0.1:8000/api/v1/fhir_service_request
 ```
+
+---
+
+## Automated Study Push (`/api/v1/scp/auto-push`)
+
+The mock server can automatically generate and push DICOM studies (including associated series and image instances) to a configured destination AE at a specified interval in seconds via C-STORE.
+
+### REST Endpoint
+
+`POST /api/v1/scp/auto-push`
+
+Request payload (Target AE Schema):
+```json
+{
+  "intervalSec": 30,
+  "targetAeTitle": "VIEWER_SCP",
+  "targetHost": "127.0.0.1",
+  "targetPort": 11113
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "Auto push configured to 'VIEWER_SCP' (127.0.0.1:11113) every 30.0 seconds.",
+  "targetAeTitle": "VIEWER_SCP",
+  "targetHost": "127.0.0.1",
+  "targetPort": 11113,
+  "intervalSec": 30.0,
+  "is_auto_pushing": true
+}
+```
+
+To disable auto-push, set `intervalSec` to `0` or `targetAeTitle` to empty string:
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/scp/auto-push" \
+     -H "Content-Type: application/json" \
+     -d '{"intervalSec": 0, "targetAeTitle": "VIEWER_SCP", "targetHost": "127.0.0.1", "targetPort": 11113}'
+```
+
+Query current auto-push status:
+```bash
+curl "http://127.0.0.1:8000/api/v1/scp/auto-push"
+```
+
+### Configuration & Environment Variables
+
+- `GOSMART_MS_AUTO_PUSH_AE` (`AUTO_PUSH_AE`): The destination AE title to push to (default: `""`, disabled).
+- `GOSMART_MS_AUTO_PUSH_HOST` (`AUTO_PUSH_HOST`): The destination host / IP address to push to (default: `"127.0.0.1"`).
+- `GOSMART_MS_AUTO_PUSH_PORT` (`AUTO_PUSH_PORT`): The destination port to push to (default: `11113`).
+- `GOSMART_MS_AUTO_PUSH_SEC` (`AUTO_PUSH_SEC`): Number of seconds between study pushes (default: `0`, disabled).
 
 ---
 

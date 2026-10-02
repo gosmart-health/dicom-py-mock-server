@@ -16,7 +16,7 @@ class AppConfig(BaseSettings):
     )
 
     app_name: str = "DICOM Mock Server"
-    app_version: str = "0.3.4"
+    app_version: str = "0.3.5"
     host: str = Field(
         default="127.0.0.1",
         validation_alias=AliasChoices("GOSMART_MS_HOST", "HOST"),
@@ -133,6 +133,26 @@ class AppConfig(BaseSettings):
         default_factory=dict,
         validation_alias=AliasChoices("GOSMART_MS_MOVE_DESTINATIONS", "MOVE_DESTINATIONS"),
         description="Mapping of Move Destination AE Titles to target host and port dicts",
+    )
+    auto_push_ae: str = Field(
+        default="",
+        validation_alias=AliasChoices("GOSMART_MS_AUTO_PUSH_AE", "AUTO_PUSH_AE"),
+        description="Target AE title for auto-push of generated studies; default empty string and normally disabled",
+    )
+    auto_push_host: str = Field(
+        default="127.0.0.1",
+        validation_alias=AliasChoices("GOSMART_MS_AUTO_PUSH_HOST", "AUTO_PUSH_HOST"),
+        description="Target host / IP for auto-push of generated studies",
+    )
+    auto_push_port: int = Field(
+        default=11113,
+        validation_alias=AliasChoices("GOSMART_MS_AUTO_PUSH_PORT", "AUTO_PUSH_PORT"),
+        description="Target port for auto-push of generated studies",
+    )
+    auto_push_sec: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices("GOSMART_MS_AUTO_PUSH_SEC", "AUTO_PUSH_SEC"),
+        description="Auto-push interval in seconds; default or 0 will not push",
     )
     patient_suffix: str = Field(
         default="_GSH",
