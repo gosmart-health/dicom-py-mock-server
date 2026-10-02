@@ -48,10 +48,15 @@ async def test_auto_push_workflow():
         assert scp_service.auto_push_port == test_port
         assert scp_service.auto_push_sec == 0.2
 
-        # Wait enough time for at least 1 auto-push cycle
+        # Wait until all 4 instances of the queued study are received or timeout
         start_wait = time.time()
-        while len(target_scp.received_datasets) == 0 and time.time() - start_wait < 5.0:
+        while len(target_scp.received_datasets) < 4 and time.time() - start_wait < 10.0:
             await asyncio.sleep(0.1)
+
+        # Stop auto-push before asserting to prevent race with subsequent cycles
+        stop_res = scp_service.configure_auto_push(target_ae_title="AUTO_DEST_SCP", interval_sec=0)
+        assert stop_res["is_auto_pushing"] is False
+        assert scp_service._is_auto_pushing is False
 
         # Verify target received generated study instances
         assert len(target_scp.received_datasets) >= 4
@@ -65,11 +70,6 @@ async def test_auto_push_workflow():
         assert str(first_ds.PatientID).startswith(config.id_prefix)
 
         initial_count = len(target_scp.received_datasets)
-
-        # Stop auto-push
-        stop_res = scp_service.configure_auto_push(target_ae_title="AUTO_DEST_SCP", interval_sec=0)
-        assert stop_res["is_auto_pushing"] is False
-        assert scp_service._is_auto_pushing is False
 
         # Wait a moment to ensure no more studies are pushed
         await asyncio.sleep(0.5)
