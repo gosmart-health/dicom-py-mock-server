@@ -20,6 +20,11 @@ def test_scp_status_endpoint():
     assert "ae_title" in data
     assert "port" in data
     assert "is_running" in data
+    assert "auto_push_ae" in data
+    assert "auto_push_host" in data
+    assert "auto_push_port" in data
+    assert "auto_push_sec" in data
+    assert "is_auto_pushing" in data
 
 
 def test_generate_endpoint(tmp_path):
@@ -154,3 +159,56 @@ def test_move_api_endpoint():
         assert data_acc["accession"] == "API-MOVE-ACC-888"
     finally:
         viewer.stop()
+
+
+def test_auto_push_api_endpoint():
+    """Test POST and GET /api/v1/scp/auto-push endpoints with target AE schema."""
+    # 1. Configure auto-push with target AE schema
+    payload = {
+        "intervalSec": 45,
+        "targetAeTitle": "VIEWER_AUTO_PUSH",
+        "targetHost": "192.168.1.55",
+        "targetPort": 11119,
+    }
+    res = client.post("/api/v1/scp/auto-push", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["targetAeTitle"] == "VIEWER_AUTO_PUSH"
+    assert data["targetHost"] == "192.168.1.55"
+    assert data["targetPort"] == 11119
+    assert data["intervalSec"] == 45.0
+    assert data["is_auto_pushing"] is True
+
+    # 2. Query status via GET
+    get_res = client.get("/api/v1/scp/auto-push")
+    assert get_res.status_code == 200
+    get_data = get_res.json()
+    assert get_data["targetAeTitle"] == "VIEWER_AUTO_PUSH"
+    assert get_data["targetHost"] == "192.168.1.55"
+    assert get_data["targetPort"] == 11119
+    assert get_data["intervalSec"] == 45.0
+    assert get_data["is_auto_pushing"] is True
+
+    # 3. Disable auto-push with intervalSec = 0
+    disable_payload = {
+        "intervalSec": 0,
+        "targetAeTitle": "VIEWER_AUTO_PUSH",
+        "targetHost": "192.168.1.55",
+        "targetPort": 11119,
+    }
+    dis_res = client.post("/api/v1/scp/auto-push", json=disable_payload)
+    assert dis_res.status_code == 200
+    dis_data = dis_res.json()
+    assert dis_data["success"] is True
+    assert dis_data["intervalSec"] == 0.0
+    assert dis_data["is_auto_pushing"] is False
+
+    # Verify status reflects disabled and holds target info
+    status_res = client.get("/api/v1/scp/status")
+    assert status_res.status_code == 200
+    status_data = status_res.json()
+    assert status_data["is_auto_pushing"] is False
+    assert status_data["auto_push_ae"] == "VIEWER_AUTO_PUSH"
+    assert status_data["auto_push_host"] == "192.168.1.55"
+    assert status_data["auto_push_port"] == 11119

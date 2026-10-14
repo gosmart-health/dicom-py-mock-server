@@ -52,6 +52,5 @@ This matrix establishes complete bi-directional traceability linking **Software 
 | **REQ-FUN-035** | MCP Dynamic Server Configuration Management | `src/dicom_py_mock_server/services/mcp.py` | - | Dynamic AppConfig inspection & update across services | Integration test `test_mcp_sse.py::test_mcp_tools_and_prompts` | Pass |
 | **REQ-FUN-036** | MCP Clinical Scanning Order Generation | `src/dicom_py_mock_server/services/mcp.py` & `mwl_generator.py` | HAZ-006 | Scanning order MWL entry generation with required clinical fields | Integration test `test_mcp_sse.py::test_mcp_tools_and_prompts` | Pass |
 | **REQ-FUN-037** | MCP Active Worklist Inspection & Order Purge | `src/dicom_py_mock_server/services/mcp.py` & `mwl_generator.py` | HAZ-003 | Worklist inspection & order cancellation by accession number | Integration test `test_mcp_sse.py::test_mcp_tools_and_prompts` | Pass |
-
-
-
+| **REQ-FUN-038** | Automated Study Push (Auto-Push) Configuration & REST API | `src/dicom_py_mock_server/services/scp.py` & `api/routes.py` | HAZ-003 / HAZ-008 | Background thread worker, stop Event, and target AE schema validation | Integration test `test_api.py::test_auto_push_endpoints` & `test_auto_push.py::test_auto_push_workflow` | Pass |
+| **REQ-FUN-039** | MCP Automated Study Push Tool | `src/dicom_py_mock_server/services/mcp.py` & `scp.py` | HAZ-003 | MCP tool target AE schema validation & thread dispatch | Integration test `test_auto_push.py::test_mcp_auto_push_tool` | Pass |

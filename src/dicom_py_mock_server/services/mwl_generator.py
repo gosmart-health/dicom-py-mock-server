@@ -127,8 +127,13 @@ class MwlGeneratorService:
         # Auto generation background task
         self._auto_gen_task: asyncio.Task | None = None
         self._is_auto_generating = False
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         self._load_templates()
+
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Store reference to the main asyncio event loop."""
+        self._loop = loop
 
     def _load_templates(self) -> None:
         """Load template modalities and multi-slice DICOM templates into memory from templates_path.
@@ -1147,16 +1152,37 @@ class MwlGeneratorService:
         finally:
             self._is_auto_generating = False
 
+    def _schedule_auto_gen_task(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Schedule or reschedule the auto generation task on the provided event loop."""
+        if self._auto_gen_task and not self._auto_gen_task.done():
+            self._auto_gen_task.cancel()
+        self._auto_gen_task = loop.create_task(self._auto_generation_loop())
+
     def start_auto_generation(self) -> dict[str, Any]:
         """Start the background MWL entry creation loop."""
-        if self._is_auto_generating and self._auto_gen_task:
+        if self._is_auto_generating and self._auto_gen_task and not self._auto_gen_task.done():
             return self.get_status()
 
         self._is_auto_generating = True
+        loop = None
         try:
             loop = asyncio.get_running_loop()
-            self._auto_gen_task = loop.create_task(self._auto_generation_loop())
+            if self._loop is None:
+                self._loop = loop
         except RuntimeError:
+            if self._loop and self._loop.is_running():
+                loop = self._loop
+
+        if loop and loop.is_running():
+            try:
+                curr_loop = asyncio.get_running_loop()
+                if curr_loop is loop:
+                    self._schedule_auto_gen_task(loop)
+                else:
+                    loop.call_soon_threadsafe(self._schedule_auto_gen_task, loop)
+            except RuntimeError:
+                loop.call_soon_threadsafe(self._schedule_auto_gen_task, loop)
+        else:
             logger.warning("no_running_event_loop_for_mwl_auto_generation")
 
         return self.get_status()
@@ -1164,7 +1190,25 @@ class MwlGeneratorService:
     def stop_auto_generation(self) -> dict[str, Any]:
         """Stop the background MWL entry creation loop."""
         self._is_auto_generating = False
-        if self._auto_gen_task and not self._auto_gen_task.done():
-            self._auto_gen_task.cancel()
+        task = self._auto_gen_task
+        if task and not task.done():
+            loop = None
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                if self._loop and self._loop.is_running():
+                    loop = self._loop
+
+            if loop and loop.is_running():
+                try:
+                    curr_loop = asyncio.get_running_loop()
+                    if curr_loop is loop:
+                        task.cancel()
+                    else:
+                        loop.call_soon_threadsafe(task.cancel)
+                except RuntimeError:
+                    loop.call_soon_threadsafe(task.cancel)
+            else:
+                task.cancel()
             self._auto_gen_task = None
         return self.get_status()

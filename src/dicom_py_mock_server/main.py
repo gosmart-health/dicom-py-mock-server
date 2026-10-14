@@ -1,5 +1,6 @@
 """Main FastAPI application entry point for dicom-py-mock-server."""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -23,6 +24,10 @@ async def lifespan(app: FastAPI):
     """Lifespan event context manager for FastAPI application."""
     logger.info(STARTUP_NOTICE)
     logger.info("app_starting", app_name=config.app_name, version=config.app_version)
+
+    loop = asyncio.get_running_loop()
+    scp_service.set_event_loop(loop)
+    mwl_service.set_event_loop(loop)
 
     # 1. Seed initial active mock studies across the retention window
     seeded = mwl_service.seed_initial_entries(count=10)
@@ -51,10 +56,27 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.error("failed_to_start_hl7_server_on_startup", error=str(exc))
 
+    # 5. Start auto-push if configured via environment variables
+    if config.auto_push_ae and config.auto_push_sec > 0:
+        scp_service.start_auto_push(
+            target_ae_title=config.auto_push_ae,
+            interval_sec=config.auto_push_sec,
+            target_host=config.auto_push_host,
+            target_port=config.auto_push_port,
+        )
+        logger.info(
+            "dicom_auto_push_started_on_startup",
+            ae_title=config.auto_push_ae,
+            host=config.auto_push_host,
+            port=config.auto_push_port,
+            interval_sec=config.auto_push_sec,
+        )
+
     yield
 
     logger.info("app_stopping", app_name=config.app_name)
     # Stop background services
+    scp_service.stop_auto_push()
     mwl_service.stop_auto_generation()
     scp_service.stop()
     if hl7_server.is_running:

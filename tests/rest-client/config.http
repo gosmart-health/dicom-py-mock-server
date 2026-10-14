@@ -1,0 +1,28 @@
+### Get Remote Auto Push Status
+@host = http://localhost:8000
+
+GET {{host}}/api/v1/scp/auto-push
+
+### Configure Remote Auto Push
+
+POST {{host}}/api/v1/scp/auto-push
+Content-Type: application/json
+
+{
+  "intervalSec": 30,
+  "targetAeTitle": "MDICOM",
+  "targetHost": "10.200.0.103",
+  "targetPort": 11113
+}
+
+### Disable Remote Auto Push
+
+POST {{host}}/api/v1/scp/auto-push
+Content-Type: application/json
+
+{
+  "intervalSec": 0,
+  "targetAeTitle": "MDICOM",
+  "targetHost": "10.200.0.103",
+  "targetPort": 11113
+}

@@ -16,3 +16,8 @@ If usage changes—including command-line options, environment variables, config
   ```
   Ensure all issues are resolved and all checks pass prior to committing or concluding changes.
 
+## 3. Implementation Plans & Walkthroughs as Editor Artifacts
+- Always generate implementation plans (`task.md` / `implementation_plan.md`) and walkthroughs (`walkthrough.md`) as user-facing Artifacts in the artifact directory (`write_to_file` to `<appDataDir>/brain/<conversation-id>/...` with `ArtifactMetadata: {UserFacing: true, RequestFeedback: true}`).
+- Do not output lengthy implementation plans or walkthroughs inline within chat messages. Present them as clickable, editable editor artifacts in the IDE and provide only a concise summary and clickable markdown link in the chat response.
+
+
