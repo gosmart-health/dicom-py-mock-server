@@ -163,10 +163,11 @@ graph TD
 ### 3.11 FHIR ServiceRequest REST Subsystem (`src/dicom_py_mock_server/services/fhir_parser.py`, `models/fhir_models.py`, `api/fhir_routes.py`)
 * **REST Ingestion Endpoints (`api/fhir_routes.py`)**:
   - `POST /api/v1/fhir_service_request` (with aliases `POST /api/v1/fhir/Bundle` and `POST /api/v1/fhir/ServiceRequest`).
-  - Validates and parses FHIR R4/R5 JSON payloads with zero external dependencies using native Pydantic models.
-* **Zero-Dependency FHIR Parser (`FhirParserService`)**:
+  - Validates and parses FHIR R4/R4B JSON payloads using the open-source `fhir.resources` library with strong typing and schema conformance.
+* **Standards-Compliant FHIR Parser (`FhirParserService`)**:
+  - Deserializes bundles polymorphically into typed domain models (`Patient`, `ServiceRequest`, `Practitioner`, etc.).
   - Resolves internal bundle references (`urn:uuid:...` or relative `Patient/123`).
-  - Maps `Patient` demographics (`name`, `identifier`, `birthDate`, `gender`), `ServiceRequest` attributes (`accessionIdentifier`, `code`, `orderDetail`, `performer`, `requester`), and DICOM Study UID extension (`http://hl7.org/fhir/StructureDefinition/workflow-studyInstanceUID`).
+  - Maps `Patient` demographics (`name`, `identifier`, `birthDate`, `gender`), `ServiceRequest` attributes (`identifier`, `code`, `performer`, `requester`), and DICOM Study UID extension (`http://hl7.org/fhir/StructureDefinition/workflow-studyInstanceUID`).
   - Preserves exact demographic data as provided by the external system.
   - **Modality Template Validation**: Validates template availability and returns HTTP 422 if template images for the modality are absent.
   - **Order Revocation**: Immediately purges active MWL entries when `status` is `revoked` or `entered-in-error`.

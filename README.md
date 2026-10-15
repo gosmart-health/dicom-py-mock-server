@@ -32,6 +32,7 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 9. **FHIR ServiceRequest & Bundle Ingestion**: REST endpoints for FHIR R4/R5 imaging order bundles (`Bundle`, `ServiceRequest`) that map demographics directly into MWL entries and handle order revocations.
 10. **Model Context Protocol (MCP) Integration**: Exposes server inspection, MWL controls, DICOM generation, and study move tools to AI agents (AGY, Claude Desktop, Cursor) over Server-Sent Events (SSE).
 11. **Automated Study Push (Auto-Push)**: Periodically generate and push DICOM studies (associated series and images) to a configured destination AE at a configured interval in seconds via C-STORE.
+12. **Interactive Jupyter Notebooks**: Pre-configured tutorials in `notebooks/` demonstrating REST API, DICOMweb (QIDO-RS / WADO-RS), and DIMSE (C-ECHO) client workflows.
 
 ---
 
@@ -351,7 +352,7 @@ uv run push-hl7 -H 127.0.0.1 -p 2575 custom.txt    # Custom host and port
 
 ## FHIR ServiceRequest & Bundle Ingestion (`fhir_*`)
 
-The server provides zero-dependency REST endpoints to ingest FHIR R4/R5 imaging order bundles:
+The server provides REST endpoints powered by open-source `fhir.resources` (HL7 FHIR R4B) to ingest imaging order bundles:
 - `POST /api/v1/fhir_service_request`
 - `POST /api/v1/fhir/Bundle`
 - `POST /api/v1/fhir/ServiceRequest`
@@ -379,10 +380,11 @@ curl -X POST "http://127.0.0.1:8000/api/v1/fhir_service_request" \
              "resourceType": "ServiceRequest",
              "id": "sr-01",
              "status": "active",
+             "intent": "order",
              "identifier": [{"value": "ACC-FHIR-001"}],
              "code": {"text": "CT Abdomen Pelvis with Contrast"},
              "subject": {"reference": "Patient/pat-01"},
-             "occurrenceDateTime": "2026-09-07T14:00:00"
+             "occurrenceDateTime": "2026-09-07T14:00:00Z"
            }
          }
        ]
@@ -525,6 +527,26 @@ Use the push utility script to tag and push updates to the registry:
 ```
 
 A Docker Hub repository overview page document is maintained in [DOCKER_HUB.md](./DOCKER_HUB.md).
+
+---
+
+## Interactive Jupyter Notebooks (`notebooks/`)
+
+Interactive guides and tutorials are provided in the [`notebooks/`](./notebooks) directory to explore mock DICOM workflows (REST, DICOMweb, DIMSE, MWL).
+
+Launch Jupyter Lab or Notebook on-demand using Astral `uv`:
+```bash
+# Launch JupyterLab pointing to the notebooks directory
+uv run --with jupyterlab jupyter lab notebooks/
+
+# Or launch classic Jupyter Notebook
+uv run --with notebook jupyter notebook notebooks/
+```
+
+- [`notebooks/01_dicom_mock_server_quickstart.ipynb`](./notebooks/01_dicom_mock_server_quickstart.ipynb): End-to-end quickstart testing server health, scheduling MWL orders, performing DICOMweb QIDO/WADO searches, and sending C-ECHO verification requests.
+- See [`notebooks/README.md`](./notebooks/README.md) for detailed prerequisites and instructions.
+
+---
 
 ## Running Tests & Quality Checks
 

@@ -90,7 +90,7 @@ Data from supplemental clinical resources flags safety alerts and pre-procedure 
 
 ## Technology Stack
 
-The FHIR ingestion subsystem parses bundles natively using standard Pydantic models with zero external dependencies.
+The FHIR ingestion subsystem parses bundles natively using the open-source `fhir.resources` library (HL7 FHIR R4B) for complete schema validation and strong typing.
 
 ---
 

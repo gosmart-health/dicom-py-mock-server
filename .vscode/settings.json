@@ -5,9 +5,11 @@
         "cstore",
         "dcmread",
         "dicom",
+        "Fhir",
         "ONDEMAND",
         "pydicom",
         "pynetdicom",
+        "Synthea",
         "Worklist"
     ],
     "dicom.showPrivateTags": true
