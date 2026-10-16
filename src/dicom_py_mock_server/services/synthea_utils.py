@@ -1,6 +1,7 @@
+import datetime
 import json
 import os
-from typing import List
+from typing import List, Tuple
 
 from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.encounter import Encounter
@@ -9,12 +10,17 @@ from fhir.resources.R4B.encounter import Encounter
 from fhir.resources.R4B.imagingstudy import ImagingStudy
 
 from dicom_py_mock_server.models import FhirBundle
-from dicom_py_mock_server.models.fhir_models import FhirPatient
+from dicom_py_mock_server.models.fhir_models import FhirPatient, format_human_name_to_dicom
 
 
 class SyntheaUtils:
-    def __init__(self, synthea_output_folder: str = "../../../synthea/output/fhir"):
+    def __init__(
+        self,
+        synthea_output_folder: str = "../../../synthea/output/fhir",
+        patient_id_system: str = "urn:oid:2.16.840.1.113883.4.3.25",
+    ):
         self.synthea_output_folder = synthea_output_folder
+        self.get_patient_id_system = patient_id_system
 
     def scan_synthea_output(self, modalities: List[str], max_count: int = 1000) -> List[FhirBundle]:
         """Scan Synthea output for FHIR Bundle JSON files and return matching bundles."""
@@ -85,6 +91,51 @@ class SyntheaUtils:
 
         return None
 
+    def get_patient_id(self, patient: FhirPatient) -> str | None:
+        """Get the patient ID from the given FHIR Patient resource."""
+        if not patient or not isinstance(patient, FhirPatient):
+            return None
+
+        for identifier in patient.identifier:
+            if identifier.system == self.get_patient_id_system:
+                return identifier.value
+
+        return None
+
+    def get_patient_name(self, patient: FhirPatient) -> str | None:
+        """Get the patient name from the given FHIR Patient resource."""
+        if not patient or not isinstance(patient, FhirPatient):
+            return None
+
+        if patient.name and len(patient.name) > 0:
+            return format_human_name_to_dicom(patient.name[0])
+        return None
+
+    def get_patient_sex(self, patient: FhirPatient) -> str | None:
+        """Get the patient sex from the given FHIR Patient resource."""
+        if not patient or not isinstance(patient, FhirPatient):
+            return None
+
+        match patient.gender:
+            case "male":
+                return "M"
+            case "female":
+                return "F"
+            case "other":
+                return "O"
+            case _:
+                return None
+
+    def get_date_time(self, date_time: any) -> Tuple[str, str] | None:
+        match date_time:
+            case datetime.datetime() as dt:
+                # Convert dt as DICOM date yyyymmdd and hhmmss tuple
+                return dt.strftime("%Y%m%d"), dt.strftime("%H%M%S")
+            case datetime.date() as date:
+                # Convert Date part as DICOM data yyyymmdd and time part as empty.
+                return date.strftime("%Y%m%d"), ""
+        return None
+
     def get_encounters(self, bundle: FhirBundle) -> List[Encounter]:
         """Get all Encounter resources from the given FHIR Bundle."""
         encounters = []
@@ -98,17 +149,20 @@ class SyntheaUtils:
 
         return encounters
 
-    def get_imaging_studies(self, bundle: FhirBundle) -> List[ImagingStudy]:
+    def get_imaging_studies(self, bundle: FhirBundle, modalities: List[str] = None) -> List[ImagingStudy]:
         """Get all ImagingStudy resources from the given FHIR Bundle."""
-        imaging_studies = []
+        imaging_studies: List[ImagingStudy] = []
         if not bundle or not isinstance(bundle, FhirBundle):
             return imaging_studies
+        if not modalities:
+            modalities = ["CT", "CR", "US"]
 
         for entry in bundle.entry:
-            resource = entry.resource
-            if isinstance(resource, ImagingStudy):
-                imaging_studies.append(resource)
-
+            study: ImagingStudy = entry.resource
+            if isinstance(study, ImagingStudy):
+                for s in study.series:
+                    if s.modality and s.modality.code in modalities:
+                        imaging_studies.append(study)
         return imaging_studies
 
     def get_diagnostic_reports(self, bundle: FhirBundle) -> List[DiagnosticReport]:
