@@ -9,6 +9,7 @@ from fhir.resources.R4B.encounter import Encounter
 from fhir.resources.R4B.humanname import HumanName
 from fhir.resources.R4B.identifier import Identifier
 from fhir.resources.R4B.imagingstudy import ImagingStudy
+from fhir.resources.R4B.organization import Organization
 from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.practitioner import Practitioner
 from fhir.resources.R4B.reference import Reference
@@ -46,6 +47,7 @@ FhirBundle = Bundle
 FhirBundleEntry = BundleEntry
 FhirPatient = Patient
 FhirPractitioner = Practitioner
+FhirOrganization = Organization
 FhirEncounter = Encounter
 FhirServiceRequest = ServiceRequest
 FhirHumanName = HumanName
@@ -69,6 +71,7 @@ __all__ = [
     "FhirHumanName",
     "FhirIdentifier",
     "FhirImagingStudy",
+    "FhirOrganization",
     "FhirPatient",
     "FhirPractitioner",
     "FhirReference",
@@ -76,6 +79,7 @@ __all__ = [
     "HumanName",
     "Identifier",
     "ImagingStudy",
+    "Organization",
     "Patient",
     "Practitioner",
     "Reference",
