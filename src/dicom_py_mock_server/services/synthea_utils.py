@@ -27,18 +27,27 @@ class SyntheaUtils:
         self,
         synthea_output_folder: str = "../../../synthea/output/fhir",
         patient_id_system: str = "urn:oid:2.16.840.1.113883.4.3.25",
+        modalities: List[str] | None = None,
     ):
-        """Initialize SyntheaUtils with the target FHIR output directory and patient ID system.
+        """Initialize SyntheaUtils with the target FHIR output directory, patient ID system, and modalities.
 
         Args:
             synthea_output_folder: Path to the directory containing Synthea FHIR Bundle JSON files.
             patient_id_system: FHIR identifier system URI used to locate the primary patient ID
                 (defaults to the Massachusetts driver's license / Synthea identifier OID).
+            modalities: Optional list of DICOM modality codes to filter by (defaults to ``["CT", "US", "CR"]``).
         """
         self.synthea_output_folder = synthea_output_folder
         self.patient_id_system = patient_id_system
         self._hospital_bundles: List[FhirBundle] | None = None
         self._practitioner_bundles: List[FhirBundle] | None = None
+        self._patient_bundles: List[FhirBundle] | None = None
+        self._modalities = modalities if modalities else ["CT", "US", "CR"]
+
+    @property
+    def modalities(self) -> List[str]:
+        """Return the configured DICOM modalities for filtering."""
+        return self._modalities
 
     def _load_bundles_by_prefix(self, prefix: str) -> List[FhirBundle]:
         """Load all FHIR Bundle JSON files in the Synthea output folder starting with ``prefix``.
@@ -100,11 +109,30 @@ class SyntheaUtils:
 
         return False
 
-    def scan_synthea_output(self, modalities: List[str], max_count: int = 1000) -> List[FhirBundle]:
-        """Scan the Synthea output folder for FHIR Bundle JSON files matching the given modalities.
+    def _get_effective_bundles(self, bundle: FhirBundle | None) -> List[FhirBundle]:
+        """Resolve the effective bundle list, falling back to ``self._patient_bundles``.
 
         Args:
-            modalities: List of DICOM modality codes (e.g., ``["CT", "CR", "US"]``) to filter by.
+            bundle: Optional ``FhirBundle`` instance.
+
+        Returns:
+            A list containing ``[bundle]`` if provided and valid, or ``self._patient_bundles``.
+
+        Raises:
+            ValueError: If ``bundle`` is ``None`` and ``self._patient_bundles`` is ``None``.
+        """
+        if bundle is not None:
+            if not isinstance(bundle, FhirBundle):
+                return []
+            return [bundle]
+        if self._patient_bundles is None:
+            raise ValueError("No FHIR bundle provided and self._patient_bundles is None.")
+        return self._patient_bundles
+
+    def scan_synthea_output(self, max_count: int = 1000) -> List[FhirBundle]:
+        """Scan the Synthea output folder for FHIR Bundle JSON files matching the configured modalities.
+
+        Args:
             max_count: Maximum number of patient JSON files to inspect from the output directory.
 
         Returns:
@@ -123,19 +151,18 @@ class SyntheaUtils:
             ):
                 continue
             file_path = os.path.join(self.synthea_output_folder, file_name)
-            bundle = self.load_synthea_bundle(file_path, modalities)
+            bundle = self.load_synthea_bundle(file_path)
             if bundle:
                 filtered_bundles.append(bundle)
             count += 1
-
+        self._patient_bundles = filtered_bundles
         return filtered_bundles
 
-    def load_synthea_bundle(self, file_name: str, modalities: List[str]) -> FhirBundle | None:
-        """Load and validate a single Synthea FHIR Bundle JSON file if it matches the target modalities.
+    def load_synthea_bundle(self, file_name: str) -> FhirBundle | None:
+        """Load and validate a single Synthea FHIR Bundle JSON file if it matches the configured modalities.
 
         Args:
             file_name: Path to the FHIR Bundle JSON file.
-            modalities: List of DICOM modality codes to filter the bundle against.
 
         Returns:
             The validated ``FhirBundle`` if it contains a matching ``ImagingStudy``, or ``None``
@@ -147,48 +174,65 @@ class SyntheaUtils:
         with open(file_name, "r", encoding="utf-8") as f:
             bundle_dict = json.load(f)
             raw_bundle = FhirBundle.model_validate(bundle_dict)
-            return self.filter_imaging_bundle(raw_bundle, modalities)
+            return self.filter_imaging_bundle(raw_bundle)
 
-    def filter_imaging_bundle(self, bundle: FhirBundle, modalities: List[str]) -> FhirBundle | None:
-        """Check whether a FHIR Bundle contains an ImagingStudy with any of the specified modalities.
+    def filter_imaging_bundle(self, bundle: FhirBundle | None = None) -> FhirBundle | None:
+        """Check whether a FHIR Bundle contains an ImagingStudy with any of the configured modalities.
 
         Args:
-            bundle: The ``FhirBundle`` instance to inspect.
-            modalities: List of DICOM modality codes (e.g., ``["CT", "US"]``) to match against
-                each ``ImagingStudy`` series.
+            bundle: Optional ``FhirBundle`` instance to inspect. When omitted or ``None``,
+                ``self._patient_bundles`` is used.
 
         Returns:
             The original ``FhirBundle`` if at least one ``ImagingStudy`` series matches a modality
-            in ``modalities``; otherwise ``None``.
+            in ``self._modalities``; otherwise ``None``.
+
+        Raises:
+            ValueError: If ``bundle`` is ``None`` and ``self._patient_bundles`` is ``None``.
         """
-        if not bundle or not isinstance(bundle, FhirBundle):
+        if bundle is None:
+            if self._patient_bundles is None:
+                raise ValueError("No FHIR bundle provided and self._patient_bundles is None.")
+            for b in self._patient_bundles:
+                match = self.filter_imaging_bundle(b)
+                if match:
+                    return match
+            return None
+
+        if not isinstance(bundle, FhirBundle):
             return None
 
         for entry in bundle.entry or []:
             study = entry.resource
             if isinstance(study, ImagingStudy):
                 for s in study.series or []:
-                    if s.modality and s.modality.code in modalities:
+                    if s.modality and s.modality.code in self._modalities:
                         return bundle
 
         return None
 
-    def get_patient(self, bundle: FhirBundle) -> FhirPatient | None:
-        """Extract the first Patient resource from the given FHIR Bundle.
+    def get_patient(self, bundle: FhirBundle | None = None) -> FhirPatient | None:
+        """Extract the first Patient resource from the given FHIR Bundle or cached patient bundles.
 
         Args:
-            bundle: The ``FhirBundle`` to search.
+            bundle: Optional ``FhirBundle`` to search. When omitted or ``None``,
+                ``self._patient_bundles`` is used.
 
         Returns:
             The ``FhirPatient`` resource if found, or ``None`` otherwise.
-        """
-        if not bundle or not isinstance(bundle, FhirBundle):
-            return None
 
-        for entry in bundle.entry or []:
-            resource = entry.resource
-            if isinstance(resource, FhirPatient):
-                return resource
+        Raises:
+            ValueError: If ``bundle`` is ``None`` and ``self._patient_bundles`` is ``None``.
+        """
+        bundles = self._get_effective_bundles(bundle)
+
+        for b in bundles:
+            if not b or not isinstance(b, FhirBundle):
+                continue
+            for entry in b.entry or []:
+                resource = entry.resource
+                if isinstance(resource, FhirPatient):
+                    return resource
 
         return None
 
@@ -217,7 +261,7 @@ class SyntheaUtils:
             patient: The ``FhirPatient`` resource to inspect.
 
         Returns:
-            The patient's first listed name formatted as ``Last^First^Middle^Prefix^Suffix``,
+            The patient's first listed name formatted as ``Last^First^Middle^Prefix^Suffix``,\
             or ``None`` if the patient has no name entries.
         """
         if not patient or not isinstance(patient, FhirPatient):
@@ -268,111 +312,134 @@ class SyntheaUtils:
                 return date.strftime("%Y%m%d"), ""
         return None
 
-    def get_encounters(self, bundle: FhirBundle, encounter_ref: str = "") -> List[Encounter]:
+    def get_encounters(self, bundle: FhirBundle | None = None, encounter_ref: str = "") -> List[Encounter]:
         """Retrieve Encounter resources from a FHIR Bundle, optionally filtered by encounter reference.
 
         Args:
-            bundle: The ``FhirBundle`` to search.
+            bundle: Optional ``FhirBundle`` to search. When omitted or ``None``,
+                ``self._patient_bundles`` is used.
             encounter_ref: Optional encounter reference string (e.g., ``"urn:uuid:<id>"`` or
                 ``"Encounter/<id>"``). When provided, only matching encounters are returned.
 
         Returns:
             List of matching ``Encounter`` resources.
-        """
-        encounters: List[Encounter] = []
-        if not bundle or not isinstance(bundle, FhirBundle):
-            return encounters
 
-        for entry in bundle.entry or []:
-            encounter = entry.resource
-            if isinstance(encounter, Encounter):
-                if encounter_ref:
-                    if encounter_ref in (
-                        entry.fullUrl,
-                        f"Encounter/{encounter.id}",
-                        encounter.id,
-                    ) or (encounter.id and encounter.id in encounter_ref):
+        Raises:
+            ValueError: If ``bundle`` is ``None`` and ``self._patient_bundles`` is ``None``.
+        """
+        bundles = self._get_effective_bundles(bundle)
+
+        encounters: List[Encounter] = []
+        for b in bundles:
+            if not b or not isinstance(b, FhirBundle):
+                continue
+            for entry in b.entry or []:
+                encounter = entry.resource
+                if isinstance(encounter, Encounter):
+                    if encounter_ref:
+                        if encounter_ref in (
+                            entry.fullUrl,
+                            f"Encounter/{encounter.id}",
+                            encounter.id,
+                        ) or (encounter.id and encounter.id in encounter_ref):
+                            encounters.append(encounter)
+                    else:
                         encounters.append(encounter)
-                else:
-                    encounters.append(encounter)
         return encounters
 
-    def get_imaging_studies(self, bundle: FhirBundle, modalities: List[str] | None = None) -> List[ImagingStudy]:
-        """Retrieve ImagingStudy resources from a FHIR Bundle that match the specified modalities.
+    def get_imaging_studies(self, bundle: FhirBundle | None = None) -> List[ImagingStudy]:
+        """Retrieve ImagingStudy resources from a FHIR Bundle that match the configured modalities.
 
         Args:
-            bundle: The ``FhirBundle`` to search.
-            modalities: Optional list of DICOM modality codes to filter by. Defaults to
-                ``["CT", "CR", "US"]`` when omitted or empty.
+            bundle: Optional ``FhirBundle`` to search. When omitted or ``None``,
+                ``self._patient_bundles`` is used.
 
         Returns:
             List of matching ``ImagingStudy`` resources.
-        """
-        imaging_studies: List[ImagingStudy] = []
-        if not bundle or not isinstance(bundle, FhirBundle):
-            return imaging_studies
-        if not modalities:
-            modalities = ["CT", "CR", "US"]
 
-        for entry in bundle.entry or []:
-            study = entry.resource
-            if isinstance(study, ImagingStudy):
-                for s in study.series or []:
-                    if s.modality and s.modality.code in modalities:
-                        imaging_studies.append(study)
-                        break
+        Raises:
+            ValueError: If ``bundle`` is ``None`` and ``self._patient_bundles`` is ``None``.
+        """
+        bundles = self._get_effective_bundles(bundle)
+
+        imaging_studies: List[ImagingStudy] = []
+        for b in bundles:
+            if not b or not isinstance(b, FhirBundle):
+                continue
+            for entry in b.entry or []:
+                study = entry.resource
+                if isinstance(study, ImagingStudy):
+                    for s in study.series or []:
+                        if s.modality and s.modality.code in self._modalities:
+                            imaging_studies.append(study)
+                            break
         return imaging_studies
 
-    def get_diagnostic_reports(self, bundle: FhirBundle, encounter_ref: str = "") -> List[DiagnosticReport]:
+    def get_diagnostic_reports(
+        self, bundle: FhirBundle | None = None, encounter_ref: str = ""
+    ) -> List[DiagnosticReport]:
         """Retrieve DiagnosticReport resources from a FHIR Bundle, optionally filtered by encounter.
 
         Args:
-            bundle: The ``FhirBundle`` to search.
+            bundle: Optional ``FhirBundle`` to search. When omitted or ``None``,
+                ``self._patient_bundles`` is used.
             encounter_ref: Optional encounter reference string. When provided, only reports whose
                 ``encounter.reference`` equals ``encounter_ref`` are returned.
 
         Returns:
             List of matching ``DiagnosticReport`` resources.
-        """
-        diagnostic_reports: List[DiagnosticReport] = []
-        if not bundle or not isinstance(bundle, FhirBundle):
-            return diagnostic_reports
 
-        for entry in bundle.entry or []:
-            report = entry.resource
-            if isinstance(report, DiagnosticReport):
-                report_encounter_ref = report.encounter.reference if report.encounter else None
-                if encounter_ref:
-                    if encounter_ref == report_encounter_ref:
+        Raises:
+            ValueError: If ``bundle`` is ``None`` and ``self._patient_bundles`` is ``None``.
+        """
+        bundles = self._get_effective_bundles(bundle)
+
+        diagnostic_reports: List[DiagnosticReport] = []
+        for b in bundles:
+            if not b or not isinstance(b, FhirBundle):
+                continue
+            for entry in b.entry or []:
+                report = entry.resource
+                if isinstance(report, DiagnosticReport):
+                    report_encounter_ref = report.encounter.reference if report.encounter else None
+                    if encounter_ref:
+                        if encounter_ref == report_encounter_ref:
+                            diagnostic_reports.append(report)
+                    else:
                         diagnostic_reports.append(report)
-                else:
-                    diagnostic_reports.append(report)
 
         return diagnostic_reports
 
-    def get_procedures(self, bundle: FhirBundle, encounter_ref: str = "") -> List[Procedure]:
+    def get_procedures(self, bundle: FhirBundle | None = None, encounter_ref: str = "") -> List[Procedure]:
         """Retrieve Procedure resources from a FHIR Bundle, optionally filtered by encounter.
 
         Args:
-            bundle: The ``FhirBundle`` to search.
+            bundle: Optional ``FhirBundle`` to search. When omitted or ``None``,
+                ``self._patient_bundles`` is used.
             encounter_ref: Optional encounter reference string. When provided, only procedures whose
                 ``encounter.reference`` equals ``encounter_ref`` are returned.
 
         Returns:
             List of matching ``Procedure`` resources.
+
+        Raises:
+            ValueError: If ``bundle`` is ``None`` and ``self._patient_bundles`` is ``None``.
         """
+        bundles = self._get_effective_bundles(bundle)
+
         procedures: List[Procedure] = []
-        if not bundle or not isinstance(bundle, FhirBundle):
-            return procedures
-        for entry in bundle.entry or []:
-            procedure = entry.resource
-            if isinstance(procedure, Procedure):
-                procedure_encounter_ref = procedure.encounter.reference if procedure.encounter else None
-                if encounter_ref:
-                    if encounter_ref == procedure_encounter_ref:
+        for b in bundles:
+            if not b or not isinstance(b, FhirBundle):
+                continue
+            for entry in b.entry or []:
+                procedure = entry.resource
+                if isinstance(procedure, Procedure):
+                    procedure_encounter_ref = procedure.encounter.reference if procedure.encounter else None
+                    if encounter_ref:
+                        if encounter_ref == procedure_encounter_ref:
+                            procedures.append(procedure)
+                    else:
                         procedures.append(procedure)
-                else:
-                    procedures.append(procedure)
         return procedures
 
     def get_hospital_information(self, reference: str = "", bundle: FhirBundle | None = None) -> List[FhirOrganization]:
