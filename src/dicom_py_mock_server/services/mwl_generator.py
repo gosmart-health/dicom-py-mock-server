@@ -6,7 +6,7 @@ import random
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 import pydicom
 import structlog
@@ -97,7 +97,7 @@ DEFAULT_DEPARTMENTS: list[dict[str, Any]] = [
 
 
 class MwlGeneratorService:
-    """Service to generate DICOM Modality Worklist (MWL) entries and maintain active MWL list."""
+    """Service to generate DICOM Modality Worklist (MWL) entries and maintain an active MWL list."""
 
     def __init__(
         self,
@@ -124,7 +124,7 @@ class MwlGeneratorService:
         # Active MWL in-memory storage: list of dicts with dataset, json_entry, created_at
         self._entries: list[dict[str, Any]] = []
 
-        # Auto generation background task
+        # Auto-generation background task
         self._auto_gen_task: asyncio.Task | None = None
         self._is_auto_generating = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -140,7 +140,7 @@ class MwlGeneratorService:
 
         Users must organize multi-slice templates in subfolders under templates_path.
         Standalone files at the root of templates_path are disallowed and trigger an error.
-        Non-image objects (e.g. SR, PR, CT dose reports, non-PixelData objects) are excluded.
+        Non-image objects (e.g., SR, PR, CT dosimetry reports, non-PixelData objects) are excluded.
         Folders containing mixed modalities throw a ValueError and halt loading.
         """
         self.departments = [d for d in DEFAULT_DEPARTMENTS if d.get("active", True)]
@@ -170,7 +170,7 @@ class MwlGeneratorService:
             logger.error("templates_path_not_found", templates_path=str(self.config.templates_path))
             return
 
-        # 1. Check for standalone non-hidden files in root directory
+        # 1. Check for standalone non-hidden files in the root directory
         standalone_files = [f for f in templates_dir.iterdir() if f.is_file() and not f.name.startswith(".")]
         if standalone_files:
             logger.error(
@@ -286,28 +286,28 @@ class MwlGeneratorService:
                 series_groups[series_uid].append(ds)
 
             # Sort function for slices
-            def slice_sort_key(s: Dataset) -> tuple:
+            def slice_sort_key(the_slice: Dataset) -> tuple:
                 try:
-                    in_num = int(getattr(s, "InstanceNumber", 0) or 0)
+                    in_num = int(getattr(the_slice, "InstanceNumber", 0) or 0)
                 except (ValueError, TypeError):
                     in_num = 0
                 try:
-                    sl_loc = float(getattr(s, "SliceLocation", 0.0) or 0.0)
+                    sl_loc = float(getattr(the_slice, "SliceLocation", 0.0) or 0.0)
                 except (ValueError, TypeError):
                     sl_loc = 0.0
-                ipp = getattr(s, "ImagePositionPatient", None)
+                ipp: List[Any] | None = getattr(the_slice, "ImagePositionPatient", None)
                 z_val = 0.0
                 if ipp and len(ipp) >= 3:
                     try:
                         z_val = float(ipp[2])
                     except (ValueError, TypeError):
                         z_val = 0.0
-                return (in_num, sl_loc, z_val)
+                return in_num, sl_loc, z_val
 
             for _series_uid, slices in series_groups.items():
                 sorted_slices = sorted(slices, key=slice_sort_key)
                 sample = sorted_slices[0]
-                s_num = getattr(sample, "SeriesNumber", None)
+                s_num: Any = getattr(sample, "SeriesNumber", None)
                 try:
                     s_num = int(s_num) if s_num is not None else None
                 except (ValueError, TypeError):
@@ -385,7 +385,7 @@ class MwlGeneratorService:
         """Get in-memory loaded DICOM template datasets for a specific modality.
 
         If no template dataset exists specifically for `modality`, fall back to any available
-        loaded DICOM template dataset so template-based synthesis is always used.
+        loaded DICOM template dataset, so template-based synthesis is always used.
         """
         mod_upper = modality.upper()
         if mod_upper in self.dicom_templates:
@@ -395,7 +395,7 @@ class MwlGeneratorService:
         return all_templates
 
     def get_current_rate_per_hr(self, current_time: datetime | None = None) -> float:
-        """Calculate current MWL entry creation rate based on local machine time.
+        """Calculate the current MWL entry creation rate based on local machine time.
 
         Business hours: 9 am - 5 pm (09:00 <= hour < 17:00) local time -> 100% rate.
         After hours: Before 9 am or at/after 5 pm local time -> 5% rate.
@@ -630,7 +630,7 @@ class MwlGeneratorService:
 
     def generate_dataset(self, custom: dict[str, Any] | None = None, scheduled_at: datetime | None = None) -> Dataset:
         """Generate a pydicom Dataset representing the Modality Worklist entry."""
-        json_entry = self.generate_json(custom=custom, scheduled_at=scheduled_at)
+        json_entry: dict[str, Any] | None = self.generate_json(custom=custom, scheduled_at=scheduled_at)
         return self.json_to_dataset(json_entry)
 
     @staticmethod
@@ -646,7 +646,7 @@ class MwlGeneratorService:
         ds.Modality = json_entry["00080060"]["Value"][0]
         # Institution Name
         ds.InstitutionName = json_entry["00080080"]["Value"][0]
-        # Referring Physician's Name
+        # The Referring Physician's Name
         ref_pn = json_entry["00080090"]["Value"][0]
         ds.ReferringPhysicianName = ref_pn.get("Alphabetic", "") if isinstance(ref_pn, dict) else ref_pn
         # Performing Physician's Name
@@ -769,7 +769,7 @@ class MwlGeneratorService:
         """Generate and add a new MWL entry to the active MWL list."""
         now = datetime.now()
 
-        # Determine modality
+        # Determine modality or pick one randomly
         if custom and "modality" in custom:
             modality_val = str(custom["modality"]).strip().upper()
         else:
@@ -803,7 +803,7 @@ class MwlGeneratorService:
         dataset = self.json_to_dataset(json_entry)
 
         # Determine instance count
-        custom_instances = custom.get("num_instances") or custom.get("numInstances") if custom else None
+        custom_instances: str | None = custom.get("num_instances") or custom.get("numInstances") if custom else None
         if custom_instances is not None:
             num_instances = int(custom_instances)
         elif getattr(self.config, "synthetic_mode", False):
@@ -822,7 +822,7 @@ class MwlGeneratorService:
         )
         custom_sn = (custom.get("seriesNumber") or custom.get("series_number") or default_sn) if custom else default_sn
         custom_suid = (custom.get("seriesUid") or custom.get("series_uid")) if custom else None
-        custom_sdesc = (custom.get("seriesDescription") or custom.get("series_description")) if custom else None
+        series_description = (custom.get("seriesDescription") or custom.get("series_description")) if custom else None
 
         ref_val = json_entry["00080090"]["Value"][0]
         ref_name = ref_val.get("Alphabetic", "") if isinstance(ref_val, dict) else ref_val
@@ -850,7 +850,7 @@ class MwlGeneratorService:
             "study_description": study_desc_val,
             "series_uid": custom_suid or generate_series_uid(json_entry["0020000D"]["Value"][0], custom_sn),
             "series_number": int(custom_sn),
-            "series_description": custom_sdesc
+            "series_description": series_description
             or (
                 selected_template_series.series_description
                 if selected_template_series and selected_template_series.series_description
@@ -919,13 +919,13 @@ class MwlGeneratorService:
         ]
 
     def get_datasets(self) -> list[Dataset]:
-        """Get list of pydicom Dataset objects for active MWL entries."""
+        """Get the list of pydicom Dataset objects for active MWL entries."""
         self.purge_expired_entries()
         return [e["dataset"] for e in self._entries]
 
     @staticmethod
     def _matches_filter(val: Any, query: str | None) -> bool:
-        """Helper to match DICOM attribute value against query with wildcard and case insensitivity."""
+        """Helper to match DICOM attribute value against a query with wildcard and case insensitivity."""
         if not query or not str(query).strip() or str(query).strip() == "*":
             return True
         if val is None:
@@ -1025,7 +1025,7 @@ class MwlGeneratorService:
         ds.NumberOfStudyRelatedSeries = 1
         ds.NumberOfStudyRelatedInstances = int(entry.get("num_instances") or 8)
 
-        # Include Series-level attributes as well so clients requesting Series fields at Study level get full info
+        # Include Series-level attributes so clients requesting Series fields at Study level get full info
         ds.SeriesInstanceUID = entry.get("series_uid", "")
         ds.SeriesNumber = int(entry.get("series_number") or 1)
         ds.SeriesDescription = entry.get("series_description") or f"{modality} Series"
@@ -1112,7 +1112,7 @@ class MwlGeneratorService:
         return datasets
 
     def get_status(self) -> dict[str, Any]:
-        """Get current MWL generator service status and configuration."""
+        """Get the current MWL generator service status and configuration."""
 
         self.purge_expired_entries()
         now = datetime.now()
@@ -1130,7 +1130,7 @@ class MwlGeneratorService:
         }
 
     async def _auto_generation_loop(self) -> None:
-        """Async background task that generates MWL entries according to current rate."""
+        """Async background task that generates MWL entries according to the current rate."""
         logger.info("mwl_auto_generation_loop_started")
         try:
             while self._is_auto_generating:
@@ -1153,7 +1153,7 @@ class MwlGeneratorService:
             self._is_auto_generating = False
 
     def _schedule_auto_gen_task(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Schedule or reschedule the auto generation task on the provided event loop."""
+        """Schedule or reschedule the auto-generation task on the provided event loop."""
         if self._auto_gen_task and not self._auto_gen_task.done():
             self._auto_gen_task.cancel()
         self._auto_gen_task = loop.create_task(self._auto_generation_loop())

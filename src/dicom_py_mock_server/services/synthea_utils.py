@@ -254,24 +254,13 @@ class SyntheaUtils:
 
         return None
 
-    def get_patient_name(self, patient: FhirPatient) -> str | None:
-        """Format the primary patient name into DICOM Person Name (PN) format.
+    @staticmethod
+    def get_patient_name(patient: FhirPatient) -> str | None:
+        """Format the primary patient name into DICOM Person Name (PN) format."""
+        return get_patient_name(patient)
 
-        Args:
-            patient: The ``FhirPatient`` resource to inspect.
-
-        Returns:
-            The patient's first listed name formatted as ``Last^First^Middle^Prefix^Suffix``,\
-            or ``None`` if the patient has no name entries.
-        """
-        if not patient or not isinstance(patient, FhirPatient):
-            return None
-
-        if patient.name and len(patient.name) > 0:
-            return format_human_name_to_dicom(patient.name[0])
-        return None
-
-    def get_patient_sex(self, patient: FhirPatient) -> str | None:
+    @staticmethod
+    def get_patient_sex(patient: FhirPatient) -> str | None:
         """Map the FHIR Patient administrative gender to a DICOM PatientSex code.
 
         Args:
@@ -293,7 +282,8 @@ class SyntheaUtils:
             case _:
                 return None
 
-    def get_date_time(self, date_time: datetime.datetime | datetime.date | Any | None) -> Tuple[str, str] | None:
+    @staticmethod
+    def get_date_time(date_time: datetime.datetime | datetime.date | Any | None) -> Tuple[str, str] | None:
         """Convert a Python ``date`` or ``datetime`` object into DICOM Date (DA) and Time (TM) strings.
 
         Args:
@@ -462,7 +452,8 @@ class SyntheaUtils:
         source_bundles: List[FhirBundle] = []
         if bundle and isinstance(bundle, FhirBundle):
             source_bundles.append(bundle)
-        source_bundles.extend(self._hospital_bundles)
+        if self._hospital_bundles:
+            source_bundles.extend(self._hospital_bundles)
 
         organizations: List[FhirOrganization] = []
         seen_ids: set[str] = set()
@@ -502,7 +493,8 @@ class SyntheaUtils:
         source_bundles: List[FhirBundle] = []
         if bundle and isinstance(bundle, FhirBundle):
             source_bundles.append(bundle)
-        source_bundles.extend(self._practitioner_bundles)
+        if self._practitioner_bundles:
+            source_bundles.extend(self._practitioner_bundles)
 
         practitioners: List[FhirPractitioner] = []
         seen_ids: set[str] = set()
@@ -522,8 +514,20 @@ class SyntheaUtils:
 
         return practitioners
 
-    def get_practioner_information(
-        self, reference: str = "", bundle: FhirBundle | None = None
-    ) -> List[FhirPractitioner]:
-        """Alias for :meth:`get_practitioner_information`."""
-        return self.get_practitioner_information(reference=reference, bundle=bundle)
+
+def get_patient_name(patient: FhirPatient) -> str | None:
+    """Format the primary patient name into DICOM Person Name (PN) format.
+
+    Args:
+        patient: The ``FhirPatient`` resource to inspect.
+
+    Returns:
+        The patient's first listed name formatted as ``Last^First^Middle^Prefix^Suffix``,\
+        or ``None`` if the patient has no name entries.
+    """
+    if not patient or not isinstance(patient, FhirPatient):
+        return None
+
+    if patient.name and len(patient.name) > 0:
+        return format_human_name_to_dicom(patient.name[0])
+    return None
