@@ -52,4 +52,14 @@ select = [
     "W",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
+    "ignore:PyImport_ImportModuleNoBlock.*:DeprecationWarning",
+    "ignore:.*is_little_endian.*:DeprecationWarning",
+    "ignore:.*is_implicit_VR.*:DeprecationWarning",
+]
+
 
