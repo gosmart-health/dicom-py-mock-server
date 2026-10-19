@@ -5,9 +5,14 @@
         "cstore",
         "dcmread",
         "dicom",
+        "Fhir",
+        "GOSMART",
+        "MLLP",
         "ONDEMAND",
+        "prac",
         "pydicom",
         "pynetdicom",
+        "Synthea",
         "Worklist"
     ],
     "dicom.showPrivateTags": true

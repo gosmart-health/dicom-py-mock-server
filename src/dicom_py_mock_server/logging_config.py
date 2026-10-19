@@ -5,6 +5,7 @@ import logging.handlers
 import sys
 import warnings
 from pathlib import Path
+from typing import Any
 
 import structlog
 from structlog.types import Processor
@@ -37,14 +38,17 @@ def extract_method_and_callsite(
     return event_dict
 
 
-def setup_logging(cfg: AppConfig | None = None) -> None:
+def setup_logging(cfg: AppConfig | None = None, console_stream: Any = None) -> None:
     """Initialize structlog and standard library logging with 7-day auto-rotation.
 
     Args:
         cfg: AppConfig instance. If None, uses default global config.
+        console_stream: Output stream for console logs (default sys.stdout, sys.stderr for stdio mode).
     """
     if cfg is None:
         cfg = config
+    if console_stream is None:
+        console_stream = sys.stdout
 
     # Silence pydicom DeprecationWarnings on is_implicit_VR / is_little_endian
     warnings.filterwarnings("ignore", category=DeprecationWarning, message=r".*is_implicit_VR.*")
@@ -76,11 +80,12 @@ def setup_logging(cfg: AppConfig | None = None) -> None:
     ]
 
     # Structlog global configuration
+    structlog.reset_defaults()
     structlog.configure(
         processors=shared_processors + [structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
+        cache_logger_on_first_use=False,
     )
 
     # Foreign pre-chain for standard library log messages (e.g., uvicorn, pynetdicom)
@@ -93,11 +98,12 @@ def setup_logging(cfg: AppConfig | None = None) -> None:
     ]
 
     # Console Handler Formatter (Human readable / colored if tty)
+    is_tty = getattr(console_stream, "isatty", lambda: False)()
     console_formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=foreign_pre_chain,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            structlog.dev.ConsoleRenderer(colors=sys.stdout.isatty()),
+            structlog.dev.ConsoleRenderer(colors=bool(is_tty)),
         ],
     )
 
@@ -115,7 +121,7 @@ def setup_logging(cfg: AppConfig | None = None) -> None:
     )
 
     # Handlers setup
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = logging.StreamHandler(console_stream)
     console_handler.setFormatter(console_formatter)
     console_handler.setLevel(log_level)
 

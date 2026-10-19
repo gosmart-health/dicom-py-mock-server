@@ -22,6 +22,9 @@ class TemplateSeriesDataset:
     study_description: str | None = None
     rows: int | None = None
     columns: int | None = None
+    transfer_syntax: str | None = None
+    sop_class_uid: str | None = None
+    patient_sex: str | None = None
 
     @property
     def slice_count(self) -> int:
@@ -41,5 +44,8 @@ class TemplateSeriesDataset:
             "study_description": self.study_description,
             "rows": self.rows,
             "columns": self.columns,
+            "transfer_syntax": self.transfer_syntax,
+            "sop_class_uid": self.sop_class_uid,
+            "patient_sex": self.patient_sex,
             "source_dir": str(self.source_dir) if self.source_dir else None,
         }

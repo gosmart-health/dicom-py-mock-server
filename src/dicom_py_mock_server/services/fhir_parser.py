@@ -1,19 +1,49 @@
 """Service for parsing FHIR ServiceRequest Bundles and generating DICOM MWL entries."""
 
+import copy
 from datetime import datetime
 from typing import Any
 
 import structlog
+from fhir.resources.R4B.bundle import Bundle
+from fhir.resources.R4B.patient import Patient
+from fhir.resources.R4B.practitioner import Practitioner
+from fhir.resources.R4B.servicerequest import ServiceRequest
 
-from dicom_py_mock_server.models.fhir_models import (
-    FhirBundle,
-    FhirPatient,
-    FhirPractitioner,
-    FhirServiceRequest,
-)
+from dicom_py_mock_server.models.fhir_models import format_human_name_to_dicom
 from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
 
 logger = structlog.get_logger(__name__)
+
+
+def _normalize_fhir_dict(d: dict[str, Any]) -> dict[str, Any]:
+    """Normalize raw dictionary payloads for standard FHIR R4B validation.
+
+    Ensures naive datetime strings without timezone offsets are given UTC 'Z' timezone,
+    and defaults required fields like 'intent' or 'status' if missing in lightweight test payloads.
+    """
+    res_type = d.get("resourceType")
+    if res_type == "ServiceRequest":
+        d.setdefault("intent", "order")
+        d.setdefault("status", "active")
+        occ = d.get("occurrenceDateTime")
+        if (
+            isinstance(occ, str)
+            and "T" in occ
+            and not occ.endswith("Z")
+            and "+" not in occ[10:]
+            and "-" not in occ[10:]
+        ):
+            d["occurrenceDateTime"] = occ + "Z"
+
+    for v in d.values():
+        if isinstance(v, dict):
+            _normalize_fhir_dict(v)
+        elif isinstance(v, list):
+            for item in v:
+                if isinstance(item, dict):
+                    _normalize_fhir_dict(item)
+    return d
 
 
 class FhirParserService:
@@ -22,45 +52,50 @@ class FhirParserService:
     def __init__(self, mwl_service: MwlGeneratorService) -> None:
         self.mwl_service = mwl_service
 
-    def process_bundle(self, bundle_data: dict[str, Any] | FhirBundle) -> dict[str, Any]:
+    def process_bundle(self, bundle_data: dict[str, Any] | Bundle | ServiceRequest) -> dict[str, Any]:
         """Parse a FHIR bundle, update MWL active list, and return processing summary."""
         # Structured debug dump of raw payload
         logger.debug("fhir_bundle_raw_dump", raw_bundle=bundle_data)
 
+        patients: dict[str, Patient] = {}
+        practitioners: dict[str, Practitioner] = {}
+        service_requests: list[ServiceRequest] = []
+        bundle: Bundle | None = None
+
         if isinstance(bundle_data, dict):
-            bundle = FhirBundle.model_validate(bundle_data)
-        else:
-            bundle = bundle_data
-
-        patients: dict[str, FhirPatient] = {}
-        practitioners: dict[str, FhirPractitioner] = {}
-        service_requests: list[FhirServiceRequest] = []
-
-        # If payload itself is a single ServiceRequest resource
-        if getattr(bundle, "resourceType", "") == "ServiceRequest":
-            sr = FhirServiceRequest.model_validate(bundle_data)
-            service_requests.append(sr)
-
-        for entry in bundle.entry:
-            res_dict = entry.resource
-            if not res_dict or not isinstance(res_dict, dict):
-                continue
-            res_type = res_dict.get("resourceType")
-            res_id = res_dict.get("id") or ""
-
-            if res_type == "Patient":
-                pat = FhirPatient.model_validate(res_dict)
-                patients[res_id] = pat
-                if entry.fullUrl:
-                    patients[entry.fullUrl] = pat
-            elif res_type == "Practitioner":
-                prac = FhirPractitioner.model_validate(res_dict)
-                practitioners[res_id] = prac
-                if entry.fullUrl:
-                    practitioners[entry.fullUrl] = prac
-            elif res_type == "ServiceRequest":
-                sr = FhirServiceRequest.model_validate(res_dict)
+            normalized_data = _normalize_fhir_dict(copy.deepcopy(bundle_data))
+            res_type = normalized_data.get("resourceType")
+            if res_type == "ServiceRequest":
+                sr = ServiceRequest.model_validate(normalized_data)
                 service_requests.append(sr)
+            else:
+                bundle = Bundle.model_validate(normalized_data)
+        elif isinstance(bundle_data, ServiceRequest):
+            service_requests.append(bundle_data)
+        elif isinstance(bundle_data, Bundle):
+            bundle = bundle_data
+        elif getattr(bundle_data, "get_resource_type", lambda: "")() == "ServiceRequest":
+            service_requests.append(bundle_data)  # type: ignore[arg-type]
+
+        if bundle is not None and getattr(bundle, "entry", None):
+            for entry in bundle.entry or []:
+                res = entry.resource
+                if not res:
+                    continue
+
+                res_id = getattr(res, "id", "") or ""
+                if isinstance(res, Patient):
+                    if res_id:
+                        patients[res_id] = res
+                    if entry.fullUrl:
+                        patients[entry.fullUrl] = res
+                elif isinstance(res, Practitioner):
+                    if res_id:
+                        practitioners[res_id] = res
+                    if entry.fullUrl:
+                        practitioners[entry.fullUrl] = res
+                elif isinstance(res, ServiceRequest):
+                    service_requests.append(res)
 
         if not service_requests:
             logger.warning("fhir_bundle_has_no_service_requests")
@@ -92,15 +127,18 @@ class FhirParserService:
                     patient_id = patient.identifier[0].value or ""
                 if not patient_id and patient.id:
                     patient_id = patient.id
+
             patient_name = ""
             if patient and patient.name:
-                patient_name = patient.name[0].to_dicom_format()
+                patient_name = format_human_name_to_dicom(patient.name[0])
+
             dob_str = ""
             if patient and patient.birthDate:
-                dob_str = patient.birthDate.replace("-", "")[:8]
+                dob_str = str(patient.birthDate).replace("-", "")[:8]
+
             sex = ""
             if patient and patient.gender:
-                g = patient.gender.lower().strip()
+                g = str(patient.gender).lower().strip()
                 sex = "M" if g in ("male", "m") else ("F" if g in ("female", "f") else "O")
 
             # 2. Extract Accession Number
@@ -130,9 +168,19 @@ class FhirParserService:
             # 4. Procedure Description & Modality
             study_desc = ""
             if sr.code:
-                study_desc = sr.code.text or (sr.code.coding[0].display if sr.code.coding else "")
+                code_obj = getattr(sr.code, "concept", None) or sr.code
+                study_desc = getattr(code_obj, "text", "") or ""
+                if not study_desc and getattr(code_obj, "coding", None):
+                    codings = code_obj.coding or []
+                    if codings and codings[0].display:
+                        study_desc = codings[0].display
             if not study_desc and sr.bodySite:
-                study_desc = sr.bodySite[0].text or ""
+                site = sr.bodySite[0]
+                study_desc = getattr(site, "text", "") or ""
+                if not study_desc and getattr(site, "coding", None):
+                    site_coding = site.coding or []
+                    if site_coding and site_coding[0].display:
+                        study_desc = site_coding[0].display
 
             modality = self._determine_modality(sr, study_desc)
             if not study_desc:
@@ -157,7 +205,7 @@ class FhirParserService:
                 ref_key = (sr.requester.reference or "").split("/")[-1]
                 prac = practitioners.get(ref_key) or practitioners.get(sr.requester.reference or "")
                 if prac and prac.name:
-                    referring_physician = prac.name[0].to_dicom_format()
+                    referring_physician = format_human_name_to_dicom(prac.name[0])
                 elif sr.requester.display:
                     referring_physician = sr.requester.display
 
@@ -167,29 +215,44 @@ class FhirParserService:
                 ref_key = (perf_ref.reference or "").split("/")[-1]
                 prac = practitioners.get(ref_key) or practitioners.get(perf_ref.reference or "")
                 if prac and prac.name:
-                    performing_physician = prac.name[0].to_dicom_format()
+                    performing_physician = format_human_name_to_dicom(prac.name[0])
                 elif perf_ref.display:
                     performing_physician = perf_ref.display
 
             # 7. Scheduled Timing
             scheduled_at = None
             if sr.occurrenceDateTime:
-                clean_ts = "".join(filter(str.isdigit, sr.occurrenceDateTime))
-                if len(clean_ts) >= 14:
-                    try:
-                        scheduled_at = datetime.strptime(clean_ts[:14], "%Y%m%d%H%M%S")
-                    except ValueError:
-                        pass
-                elif len(clean_ts) >= 8:
-                    try:
-                        scheduled_at = datetime.strptime(clean_ts[:8], "%Y%m%d")
-                    except ValueError:
-                        pass
+                if isinstance(sr.occurrenceDateTime, datetime):
+                    scheduled_at = (
+                        sr.occurrenceDateTime.replace(tzinfo=None)
+                        if sr.occurrenceDateTime.tzinfo
+                        else sr.occurrenceDateTime
+                    )
+                elif hasattr(sr.occurrenceDateTime, "year"):
+                    scheduled_at = datetime.combine(sr.occurrenceDateTime, datetime.min.time())
+                else:
+                    clean_ts = "".join(filter(str.isdigit, str(sr.occurrenceDateTime)))
+                    if len(clean_ts) >= 14:
+                        try:
+                            scheduled_at = datetime.strptime(clean_ts[:14], "%Y%m%d%H%M%S")
+                        except ValueError:
+                            pass
+                    elif len(clean_ts) >= 8:
+                        try:
+                            scheduled_at = datetime.strptime(clean_ts[:8], "%Y%m%d")
+                        except ValueError:
+                            pass
 
             reason = ""
-            if sr.reasonCode:
-                coding_display = sr.reasonCode[0].coding[0].display if sr.reasonCode[0].coding else ""
-                reason = sr.reasonCode[0].text or coding_display
+            reason_list = getattr(sr, "reasonCode", None) or getattr(sr, "reason", None) or []
+            if reason_list:
+                first_reason = reason_list[0]
+                reason_obj = getattr(first_reason, "concept", None) or first_reason
+                reason = getattr(reason_obj, "text", "") or ""
+                if not reason and getattr(reason_obj, "coding", None):
+                    codings = reason_obj.coding or []
+                    if codings and codings[0].display:
+                        reason = codings[0].display
 
             # Log summary at INFO level
             logger.info(
@@ -246,15 +309,19 @@ class FhirParserService:
         }
 
     @staticmethod
-    def _determine_modality(sr: FhirServiceRequest, description: str) -> str:
+    def _determine_modality(sr: Any, description: str) -> str:
         """Infer DICOM Modality from ServiceRequest codes or text."""
         tokens: list[str] = []
-        if sr.code and sr.code.coding:
-            for coding in sr.code.coding:
+        code_obj = getattr(sr, "code", None)
+        if hasattr(code_obj, "concept") and code_obj.concept:
+            code_obj = code_obj.concept
+
+        if code_obj and getattr(code_obj, "coding", None):
+            for coding in code_obj.coding or []:
                 if coding.code:
-                    tokens.extend(coding.code.upper().replace("-", " ").replace("_", " ").split())
+                    tokens.extend(str(coding.code).upper().replace("-", " ").replace("_", " ").split())
                 if coding.display:
-                    tokens.extend(coding.display.upper().replace("-", " ").replace("_", " ").split())
+                    tokens.extend(str(coding.display).upper().replace("-", " ").replace("_", " ").split())
         if description:
             tokens.extend(description.upper().replace("-", " ").replace("_", " ").split())
 

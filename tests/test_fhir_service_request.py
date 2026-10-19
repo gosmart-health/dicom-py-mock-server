@@ -52,7 +52,7 @@ SAMPLE_FHIR_CT_BUNDLE = {
                 },
                 "subject": {"reference": "Patient/pat-12345"},
                 "requester": {"reference": "Practitioner/doc-678"},
-                "occurrenceDateTime": "2026-09-07T16:00:00",
+                "occurrenceDateTime": "2026-09-07T16:00:00Z",
                 "reasonCode": [{"text": "Persistent cough evaluation"}],
             },
         },
@@ -85,7 +85,7 @@ SAMPLE_FHIR_MR_BUNDLE = {
                     "text": "MR Brain without contrast",
                 },
                 "subject": {"reference": "Patient/pat-mr-99"},
-                "occurrenceDateTime": "2026-09-07T17:30:00",
+                "occurrenceDateTime": "2026-09-07T17:30:00Z",
             }
         },
     ],
@@ -260,3 +260,36 @@ def test_sample_fhir_order_bundle_file_validity():
     assert data["status"] == "success"
     assert len(data["entries_created"]) == 1
     assert data["entries_created"][0]["accession"] == "ACC-FHIR-CT-01"
+
+
+def test_fhir_parser_with_typed_bundle_instance(fhir_parser, test_mwl_service):
+    """Verify that process_bundle works directly with a typed fhir.resources Bundle instance."""
+    from fhir.resources.R4B.bundle import Bundle
+
+    typed_bundle = Bundle.model_validate(SAMPLE_FHIR_CT_BUNDLE)
+    result = fhir_parser.process_bundle(typed_bundle)
+
+    assert result["status"] == "success"
+    assert len(result["entries_created"]) == 1
+    matched = test_mwl_service.find_entries(accession="ACC-FHIR-CT-01")
+    assert len(matched) == 1
+    assert matched[0]["patient_name"] == "WILLIAMS^SARAH^JANE"
+
+
+def test_format_human_name_to_dicom():
+    """Verify conversion of FHIR HumanName into DICOM Person Name format."""
+    from fhir.resources.R4B.humanname import HumanName
+
+    from dicom_py_mock_server.models.fhir_models import format_human_name_to_dicom
+
+    # Full name with middle, prefix, suffix
+    name1 = HumanName(family="DOE", given=["JOHN", "ROBERT"], prefix=["DR."], suffix=["JR."])
+    assert format_human_name_to_dicom(name1) == "DOE^JOHN^ROBERT^DR.^JR."
+
+    # Partial name (trailing empty components stripped)
+    name2 = HumanName(family="SMITH", given=["ALICE"])
+    assert format_human_name_to_dicom(name2) == "SMITH^ALICE"
+
+    # None and empty
+    assert format_human_name_to_dicom(None) == ""
+    assert format_human_name_to_dicom(HumanName()) == ""

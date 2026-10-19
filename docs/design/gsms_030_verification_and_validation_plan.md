@@ -43,6 +43,7 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
   - Verify WADO-RS rendered image views return valid JPEG and PNG binary streams with valid magic bytes.
   - Verify WADO-URI legacy single-object retrieval for both DICOM datasets and rendered previews.
   - Verify WADO-RS Stress Mode caches the first image request's transfer syntax and reuses the single precomputed compressed frame for subsequent study/series requests.
+  - Verify Synthea FHIR R4 raw JSON array bundle loading (`POST /api/v1/synthea/load`), prerequisite hospital and practitioner resource enforcement, non-imaging patient bundle warning behavior, coherent MWL registration, Patient/Study/Series model generation (`PatientModel`, `StudyModel`, `SeriesModel`), on-disk DICOM generation returning parsed `FhirBundle` JSON arrays, DICOM C-FIND (`PATIENT`, `STUDY`, `SERIES`, `IMAGE` levels), DICOMweb QIDO-RS (`/studies`, `/series`, `/instances`) and WADO-RS (`/metadata`, `/rendered`), and memory-resident queries via `GET /api/v1/synthea/practitioner`, `GET /api/v1/synthea/hospitals`, `GET /api/v1/synthea/patient-bundle`, `GET /api/v1/synthea/patients`, `GET /api/v1/synthea/studies`, and `GET /api/v1/synthea/series` (`tests/test_synthea_utils.py`, `tests/test_synthea_api.py`).
 
 ### 2.3 DICOM Protocol Interop & System Testing (Level 3)
 * **Scope:** `pynetdicom` Application Entity background server initialization, presentation context negotiation, Query/Retrieve (C-FIND, C-MOVE, C-GET), Modality Worklist (MWL C-FIND), C-STORE, C-STORE CSV audit logging per association, headless CI/CD operation, and stress testing (`GOSMART_MS_STRESS`).
@@ -70,6 +71,7 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
 | **CLI Application Verification** | `uv run dicom-py-mock-server` | Verifies installed CLI entry point and Uvicorn server startup. |
 | **HL7 Message Pusher Verification** | `uv run push-hl7` / `python util/push_hl7.py` | Verifies HL7 v2 ORM message MLLP transmission and MWL creation. |
 | **FHIR Order Pusher Verification** | `./util/push_fhir.sh` | Verifies FHIR ServiceRequest bundle ingestion via HTTP POST. |
+| **Synthea FHIR Loader Verification** | `python util/synthea_loader.py --folder tests/synthea/fhir` | Verifies Synthea FHIR JSON scanning, prerequisite resource loading, and patient ingestion via CLI. |
 
 ---
 

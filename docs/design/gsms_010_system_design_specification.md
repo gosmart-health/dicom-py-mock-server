@@ -69,11 +69,11 @@ graph TD
 * **`MwlGeneratorService`**:
   - Initializes 3 Referring, 3 Performing, and 3 Reading Physicians on startup.
   - Randomly selects physician roles for Modality Worklist (MWL) entries and populates `InstitutionName` (`GORMART_MS_INSTITUTION_NAME` / `GOSMART_MS_INSTITUTION_NAME`).
-  - **Multi-Slice Template Scanner & Modality Registry**: Scans subfolders under `templates/`, strictly rejecting standalone root template files with `ValueError`. Discovers modalities dynamically via DICOM tag `(0008, 0060)`, enforces folder modality purity, and excludes non-image objects (`PR`, `SR`, missing `PixelData`, Philips private `XX_*`). Groups slices into `TemplateSeriesDataset` records (`SeriesInstanceUID`, modality, series description, sorted slice file paths).
-  - **MWL Allocation Strategy**: Selects modalities randomly from available modalities. Sequentially cycles through template series per modality in round-robin order for subsequent MWL entries. In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), assigns exact slice counts and preserves the template's original Study Description without swapping with mockup values.
+  - **Multi-Slice Template Scanner & Modality Registry**: Scans subfolders under `templates/`, strictly rejecting standalone root template files with `ValueError`. Discovers modalities dynamically via DICOM tag `(0008, 0060)`, enforces folder modality purity, and excludes non-image objects (`PR`, `SR`, missing `PixelData`, Philips private `XX_*`). Groups slices into `TemplateSeriesDataset` records (`SeriesInstanceUID`, modality, series description, original `transfer_syntax`, `sop_class_uid`, `patient_sex`, and sorted slice datasets).
+  - **MWL Allocation Strategy & US Gender Sensitivity**: Cycles through available template modalities (`CR`, `CT`, `MR`, `US`) in round-robin order and sequentially cycles through template series per modality in round-robin order for subsequent MWL entries. Specific to the `US` modality, if the US template's `PatientSex (0010,0040)` is `'F'` and the MWL patient gender is not `'F'`, the MWL entry is not generated (`None`). In non-synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=false`), assigns exact slice counts and preserves the template's original Study Description without swapping with mockup values.
 * **`DicomGeneratorService`**:
   - **Multi-Slice & Template-Based Synthesis**: Synthesizes compliant DICOM datasets and Modality Worklist items from multi-slice template datasets or legacy templates. Note: The generator does NOT perform de-identification on template files. Patient Name, Patient ID, Patient Sex, Study Date & Time, DICOM UIDs (Study/Series/SOP Instance), and image pixel data are generated and replaced; all other DICOM elements (including private data elements) are passed through "as is".
-  - **Non-Synthetic Exact Delivery Mode**: Delivers complete series matching the exact slice count of the selected template series. Preserves original slice pixel arrays, native slice metadata, and the original template Study Description (leaving it intact and not replacing with mockup study descriptions). When burn-in text overlay is enabled, text annotations are drawn directly on top of the original slice pixel matrix.
+  - **Non-Synthetic Exact Delivery Mode**: Delivers complete series matching the exact slice count of the selected template series. Preserves original slice pixel arrays, native `TransferSyntaxUID` without trans-conversion, native slice metadata, and the original template Study Description (leaving it intact and not replacing with mockup study descriptions). When burn-in text overlay is enabled, text annotations are drawn directly on top of the original slice pixel matrix.
   - **Synthetic Cyclic Rotation Mode**: In synthetic mode (`GOSMART_MS_SYNTHETIC_MODE=true`), generates slice volumes conforming to `min_slices`/`max_slices` bounds with cyclic slice rotation `(i - 1) % M`, and generates modality-appropriate synthetic study descriptions when omitted. Supports single compressed frame cloning when combined with stress mode (`GOSMART_MS_STRESS=true`).
   - **Physician & Institution Attribute Propagation**: Propagates Referring Physician (`0008,0090`), Performing Physician (`0008,1050`), Reading Physician (`0008,1060`), and Institution Name (`0008,0080`) from MWL entries and request specs into synthesized SOP instances during C-MOVE / push flows.
   - **Gender-Aligned Name Synthesizer**: Uses JSON data files containing gender-specific first names (male/female) and common US last names to generate realistic patient names matching DICOM `PatientSex` (`M`/`F`).
@@ -90,6 +90,7 @@ graph TD
 * **`DicomScpService`**:
   - Wraps `pynetdicom.AE` (Application Entity) with configured AE Title and SCP port.
   - Registers presentation contexts for Verification (C-ECHO), Patient/Study Root Query/Retrieve (C-FIND, C-MOVE, C-GET), Modality Worklist (MWL C-FIND), and Storage (C-STORE).
+  - For outgoing `C-MOVE` sub-associations and `C-STORE` pushes (`push_datasets_to_destination`, `push_study_to_destination`, `_push_one_auto_study`), resolves the study's datasets prior to association negotiation and proposes Storage Presentation Contexts using each dataset's originally encoded `TransferSyntaxUID` (`build_storage_contexts_for_datasets`) so peer SCPs (such as MicroDICOM) negotiate the native transfer syntax of the template images without trans-conversion.
   - Manages background non-blocking execution thread (`ae.start_server(..., block=False)`) for headless operation in CI/CD pipelines and stress testing.
 
 ### 3.6 CSV Audit Logging Subsystem (`src/dicom_py_mock_server/services/csv_audit.py`)
@@ -163,10 +164,11 @@ graph TD
 ### 3.11 FHIR ServiceRequest REST Subsystem (`src/dicom_py_mock_server/services/fhir_parser.py`, `models/fhir_models.py`, `api/fhir_routes.py`)
 * **REST Ingestion Endpoints (`api/fhir_routes.py`)**:
   - `POST /api/v1/fhir_service_request` (with aliases `POST /api/v1/fhir/Bundle` and `POST /api/v1/fhir/ServiceRequest`).
-  - Validates and parses FHIR R4/R5 JSON payloads with zero external dependencies using native Pydantic models.
-* **Zero-Dependency FHIR Parser (`FhirParserService`)**:
+  - Validates and parses FHIR R4/R4B JSON payloads using the open-source `fhir.resources` library with strong typing and schema conformance.
+* **Standards-Compliant FHIR Parser (`FhirParserService`)**:
+  - Deserializes bundles polymorphically into typed domain models (`Patient`, `ServiceRequest`, `Practitioner`, etc.).
   - Resolves internal bundle references (`urn:uuid:...` or relative `Patient/123`).
-  - Maps `Patient` demographics (`name`, `identifier`, `birthDate`, `gender`), `ServiceRequest` attributes (`accessionIdentifier`, `code`, `orderDetail`, `performer`, `requester`), and DICOM Study UID extension (`http://hl7.org/fhir/StructureDefinition/workflow-studyInstanceUID`).
+  - Maps `Patient` demographics (`name`, `identifier`, `birthDate`, `gender`), `ServiceRequest` attributes (`identifier`, `code`, `performer`, `requester`), and DICOM Study UID extension (`http://hl7.org/fhir/StructureDefinition/workflow-studyInstanceUID`).
   - Preserves exact demographic data as provided by the external system.
   - **Modality Template Validation**: Validates template availability and returns HTTP 422 if template images for the modality are absent.
   - **Order Revocation**: Immediately purges active MWL entries when `status` is `revoked` or `entered-in-error`.
@@ -174,6 +176,11 @@ graph TD
   - `curl`-based shell script to POST FHIR bundles to the mock server's REST endpoint (`/api/v1/fhir_service_request`).
   - Formats JSON responses using `jq` or `python3 -m json.tool`.
   - Includes sample imaging order bundle `util/fhir_order_bundle.json`.
+* **Synthea FHIR R4 Bundle Ingestion & Query Subsystem (`src/dicom_py_mock_server/services/synthea_utils.py`, `api/fhir_routes.py`)**:
+  - **`SyntheaUtils` Additive Cache & Patient/Study/Series Registry**: Maintains memory-resident `_hospital_bundles`, `_practitioner_bundles`, `_patient_bundles`, and derived DICOM models (`_patients: List[PatientModel]`, `_studies: List[StudyModel]`, `_series: List[SeriesModel]`, `_patient_study_series_records: List[dict]`) across the application lifecycle with deduplication.
+  - **`POST /api/v1/synthea/load`**: Validates raw JSON arrays of Synthea FHIR R4 Bundles, ingests hospital and practitioner bundles in Pass 1, verifies prerequisite hospital/practitioner residency before processing patient bundles in Pass 2 (issuing clear prerequisite error messages), logs a structured warning when a patient bundle has no supported `ImagingStudy`, registers MWL entries via `mwl_service.add_entry()`, registers Patient-Study-Series records via `mwl_service.register_study_series_entry()` so all loaded studies/series (including male `US` echocardiography studies) are discoverable via DICOM C-FIND (`PATIENT`, `STUDY`, `SERIES`, `IMAGE` levels), C-MOVE, and DICOMweb (QIDO-RS, WADO-RS, WADO-URI), writes DICOM instances via `generator_service.generate_and_save()`, and returns an array of parsed `FhirBundle` JSON objects.
+  - **Resource Query Endpoints**: `GET /api/v1/synthea/practitioner`, `GET /api/v1/synthea/hospitals` (`/api/v1/hospitals`), `GET /api/v1/synthea/patient-bundle?patient-id=<value>`, `GET /api/v1/synthea/patients`, `GET /api/v1/synthea/studies`, and `GET /api/v1/synthea/series`.
+  - **Synthea FHIR Loader CLI Utility (`util/synthea_loader.py`)**: Command-line utility supporting `--folder` and `--url` flags to scan Synthea output directories, validate and load prerequisite hospital/practitioner bundles first, and ingest patient bundles into the live server (or in-process `TestClient` fallback) with comprehensive error detection and reporting.
 
 ---
 

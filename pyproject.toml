@@ -1,12 +1,14 @@
 [project]
 name = "dicom-py-mock-server"
-version = "0.3.5"
+version = "0.4.0"
 description = "Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = [
     "fastapi>=0.110.0",
+    "fhir-resources>=8.3.0",
+    "ipykernel>=7.3.0",
     "numpy>=2.2.6",
     "pillow>=12.3.0",
     "pydantic>=2.6.0",
@@ -49,6 +51,16 @@ select = [
     "F",
     "I",
     "W",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
+    "ignore:PyImport_ImportModuleNoBlock.*:DeprecationWarning",
+    "ignore:.*is_little_endian.*:DeprecationWarning",
+    "ignore:.*is_implicit_VR.*:DeprecationWarning",
 ]
 
 

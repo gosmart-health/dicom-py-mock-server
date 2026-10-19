@@ -140,23 +140,21 @@ def test_mwl_generator_no_modality_fallback_when_template_present(tmp_path):
 
 
 def test_mwl_generator_workspace_template_loading():
-    """Verify MwlGeneratorService loads real workspace templates (CT and MR)."""
+    """Verify MwlGeneratorService loads real workspace templates (CR, CT, MR, and US)."""
     cfg = AppConfig(templates_path="./templates")
     service = MwlGeneratorService(app_config=cfg)
 
     modalities = service.get_template_modalities()
+    assert "CR" in modalities
     assert "CT" in modalities
     assert "MR" in modalities
+    assert "US" in modalities
 
-    ct_templates = service.get_dicom_templates_by_modality("CT")
-    assert len(ct_templates) >= 1
-    for ds in ct_templates:
-        assert ds.Modality == "CT"
-
-    mr_templates = service.get_dicom_templates_by_modality("MR")
-    assert len(mr_templates) >= 1
-    for ds in mr_templates:
-        assert ds.Modality == "MR"
+    for expected_mod in ("CR", "CT", "MR", "US"):
+        mod_templates = service.get_dicom_templates_by_modality(expected_mod)
+        assert len(mod_templates) >= 1
+        for ds in mod_templates:
+            assert ds.Modality == expected_mod
 
 
 def test_mwl_generate_json_and_dataset():
@@ -281,6 +279,8 @@ def test_seed_initial_entries():
 
     assert len(seeded) == 5
     assert len(service.list_entries()) == 5
+    seeded_modalities = {e["modality"] for e in seeded}
+    assert {"CR", "CT", "MR", "US"}.issubset(seeded_modalities)
     status = service.get_status()
     assert status["active_entries_count"] == 5
     assert status["window_hr"] == 24
@@ -295,13 +295,15 @@ def test_mwl_generator_randomized_instance_counts():
     service = MwlGeneratorService(app_config=cfg)
 
     counts = set()
-    for _ in range(30):
+    for _ in range(40):
         entry = service.add_entry()
+        if entry is None:
+            continue
         count = entry["num_instances"]
         assert 8 <= count <= 24
         counts.add(count)
 
-    # Across 30 generated entries, we should observe multiple distinct instance counts
+    # Across generated entries, we should observe multiple distinct instance counts
     assert len(counts) > 1
 
 
@@ -312,7 +314,8 @@ def test_mwl_generator_modality_aligned_study_descriptions():
 
     service = MwlGeneratorService(AppConfig(synthetic_mode=True))
     for modality in ["CT", "MR", "US", "DX", "CR", "MG", "NM", "PT", "XA", "RF", "OT"]:
-        entry = service.generate_json(custom={"modality": modality})
+        entry = service.generate_json(custom={"modality": modality, "sex": "F"})
+        assert entry is not None
         desc = entry["00081030"]["Value"][0]
         assert desc in MODALITY_STUDY_DESCRIPTIONS[modality]
 
@@ -366,3 +369,39 @@ def test_mwl_generator_sps_and_study_dates():
     # Dataset top-level StudyDate & StudyTime
     assert ds.StudyDate == "20260907"
     assert ds.StudyTime == "143000"
+
+
+def test_us_modality_female_gender_sensitivity():
+    """Verify that when the US template has PatientSex == 'F', US MWL entries are only generated
+    when the MWL patient gender is 'F', and skipped (returning None) when patient gender is not 'F'.
+    """
+    service = MwlGeneratorService()
+
+    # Verify the loaded US template has patient_sex == 'F'
+    us_templates = service.get_template_datasets_by_modality("US")
+    assert len(us_templates) >= 1
+    assert us_templates[0].patient_sex == "F"
+    assert service.template_modalities["US"]["patient_sex"] == "F"
+
+    # 1. US modality with male ('M') or other ('O') patient -> must not generate MWL entry
+    assert service.generate_json(custom={"modality": "US", "sex": "M"}) is None
+    assert service.generate_dataset(custom={"modality": "US", "sex": "M"}) is None
+    assert service.add_entry(custom={"modality": "US", "sex": "M"}) is None
+    assert service.add_entry(custom={"modality": "US", "sex": "O"}) is None
+    assert len(service._entries) == 0
+
+    # 2. US modality with female ('F') patient -> must generate MWL entry
+    us_female = service.add_entry(custom={"modality": "US", "sex": "F", "patientName": "JANE^DOE"})
+    assert us_female is not None
+    assert us_female["modality"] == "US"
+    assert us_female["dataset"].PatientSex == "F"
+    assert us_female["json_entry"]["00100040"]["Value"][0] == "F"
+    assert len(service._entries) == 1
+
+    # 3. Non-US modalities (CR, CT, MR) are not blocked by the US-specific gender check
+    for mod in ("CR", "CT", "MR"):
+        for sex_val in ("M", "F"):
+            rec = service.add_entry(custom={"modality": mod, "sex": sex_val})
+            assert rec is not None
+            assert rec["modality"] == mod
+            assert rec["dataset"].PatientSex == sex_val

@@ -6,7 +6,7 @@ import random
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 import pydicom
 import structlog
@@ -60,7 +60,7 @@ DEFAULT_DEPARTMENTS: list[dict[str, Any]] = [
     {
         "active": True,
         "department": "ORTHO",
-        "modalities": ["CT", "MR", "US", "DX", "VL"],
+        "modalities": ["CT", "MR", "US", "DX", "CR", "VL"],
         "reasons": [
             "Removal of foreign body in muscle or tendon sheath",
             "Removal of implant deep or superficial",
@@ -96,13 +96,26 @@ DEFAULT_DEPARTMENTS: list[dict[str, Any]] = [
 ]
 
 
+class _MwlEntriesList(list):
+    """List subclass for _entries that also clears _synthea_entries when .clear() is called."""
+
+    def __init__(self, owner: "MwlGeneratorService") -> None:
+        super().__init__()
+        self._owner = owner
+
+    def clear(self) -> None:
+        super().clear()
+        self._owner._synthea_entries.clear()
+
+
 class MwlGeneratorService:
-    """Service to generate DICOM Modality Worklist (MWL) entries and maintain active MWL list."""
+    """Service to generate DICOM Modality Worklist (MWL) entries and maintain an active MWL list."""
 
     def __init__(
         self,
         app_config: AppConfig | None = None,
         patient_generator: PersonGenerator | None = None,
+        synthea_utils: Any | None = None,
     ) -> None:
         self.config = app_config or global_config
         self.patient_generator = patient_generator or PersonGenerator(
@@ -110,10 +123,12 @@ class MwlGeneratorService:
             id_prefix=self.config.id_prefix,
             pn_suffix=self.config.pn_suffix,
         )
+        self.synthea_utils = synthea_utils
         self.template_modalities: dict[str, dict[str, Any]] = {}
         self.dicom_templates: dict[str, list[Dataset]] = {}
         self.template_datasets_by_modality: dict[str, list[TemplateSeriesDataset]] = defaultdict(list)
         self._modality_template_indices: dict[str, int] = defaultdict(int)
+        self._modality_index: int = 0
         self.departments: list[dict[str, Any]] = []
 
         # Initial pools of 3 physician names for each role
@@ -121,10 +136,12 @@ class MwlGeneratorService:
         self.performing_physicians: list[str] = self.patient_generator.generate_physician_pool(count=3, title="MD")
         self.reading_physicians: list[str] = self.patient_generator.generate_physician_pool(count=3, title="MD")
 
+        # Synthea / persistent Patient-Study-Series records (including studies skipped by MWL gender check)
+        self._synthea_entries: list[dict[str, Any]] = []
         # Active MWL in-memory storage: list of dicts with dataset, json_entry, created_at
-        self._entries: list[dict[str, Any]] = []
+        self._entries: list[dict[str, Any]] = _MwlEntriesList(self)
 
-        # Auto generation background task
+        # Auto-generation background task
         self._auto_gen_task: asyncio.Task | None = None
         self._is_auto_generating = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -140,7 +157,7 @@ class MwlGeneratorService:
 
         Users must organize multi-slice templates in subfolders under templates_path.
         Standalone files at the root of templates_path are disallowed and trigger an error.
-        Non-image objects (e.g. SR, PR, CT dose reports, non-PixelData objects) are excluded.
+        Non-image objects (e.g., SR, PR, CT dosimetry reports, non-PixelData objects) are excluded.
         Folders containing mixed modalities throw a ValueError and halt loading.
         """
         self.departments = [d for d in DEFAULT_DEPARTMENTS if d.get("active", True)]
@@ -148,6 +165,7 @@ class MwlGeneratorService:
         self.dicom_templates = {}
         self.template_datasets_by_modality = defaultdict(list)
         self._modality_template_indices = defaultdict(int)
+        self._modality_index = 0
 
         path_obj = Path(self.config.templates_path)
         if path_obj.is_absolute():
@@ -170,7 +188,7 @@ class MwlGeneratorService:
             logger.error("templates_path_not_found", templates_path=str(self.config.templates_path))
             return
 
-        # 1. Check for standalone non-hidden files in root directory
+        # 1. Check for standalone non-hidden files in the root directory
         standalone_files = [f for f in templates_dir.iterdir() if f.is_file() and not f.name.startswith(".")]
         if standalone_files:
             logger.error(
@@ -286,28 +304,28 @@ class MwlGeneratorService:
                 series_groups[series_uid].append(ds)
 
             # Sort function for slices
-            def slice_sort_key(s: Dataset) -> tuple:
+            def slice_sort_key(the_slice: Dataset) -> tuple:
                 try:
-                    in_num = int(getattr(s, "InstanceNumber", 0) or 0)
+                    in_num = int(getattr(the_slice, "InstanceNumber", 0) or 0)
                 except (ValueError, TypeError):
                     in_num = 0
                 try:
-                    sl_loc = float(getattr(s, "SliceLocation", 0.0) or 0.0)
+                    sl_loc = float(getattr(the_slice, "SliceLocation", 0.0) or 0.0)
                 except (ValueError, TypeError):
                     sl_loc = 0.0
-                ipp = getattr(s, "ImagePositionPatient", None)
+                ipp: List[Any] | None = getattr(the_slice, "ImagePositionPatient", None)
                 z_val = 0.0
                 if ipp and len(ipp) >= 3:
                     try:
                         z_val = float(ipp[2])
                     except (ValueError, TypeError):
                         z_val = 0.0
-                return (in_num, sl_loc, z_val)
+                return in_num, sl_loc, z_val
 
             for _series_uid, slices in series_groups.items():
                 sorted_slices = sorted(slices, key=slice_sort_key)
                 sample = sorted_slices[0]
-                s_num = getattr(sample, "SeriesNumber", None)
+                s_num: Any = getattr(sample, "SeriesNumber", None)
                 try:
                     s_num = int(s_num) if s_num is not None else None
                 except (ValueError, TypeError):
@@ -323,6 +341,23 @@ class MwlGeneratorService:
                         orig_study_desc = str(val).strip()
                         break
 
+                from pydicom.uid import ExplicitVRLittleEndian, ImplicitVRLittleEndian
+
+                sample_ts = getattr(getattr(sample, "file_meta", None), "TransferSyntaxUID", None)
+                if not sample_ts:
+                    sample_ts = (
+                        ImplicitVRLittleEndian if getattr(sample, "is_implicit_VR", True) else ExplicitVRLittleEndian
+                    )
+                sample_sop = getattr(sample, "SOPClassUID", None) or getattr(
+                    getattr(sample, "file_meta", None), "MediaStorageSOPClassUID", None
+                )
+                sample_sex = None
+                for s in sorted_slices:
+                    sex_val = getattr(s, "PatientSex", None)
+                    if sex_val is not None and str(sex_val).strip():
+                        sample_sex = str(sex_val).strip().upper()
+                        break
+
                 template_series = TemplateSeriesDataset(
                     name=series_name,
                     modality=folder_modality,
@@ -335,6 +370,9 @@ class MwlGeneratorService:
                     study_description=orig_study_desc,
                     rows=int(getattr(sample, "Rows", 512)),
                     columns=int(getattr(sample, "Columns", 512)),
+                    transfer_syntax=str(sample_ts) if sample_ts else None,
+                    sop_class_uid=str(sample_sop) if sample_sop else None,
+                    patient_sex=sample_sex,
                 )
                 self.template_datasets_by_modality[folder_modality].append(template_series)
                 if folder_modality not in self.dicom_templates:
@@ -345,6 +383,9 @@ class MwlGeneratorService:
                     "source": str(sub_dir),
                     "format": "dicom_series",
                     "slice_count": len(sorted_slices),
+                    "transfer_syntax": str(sample_ts) if sample_ts else None,
+                    "sop_class_uid": str(sample_sop) if sample_sop else None,
+                    "patient_sex": sample_sex,
                 }
 
                 logger.info(
@@ -353,6 +394,9 @@ class MwlGeneratorService:
                     modality=folder_modality,
                     series_number=s_num,
                     slice_count=len(sorted_slices),
+                    transfer_syntax=str(sample_ts) if sample_ts else None,
+                    sop_class_uid=str(sample_sop) if sample_sop else None,
+                    patient_sex=sample_sex,
                 )
 
         logger.info(
@@ -385,7 +429,7 @@ class MwlGeneratorService:
         """Get in-memory loaded DICOM template datasets for a specific modality.
 
         If no template dataset exists specifically for `modality`, fall back to any available
-        loaded DICOM template dataset so template-based synthesis is always used.
+        loaded DICOM template dataset, so template-based synthesis is always used.
         """
         mod_upper = modality.upper()
         if mod_upper in self.dicom_templates:
@@ -395,7 +439,7 @@ class MwlGeneratorService:
         return all_templates
 
     def get_current_rate_per_hr(self, current_time: datetime | None = None) -> float:
-        """Calculate current MWL entry creation rate based on local machine time.
+        """Calculate the current MWL entry creation rate based on local machine time.
 
         Business hours: 9 am - 5 pm (09:00 <= hour < 17:00) local time -> 100% rate.
         After hours: Before 9 am or at/after 5 pm local time -> 5% rate.
@@ -409,11 +453,62 @@ class MwlGeneratorService:
         else:
             return float(self.config.mwl_rate_per_hr) * 0.05
 
+    def _is_us_gender_compatible(
+        self,
+        modality: str | None,
+        patient_sex: str | None,
+        template_series: TemplateSeriesDataset | None = None,
+    ) -> bool:
+        """Validate gender compatibility for US modality templates.
+
+        Specific to US modality: if the US template's PatientSex (0010,0040) is 'F'
+        and the MWL patient gender is not 'F', return False so the MWL entry is not generated.
+        """
+        if str(modality or "").strip().upper() != "US":
+            return True
+
+        template_sex: str | None = None
+        if template_series is not None and str(template_series.modality).strip().upper() == "US":
+            template_sex = template_series.patient_sex
+            if not template_sex and template_series.slices:
+                raw_sex = getattr(template_series.slices[0], "PatientSex", None)
+                if raw_sex is not None:
+                    template_sex = str(raw_sex).strip().upper()
+
+        if not template_sex:
+            us_series = self.template_datasets_by_modality.get("US", [])
+            if us_series:
+                template_sex = us_series[0].patient_sex
+                if not template_sex and us_series[0].slices:
+                    raw_sex = getattr(us_series[0].slices[0], "PatientSex", None)
+                    if raw_sex is not None:
+                        template_sex = str(raw_sex).strip().upper()
+
+        if not template_sex:
+            us_mod_info = self.template_modalities.get("US", {})
+            if isinstance(us_mod_info, dict):
+                raw_sex = us_mod_info.get("patient_sex")
+                if raw_sex is not None:
+                    template_sex = str(raw_sex).strip().upper()
+
+        if not template_sex:
+            us_ds_list = self.dicom_templates.get("US", [])
+            if us_ds_list:
+                raw_sex = getattr(us_ds_list[0], "PatientSex", None)
+                if raw_sex is not None:
+                    template_sex = str(raw_sex).strip().upper()
+
+        if str(template_sex or "").strip().upper() == "F":
+            return str(patient_sex or "").strip().upper() == "F"
+
+        return True
+
     def generate_json(
         self,
         custom: dict[str, Any] | None = None,
         scheduled_at: datetime | None = None,
         template_series: TemplateSeriesDataset | None = None,
+        enforce_us_gender: bool = True,
     ) -> dict[str, Any] | None:
         """Generate a single MWL DICOM Web JSON entry matching mwlEntryGenerator.ts format.
 
@@ -429,6 +524,7 @@ class MwlGeneratorService:
         now = scheduled_at or datetime.now()
 
         # Determine modality
+        incremented_modality_index = False
         if custom and "modality" in custom:
             modality = str(custom["modality"]).strip().upper()
         elif template_series:
@@ -436,11 +532,16 @@ class MwlGeneratorService:
         else:
             available_modalities = self.get_template_modalities()
             if available_modalities:
-                modality = random.choice(available_modalities)
+                idx = self._modality_index % len(available_modalities)
+                self._modality_index += 1
+                incremented_modality_index = True
+                modality = available_modalities[idx]
             else:
                 modality = "CT"
 
-        if template_series is None and modality in self.template_datasets_by_modality:
+        if (
+            template_series is None or str(template_series.modality).strip().upper() != modality.upper()
+        ) and modality in self.template_datasets_by_modality:
             series_list = self.template_datasets_by_modality[modality]
             if series_list:
                 template_series = series_list[0]
@@ -492,6 +593,13 @@ class MwlGeneratorService:
         patient_id = patient.mrn
         dob_str = patient.dob.strftime("%Y%m%d")
         sex = patient.gender
+        explicit_sex = (custom.get("sex") or custom.get("gender")) if custom else None
+        if not explicit_sex and modality.upper() == "US":
+            us_t_sex = str(getattr(template_series, "patient_sex", "") or "").strip().upper()
+            if not us_t_sex and "US" in self.template_modalities:
+                us_t_sex = str(self.template_modalities["US"].get("patient_sex", "") or "").strip().upper()
+            if us_t_sex in ("F", "M"):
+                sex = us_t_sex
         scheduled_station_ae = "ZEN_SNAP_MD"
         scheduled_station_name = "ZenSnapMD 4.1"
 
@@ -509,7 +617,7 @@ class MwlGeneratorService:
                 else:
                     dob_str = str(dob_val).replace("-", "")
             sex = custom.get("sex") or custom.get("gender") or sex
-            modality = custom.get("modality") or modality
+            modality = str(custom.get("modality") or modality).strip().upper()
             accession = (
                 custom.get("accession_number") or custom.get("accessionNumber") or custom.get("accession") or accession
             )
@@ -554,6 +662,17 @@ class MwlGeneratorService:
                 if len(clean_t) >= 6:
                     start_time = clean_t[:6]
                     end_time = start_time
+
+        if enforce_us_gender and not self._is_us_gender_compatible(modality, sex, template_series):
+            if incremented_modality_index:
+                self._modality_index -= 1
+            logger.info(
+                "skipped_us_mwl_entry_due_to_gender_mismatch",
+                modality=modality,
+                patient_sex=sex,
+                template_sex=getattr(template_series, "patient_sex", "F"),
+            )
+            return None
 
         study_uid = custom_study_uid or generate_study_uid(patient_name, patient_id, accession)
         series_uid = generate_series_uid(study_uid, 1)
@@ -628,9 +747,13 @@ class MwlGeneratorService:
 
         return json_entry
 
-    def generate_dataset(self, custom: dict[str, Any] | None = None, scheduled_at: datetime | None = None) -> Dataset:
+    def generate_dataset(
+        self, custom: dict[str, Any] | None = None, scheduled_at: datetime | None = None
+    ) -> Dataset | None:
         """Generate a pydicom Dataset representing the Modality Worklist entry."""
-        json_entry = self.generate_json(custom=custom, scheduled_at=scheduled_at)
+        json_entry: dict[str, Any] | None = self.generate_json(custom=custom, scheduled_at=scheduled_at)
+        if not json_entry:
+            return None
         return self.json_to_dataset(json_entry)
 
     @staticmethod
@@ -646,7 +769,7 @@ class MwlGeneratorService:
         ds.Modality = json_entry["00080060"]["Value"][0]
         # Institution Name
         ds.InstitutionName = json_entry["00080080"]["Value"][0]
-        # Referring Physician's Name
+        # The Referring Physician's Name
         ref_pn = json_entry["00080090"]["Value"][0]
         ds.ReferringPhysicianName = ref_pn.get("Alphabetic", "") if isinstance(ref_pn, dict) else ref_pn
         # Performing Physician's Name
@@ -720,7 +843,7 @@ class MwlGeneratorService:
 
         cutoff = current_time - timedelta(hours=self.config.mwl_window_hr)
         initial_count = len(self._entries)
-        self._entries = [e for e in self._entries if e.get("created_at", current_time) >= cutoff]
+        self._entries[:] = [e for e in self._entries if e.get("created_at", current_time) >= cutoff]
         purged = initial_count - len(self._entries)
         if purged > 0:
             logger.info("purged_expired_mwl_entries", count=purged, remaining=len(self._entries))
@@ -736,26 +859,23 @@ class MwlGeneratorService:
         if not accession and not study_uid and not patient_id:
             return 0
 
-        initial_count = len(self._entries)
-        remaining = []
-        for e in self._entries:
-            match = False
+        def _should_remove(e: dict[str, Any]) -> bool:
             if accession and str(e.get("accession", "")).strip() == str(accession).strip():
-                match = True
-            elif study_uid and str(e.get("study_uid", "")).strip() == str(study_uid).strip():
-                match = True
-            elif (
+                return True
+            if study_uid and str(e.get("study_uid", "")).strip() == str(study_uid).strip():
+                return True
+            if (
                 patient_id
                 and str(e.get("patient_id", "")).strip() == str(patient_id).strip()
                 and not accession
                 and not study_uid
             ):
-                match = True
+                return True
+            return False
 
-            if not match:
-                remaining.append(e)
-
-        self._entries = remaining
+        initial_count = len(self._entries)
+        self._entries[:] = [e for e in self._entries if not _should_remove(e)]
+        self._synthea_entries[:] = [e for e in self._synthea_entries if not _should_remove(e)]
         removed = initial_count - len(self._entries)
         if removed > 0:
             logger.info(
@@ -763,22 +883,30 @@ class MwlGeneratorService:
             )
         return removed
 
-    def add_entry(
-        self, custom: dict[str, Any] | None = None, scheduled_at: datetime | None = None
+    def build_study_series_record(
+        self,
+        custom: dict[str, Any] | None = None,
+        scheduled_at: datetime | None = None,
+        enforce_us_gender: bool = True,
     ) -> dict[str, Any] | None:
-        """Generate and add a new MWL entry to the active MWL list."""
+        """Build a complete study/series entry record dictionary without mutating _entries."""
         now = datetime.now()
 
-        # Determine modality
+        # Determine modality or cycle round-robin across available template modalities
+        incremented_modality_index = False
         if custom and "modality" in custom:
             modality_val = str(custom["modality"]).strip().upper()
         else:
             available_modalities = self.get_template_modalities()
             if available_modalities:
-                modality_val = random.choice(available_modalities)
+                idx = self._modality_index % len(available_modalities)
+                self._modality_index += 1
+                incremented_modality_index = True
+                modality_val = available_modalities[idx]
             else:
                 modality_val = "CT"
 
+        incremented_template_index = False
         templates_for_mod = self.template_datasets_by_modality.get(modality_val, [])
         if not templates_for_mod and self.template_datasets_by_modality:
             all_templates = [ts for sub in self.template_datasets_by_modality.values() for ts in sub]
@@ -787,6 +915,7 @@ class MwlGeneratorService:
             # Sequential round-robin selection per modality
             idx = self._modality_template_indices[modality_val] % len(templates_for_mod)
             self._modality_template_indices[modality_val] += 1
+            incremented_template_index = True
             selected_template_series = templates_for_mod[idx]
         else:
             selected_template_series = None
@@ -795,15 +924,21 @@ class MwlGeneratorService:
             custom=custom,
             scheduled_at=scheduled_at,
             template_series=selected_template_series,
+            enforce_us_gender=enforce_us_gender,
         )
         if not json_entry:
-            logger.error("cannot_add_mwl_entry_due_to_missing_template", custom=custom)
+            if incremented_modality_index:
+                self._modality_index -= 1
+            if incremented_template_index:
+                self._modality_template_indices[modality_val] -= 1
+            if not self.template_modalities and not self.dicom_templates:
+                logger.error("cannot_add_mwl_entry_due_to_missing_template", custom=custom)
             return None
 
         dataset = self.json_to_dataset(json_entry)
 
         # Determine instance count
-        custom_instances = custom.get("num_instances") or custom.get("numInstances") if custom else None
+        custom_instances: str | None = custom.get("num_instances") or custom.get("numInstances") if custom else None
         if custom_instances is not None:
             num_instances = int(custom_instances)
         elif getattr(self.config, "synthetic_mode", False):
@@ -822,7 +957,7 @@ class MwlGeneratorService:
         )
         custom_sn = (custom.get("seriesNumber") or custom.get("series_number") or default_sn) if custom else default_sn
         custom_suid = (custom.get("seriesUid") or custom.get("series_uid")) if custom else None
-        custom_sdesc = (custom.get("seriesDescription") or custom.get("series_description")) if custom else None
+        series_description = (custom.get("seriesDescription") or custom.get("series_description")) if custom else None
 
         ref_val = json_entry["00080090"]["Value"][0]
         ref_name = ref_val.get("Alphabetic", "") if isinstance(ref_val, dict) else ref_val
@@ -835,6 +970,11 @@ class MwlGeneratorService:
             selected_template_series.slices[0] if selected_template_series and selected_template_series.slices else None
         )
         study_desc_val = json_entry.get("00081030", {}).get("Value", [None])[0] or None
+        sps_seq = json_entry.get("00400100", {}).get("Value", [{}])[0]
+        study_date_val = sps_seq.get("00400002", {}).get("Value", [""])[0]
+        study_time_val = sps_seq.get("00400003", {}).get("Value", [""])[0]
+        dob_val = json_entry.get("00100030", {}).get("Value", [""])[0]
+        sex_val = json_entry.get("00100040", {}).get("Value", [""])[0]
 
         entry_record = {
             "json_entry": json_entry,
@@ -844,13 +984,17 @@ class MwlGeneratorService:
             "created_at": now if custom else (scheduled_at or now),
             "patient_id": json_entry["00100020"]["Value"][0],
             "patient_name": json_entry["00100010"]["Value"][0].get("Alphabetic", ""),
+            "patient_birth_date": dob_val,
+            "patient_sex": sex_val,
             "accession": json_entry["00080050"]["Value"][0],
             "modality": modality_val,
             "study_uid": json_entry["0020000D"]["Value"][0],
+            "study_date": study_date_val,
+            "study_time": study_time_val,
             "study_description": study_desc_val,
             "series_uid": custom_suid or generate_series_uid(json_entry["0020000D"]["Value"][0], custom_sn),
             "series_number": int(custom_sn),
-            "series_description": custom_sdesc
+            "series_description": series_description
             or (
                 selected_template_series.series_description
                 if selected_template_series and selected_template_series.series_description
@@ -863,6 +1007,44 @@ class MwlGeneratorService:
             "num_instances": num_instances,
             "transfer_syntax": (custom or {}).get("transfer_syntax") or (custom or {}).get("transferSyntax"),
         }
+        return entry_record
+
+    def register_synthea_entry(self, entry_record: dict[str, Any]) -> dict[str, Any]:
+        """Register or update a patient-study-series entry record in _synthea_entries."""
+        s_uid = str(entry_record.get("study_uid", ""))
+        ser_uid = str(entry_record.get("series_uid", ""))
+        for idx, existing in enumerate(self._synthea_entries):
+            if str(existing.get("study_uid", "")) == s_uid and str(existing.get("series_uid", "")) == ser_uid:
+                self._synthea_entries[idx] = entry_record
+                return entry_record
+        self._synthea_entries.append(entry_record)
+        return entry_record
+
+    def register_study_series_entry(
+        self, custom: dict[str, Any], scheduled_at: datetime | None = None
+    ) -> dict[str, Any] | None:
+        """Build a patient-study-series record (without US gender rejection) and register it in _synthea_entries."""
+        record = self.build_study_series_record(
+            custom=custom,
+            scheduled_at=scheduled_at,
+            enforce_us_gender=False,
+        )
+        if record is not None:
+            self.register_synthea_entry(record)
+        return record
+
+    def add_entry(
+        self, custom: dict[str, Any] | None = None, scheduled_at: datetime | None = None
+    ) -> dict[str, Any] | None:
+        """Generate and add a new MWL entry to the active MWL list."""
+        now = datetime.now()
+        entry_record = self.build_study_series_record(
+            custom=custom,
+            scheduled_at=scheduled_at,
+            enforce_us_gender=True,
+        )
+        if entry_record is None:
+            return None
 
         self._entries.append(entry_record)
         self.purge_expired_entries(now)
@@ -882,13 +1064,20 @@ class MwlGeneratorService:
         now = datetime.now()
         window_hr = self.config.mwl_window_hr
         seeded: list[dict[str, Any]] = []
+        max_attempts = max(count * 10, 50)
+        attempts = 0
 
-        for i in range(count):
+        while len(seeded) < count and attempts < max_attempts:
+            attempts += 1
+            idx = len(seeded)
             # Spread times backwards across the window
-            offset_hours = (window_hr / count) * i
+            offset_hours = (window_hr / max(count, 1)) * idx
             sched_time = now - timedelta(hours=offset_hours)
             record = self.add_entry(scheduled_at=sched_time)
-            seeded.append(record)
+            if record is not None:
+                seeded.append(record)
+            elif not self.template_modalities and not self.dicom_templates:
+                break
 
         logger.info("seeded_mwl_entries", count=len(seeded), window_hr=window_hr)
         return seeded
@@ -919,19 +1108,25 @@ class MwlGeneratorService:
         ]
 
     def get_datasets(self) -> list[Dataset]:
-        """Get list of pydicom Dataset objects for active MWL entries."""
+        """Get the list of pydicom Dataset objects for active MWL entries."""
         self.purge_expired_entries()
         return [e["dataset"] for e in self._entries]
 
     @staticmethod
     def _matches_filter(val: Any, query: str | None) -> bool:
-        """Helper to match DICOM attribute value against query with wildcard and case insensitivity."""
+        """Helper to match DICOM attribute value against a query with wildcard and case insensitivity."""
         if not query or not str(query).strip() or str(query).strip() == "*":
             return True
         if val is None:
             return False
-        v_str = str(val).strip()
         q_str = str(query).strip()
+        # Handle multi-valued query separated by backslash (DICOM list of UIDs / values)
+        if "\\" in q_str:
+            parts = [p.strip() for p in q_str.split("\\") if p.strip()]
+            return any(MwlGeneratorService._matches_filter(val, p) for p in parts)
+        if isinstance(val, (list, tuple, set)):
+            return any(MwlGeneratorService._matches_filter(item, q_str) for item in val)
+        v_str = str(val).strip()
         if v_str == q_str:
             return True
         if "*" in q_str or "?" in q_str:
@@ -939,6 +1134,55 @@ class MwlGeneratorService:
 
             return fnmatch.fnmatch(v_str.upper(), q_str.upper())
         return v_str.upper() == q_str.upper()
+
+    @staticmethod
+    def _matches_date_filter(val: Any, query: str | None) -> bool:
+        """Match DICOM Date (DA) value against exact date, wildcard, or DICOM range (YYYYMMDD-YYYYMMDD)."""
+        if not query or not str(query).strip() or str(query).strip() == "*":
+            return True
+        if val is None:
+            return False
+        v_str = str(val).replace("-", "").strip()
+        q_str = str(query).strip()
+        if "-" in q_str and len(q_str) >= 8:
+            parts = q_str.split("-", 1)
+            start_d = parts[0].strip()
+            end_d = parts[1].strip()
+            if not v_str:
+                return False
+            if start_d and v_str < start_d:
+                return False
+            if end_d and v_str > end_d:
+                return False
+            return True
+        return MwlGeneratorService._matches_filter(v_str, q_str.replace("-", ""))
+
+    def get_all_study_series_entries(self) -> list[dict[str, Any]]:
+        """Return combined active MWL entries and Synthea patient-study-series records, deduplicated."""
+        self.purge_expired_entries()
+        combined: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str]] = set()
+
+        for e in self._entries:
+            key = (str(e.get("study_uid", "")), str(e.get("series_uid", "")))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                combined.append(e)
+
+        for e in self._synthea_entries:
+            key = (str(e.get("study_uid", "")), str(e.get("series_uid", "")))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                combined.append(e)
+
+        if self.synthea_utils is not None and getattr(self.synthea_utils, "_patient_bundles", None):
+            for e in self.synthea_utils.get_patient_study_series_records():
+                key = (str(e.get("study_uid", "")), str(e.get("series_uid", "")))
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    combined.append(e)
+
+        return combined
 
     def find_entries(
         self,
@@ -962,19 +1206,114 @@ class MwlGeneratorService:
             matched.append(e)
         return matched
 
+    def find_study_series_entries(
+        self,
+        study_uid: str | None = None,
+        series_uid: str | None = None,
+        patient_id: str | None = None,
+        patient_name: str | None = None,
+        accession: str | None = None,
+        modality: str | None = None,
+        study_date: str | None = None,
+        study_description: str | None = None,
+        series_description: str | None = None,
+        series_number: str | int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Find study/series entries across active MWL and Synthea patient-study-series records."""
+        all_entries = self.get_all_study_series_entries()
+        matched: list[dict[str, Any]] = []
+        for e in all_entries:
+            if study_uid and not self._matches_filter(e.get("study_uid"), study_uid):
+                continue
+            if series_uid and not self._matches_filter(e.get("series_uid"), series_uid):
+                continue
+            if patient_id and not self._matches_filter(e.get("patient_id"), patient_id):
+                continue
+            if patient_name and not self._matches_filter(e.get("patient_name"), patient_name):
+                continue
+            if accession and not self._matches_filter(e.get("accession"), accession):
+                continue
+            if modality and not self._matches_filter(e.get("modality"), modality):
+                continue
+            if study_date:
+                json_e = e.get("json_entry", {})
+                sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
+                e_date = e.get("study_date") or sps_seq.get("00400002", {}).get("Value", [""])[0]
+                if not self._matches_date_filter(e_date, study_date):
+                    continue
+            if study_description and not self._matches_filter(e.get("study_description"), study_description):
+                continue
+            if series_description and not self._matches_filter(e.get("series_description"), series_description):
+                continue
+            if series_number is not None and str(series_number).strip() != "":
+                if not self._matches_filter(e.get("series_number"), str(series_number)):
+                    continue
+            matched.append(e)
+        return matched
+
     @staticmethod
-    def to_study_cfind_dataset(entry: dict[str, Any]) -> Dataset:
-        """Convert MWL entry record into a DICOM Study Root C-FIND (STUDY Level) response Dataset."""
+    def to_patient_cfind_dataset(
+        entry: dict[str, Any],
+        related_entries: list[dict[str, Any]] | None = None,
+    ) -> Dataset:
+        """Convert patient/study/series entry record(s) into a DICOM Patient Level C-FIND response Dataset."""
+        ds = Dataset()
+        json_e = entry.get("json_entry", {})
+
+        ds.SpecificCharacterSet = "ISO_IR 192"
+        ds.QueryRetrieveLevel = "PATIENT"
+        ds.PatientName = entry.get("patient_name", "")
+        ds.PatientID = entry.get("patient_id", "")
+
+        dob = entry.get("patient_birth_date") or entry.get("dob")
+        if not dob and "00100030" in json_e and json_e["00100030"].get("Value"):
+            dob = json_e["00100030"]["Value"][0]
+        if dob is not None:
+            ds.PatientBirthDate = str(dob)
+
+        sex = entry.get("patient_sex") or entry.get("sex")
+        if not sex and "00100040" in json_e and json_e["00100040"].get("Value"):
+            sex = json_e["00100040"]["Value"][0]
+        if sex is not None:
+            ds.PatientSex = str(sex)
+
+        entries_for_patient = related_entries if related_entries else [entry]
+        distinct_studies = {str(e.get("study_uid", "")) for e in entries_for_patient if e.get("study_uid")}
+        distinct_series = {
+            (str(e.get("study_uid", "")), str(e.get("series_uid", "")))
+            for e in entries_for_patient
+            if e.get("series_uid") or e.get("study_uid")
+        }
+        total_instances = sum(int(e.get("num_instances") or 1) for e in entries_for_patient)
+
+        ds.NumberOfPatientRelatedStudies = max(1, len(distinct_studies))
+        ds.NumberOfPatientRelatedSeries = max(1, len(distinct_series))
+        ds.NumberOfPatientRelatedInstances = max(1, total_instances)
+        return ds
+
+    @staticmethod
+    def to_study_cfind_dataset(
+        entry: dict[str, Any],
+        related_series_entries: list[dict[str, Any]] | None = None,
+    ) -> Dataset:
+        """Convert MWL/study entry record into a DICOM Study Root C-FIND (STUDY Level) response Dataset."""
         ds = Dataset()
         json_e = entry.get("json_entry", {})
 
         ds.QueryRetrieveLevel = "STUDY"
         ds.PatientName = entry.get("patient_name", "")
         ds.PatientID = entry.get("patient_id", "")
-        if "00100030" in json_e and json_e["00100030"].get("Value"):
-            ds.PatientBirthDate = json_e["00100030"]["Value"][0]
-        if "00100040" in json_e and json_e["00100040"].get("Value"):
-            ds.PatientSex = json_e["00100040"]["Value"][0]
+        dob = entry.get("patient_birth_date") or entry.get("dob")
+        if not dob and "00100030" in json_e and json_e["00100030"].get("Value"):
+            dob = json_e["00100030"]["Value"][0]
+        if dob is not None:
+            ds.PatientBirthDate = str(dob)
+
+        sex = entry.get("patient_sex") or entry.get("sex")
+        if not sex and "00100040" in json_e and json_e["00100040"].get("Value"):
+            sex = json_e["00100040"]["Value"][0]
+        if sex is not None:
+            ds.PatientSex = str(sex)
 
         ds.StudyInstanceUID = entry.get("study_uid", "")
         ds.AccessionNumber = entry.get("accession", "")
@@ -1005,10 +1344,10 @@ class MwlGeneratorService:
         if read_phys:
             ds.NameOfPhysiciansReadingStudy = read_phys
 
-        # Study Date & Time from SPS sequence if available
+        # Study Date & Time from SPS sequence or entry fields
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
-        ds.StudyDate = sps_seq.get("00400002", {}).get("Value", [""])[0]
-        ds.StudyTime = sps_seq.get("00400003", {}).get("Value", [""])[0]
+        ds.StudyDate = sps_seq.get("00400002", {}).get("Value", [""])[0] or entry.get("study_date", "")
+        ds.StudyTime = sps_seq.get("00400003", {}).get("Value", [""])[0] or entry.get("study_time", "")
 
         study_desc = entry.get("study_description")
         if study_desc is None and "00081030" in json_e and json_e["00081030"].get("Value"):
@@ -1020,12 +1359,23 @@ class MwlGeneratorService:
             ds.StudyDescription = ""
 
         modality = entry.get("modality", "CT")
-        ds.ModalitiesInStudy = modality
-        ds.Modality = modality
-        ds.NumberOfStudyRelatedSeries = 1
-        ds.NumberOfStudyRelatedInstances = int(entry.get("num_instances") or 8)
+        if related_series_entries and len(related_series_entries) > 1:
+            mods: list[str] = []
+            for rel in related_series_entries:
+                m = str(rel.get("modality", "")).strip()
+                if m and m not in mods:
+                    mods.append(m)
+            ds.ModalitiesInStudy = mods if len(mods) > 1 else (mods[0] if mods else modality)
+            ds.Modality = modality
+            ds.NumberOfStudyRelatedSeries = len(related_series_entries)
+            ds.NumberOfStudyRelatedInstances = sum(int(r.get("num_instances") or 8) for r in related_series_entries)
+        else:
+            ds.ModalitiesInStudy = modality
+            ds.Modality = modality
+            ds.NumberOfStudyRelatedSeries = 1
+            ds.NumberOfStudyRelatedInstances = int(entry.get("num_instances") or 8)
 
-        # Include Series-level attributes as well so clients requesting Series fields at Study level get full info
+        # Include Series-level attributes so clients requesting Series fields at Study level get full info
         ds.SeriesInstanceUID = entry.get("series_uid", "")
         ds.SeriesNumber = int(entry.get("series_number") or 1)
         ds.SeriesDescription = entry.get("series_description") or f"{modality} Series"
@@ -1064,8 +1414,18 @@ class MwlGeneratorService:
 
         ds.AccessionNumber = entry.get("accession", "")
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
-        s_date = sps_seq.get("00400002", {}).get("Value", [""])[0] or entry.get("series_date") or ""
-        s_time = sps_seq.get("00400003", {}).get("Value", [""])[0] or entry.get("series_time") or ""
+        s_date = (
+            sps_seq.get("00400002", {}).get("Value", [""])[0]
+            or entry.get("series_date")
+            or entry.get("study_date")
+            or ""
+        )
+        s_time = (
+            sps_seq.get("00400003", {}).get("Value", [""])[0]
+            or entry.get("series_time")
+            or entry.get("study_time")
+            or ""
+        )
         if s_date:
             ds.StudyDate = s_date
             ds.SeriesDate = s_date
@@ -1094,6 +1454,13 @@ class MwlGeneratorService:
         modality = entry.get("modality", "CT")
         study_uid = entry.get("study_uid", "")
         series_uid = entry.get("series_uid") or generate_series_uid(study_uid, entry.get("series_number") or 1)
+        template_series = entry.get("template_series")
+        template_ds = entry.get("template_dataset")
+        sop_class_uid = (
+            getattr(template_series, "sop_class_uid", None)
+            or getattr(template_ds, "SOPClassUID", None)
+            or CTImageStorage
+        )
         datasets = []
         for i in range(1, num_instances + 1):
             ds = Dataset()
@@ -1103,7 +1470,7 @@ class MwlGeneratorService:
             ds.StudyInstanceUID = study_uid
             ds.SeriesInstanceUID = series_uid
             ds.SOPInstanceUID = generate_sop_instance_uid(series_uid, i)
-            ds.SOPClassUID = CTImageStorage
+            ds.SOPClassUID = sop_class_uid
             ds.InstanceNumber = i
             ds.Modality = modality
             ds.SeriesNumber = int(entry.get("series_number") or 1)
@@ -1112,7 +1479,7 @@ class MwlGeneratorService:
         return datasets
 
     def get_status(self) -> dict[str, Any]:
-        """Get current MWL generator service status and configuration."""
+        """Get the current MWL generator service status and configuration."""
 
         self.purge_expired_entries()
         now = datetime.now()
@@ -1130,7 +1497,7 @@ class MwlGeneratorService:
         }
 
     async def _auto_generation_loop(self) -> None:
-        """Async background task that generates MWL entries according to current rate."""
+        """Async background task that generates MWL entries according to the current rate."""
         logger.info("mwl_auto_generation_loop_started")
         try:
             while self._is_auto_generating:
@@ -1153,7 +1520,7 @@ class MwlGeneratorService:
             self._is_auto_generating = False
 
     def _schedule_auto_gen_task(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Schedule or reschedule the auto generation task on the provided event loop."""
+        """Schedule or reschedule the auto-generation task on the provided event loop."""
         if self._auto_gen_task and not self._auto_gen_task.done():
             self._auto_gen_task.cancel()
         self._auto_gen_task = loop.create_task(self._auto_generation_loop())

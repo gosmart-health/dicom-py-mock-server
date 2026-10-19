@@ -47,6 +47,11 @@ class AppConfig(BaseSettings):
         validation_alias=AliasChoices("GOSMART_MS_RECEIVED_DIR", "RECEIVED_DIR"),
         description="Path to store received STOW-RS DICOM files",
     )
+    csv_path: str = Field(
+        default="./csv",
+        validation_alias=AliasChoices("GOSMART_MS_CSV_PATH", "GORMART_MS_CSV_PATH", "CSV_PATH"),
+        description="Path to store C-STORE audit CSV logs",
+    )
     stow_duplicate_handling: str = Field(
         default="accept",
         validation_alias=AliasChoices("GOSMART_MS_STOW_DUPLICATE_HANDLING", "STOW_DUPLICATE_HANDLING"),

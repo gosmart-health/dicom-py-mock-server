@@ -71,7 +71,7 @@
         "requester": {
           "reference": "urn:uuid:d6e42b26-0e1f-45c5-a0c3-329b35b69038"
         },
-        "occurrenceDateTime": "2026-09-07T16:00:00",
+        "occurrenceDateTime": "2026-09-07T16:00:00Z",
         "reasonCode": [
           {
             "text": "Persistent cough evaluation"

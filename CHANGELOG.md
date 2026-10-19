@@ -8,6 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.4.0] - 2026-10-19
+
+### Added
+- **Synthea FHIR R4 Ingestion & Multi-Protocol Query Subsystem**:
+  - **Batch Bundle Ingestion (`POST /api/v1/synthea/load`)**:
+    - Validates and ingests raw JSON arrays of Synthea FHIR R4 Bundles.
+    - Implemented a two-pass ingestion strategy: Pass 1 ingests and caches prerequisite hospital (`Organization`) and practitioner (`Practitioner`) bundles; Pass 2 validates prerequisite residency before processing patient bundles (`Patient` + `ImagingStudy`), emitting clear prerequisite diagnostic error messages if missing.
+    - Emits structured warnings when encountering patient bundles without supported imaging modalities.
+    - Automatically maps patient demographics, encounters, diagnostic reports, procedures, and imaging studies into active DICOM Modality Worklist (MWL) entries.
+    - Ingests and registers hierarchical DICOM models (`PatientModel`, `StudyModel`, `SeriesModel`, and Patient-Study-Series records) and synthesizes on-disk Part-10 DICOM instances via `DicomGeneratorService`.
+    - Returns an array of parsed `FhirBundle` JSON objects.
+  - **Memory-Resident Synthea Resource Query Endpoints**:
+    - `GET /api/v1/synthea/practitioner`: Retrieves cached practitioner resources.
+    - `GET /api/v1/synthea/hospitals` (with `/api/v1/hospitals` alias): Retrieves cached hospital/organization resources.
+    - `GET /api/v1/synthea/patient-bundle?patient-id=<value>`: Retrieves full cached FHIR bundle for a given patient identifier.
+    - `GET /api/v1/synthea/patients`: Lists all registered `PatientModel` records.
+    - `GET /api/v1/synthea/studies`: Lists all registered `StudyModel` records with study-level attributes and modality mapping.
+    - `GET /api/v1/synthea/series`: Lists all registered `SeriesModel` records with series numbers, descriptions, and instance counts.
+  - **Full DICOM C-FIND & DICOMweb Query Interoperability**:
+    - Registered Patient-Study-Series records in `MwlGeneratorService` allow all loaded Synthea studies and series (including male `US` echocardiography studies) to be queried via DICOM C-FIND across `PATIENT`, `STUDY`, `SERIES`, and `IMAGE` levels.
+    - Exposed all loaded Synthea studies and series to DICOMweb QIDO-RS (`/dicomweb/studies`, `/dicomweb/series`, `/dicomweb/instances`), WADO-RS (`/metadata`, `/rendered`), and WADO-URI services.
+    - Extended `MwlGeneratorService.to_patient_cfind_dataset()` to populate patient-level aggregate tags `(0020,1200) NumberOfPatientRelatedStudies`, `(0020,1202) NumberOfPatientRelatedSeries`, and `(0020,1204) NumberOfPatientRelatedInstances`.
+    - Extended `MwlGeneratorService.to_study_cfind_dataset()` to dynamically derive multi-modality `ModalitiesInStudy` lists, `NumberOfStudyRelatedSeries`, and `NumberOfStudyRelatedInstances` across multiple series in a study.
+  - **Synthea FHIR Loader CLI Utility (`util/synthea_loader.py` & `synthea_loader.sh`)**:
+    - Created developer CLI tool to scan a local Synthea output directory (`--folder`, default `tests/synthea/fhir`).
+    - Automatically discovers and sorts hospital and practitioner prerequisite bundles before ingesting patient bundles.
+    - Supports sending chunks of patient bundles to a live mock server (`--url http://127.0.0.1:8000`, `--chunk-size 25`) or falling back to an in-process Starlette `TestClient` application.
+    - Provides a bash wrapper `synthea_loader.sh` for easy one-step invocation.
+  - **Sample Synthea Data & Interactive Exploration Notebooks**:
+    - Added 25 Synthea FHIR patient bundles and hospital/practitioner test fixtures under `tests/synthea/fhir`.
+    - Added `notebooks/01_dicom_mock_server_quickstart.ipynb` and `notebooks/02_synthea_explorations.ipynb` covering quickstart workflows, Synthea FHIR navigation, DICOM generation, and search queries.
+- **Official HL7 `fhir.resources` Integration**:
+  - Integrated `fhir-resources>=8.3.0` dependency for strongly typed HL7 FHIR R4B resource modeling and serialization.
+  - Refactored `src/dicom_py_mock_server/models/fhir_models.py` and `fhir_parser.py` to leverage native Pydantic types (`Bundle`, `Patient`, `ServiceRequest`, `Practitioner`, `Organization`, `ImagingStudy`).
+- **Template Transfer Syntax & Modality Support**:
+  - Added sample DICOM template series under `templates/sample_cr` (Computed Radiography) and `templates/sample_us` (Ultrasound).
+  - Preserved native template Transfer Syntax UIDs (including CR `ExplicitVRLittleEndian` and US Multi-frame `JPEGBaselineProcess1`) in non-synthetic template mode without unnecessary trans-conversion.
+  - Updated SCU C-MOVE and C-STORE association negotiation in `ScpService` to propose each dataset's originally encoded Transfer Syntax UID.
+
+### Changed
+- **Requirements & Design Documentation**:
+  - Updated Software Requirements Specification (`docs/design/gsms_000_software_requirements_spec.md`) with functional requirements `REQ-FUN-040` (Synthea FHIR R4 Bundle Ingestion & Generation) and `REQ-FUN-041` (Synthea Memory-Resident Query Endpoints).
+  - Updated System Design Specification (`docs/design/gsms_010_system_design_specification.md`) with Section 3.14 (Synthea FHIR Subsystem).
+  - Updated Requirements Traceability Matrix (`docs/design/gsms_040_traceability_matrix.md`) mapping `REQ-FUN-040` and `REQ-FUN-041` to unit and integration test suites.
+  - Updated Verification & Validation Plan (`docs/design/gsms_030_verification_and_validation_plan.md`) to include Synthea loader and API verification procedures.
+  - Updated DICOM Conformance Statement (`docs/dicom_conformance_statement.md`) to version 0.4.0 (revision 1.4.0).
+  - Updated `README.md` with Synthea FHIR Loader instructions and exploration notebook documentation.
+
 ## [0.3.5] - 2026-10-02
 
 ### Added

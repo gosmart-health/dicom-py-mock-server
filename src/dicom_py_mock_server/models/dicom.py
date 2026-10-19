@@ -380,3 +380,13 @@ class AutoPushResponse(BaseModel):
     )
     is_auto_pushing: bool = False
     ae_title: str = Field(default="", description="Backward-compatibility alias for target_ae_title")
+
+
+class SyntheaLoadRequest(BaseModel):
+    """Request schema for loading Synthea FHIR R4 bundle URIs."""
+
+    uris: list[str] = Field(
+        ...,
+        min_length=1,
+        description="Array of file:// resource location URIs pointing to Synthea FHIR R4 JSON bundles",
+    )
