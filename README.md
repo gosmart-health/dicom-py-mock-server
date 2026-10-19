@@ -467,6 +467,18 @@ curl "http://127.0.0.1:8000/api/v1/synthea/hospitals"
 curl "http://127.0.0.1:8000/api/v1/synthea/patient-bundle?patient-id=S99916806"
 ```
 
+### Synthea FHIR Loader CLI Utility (`synthea_loader.py`)
+
+A developer utility is provided in `util/synthea_loader.py` to scan a directory of Synthea-generated FHIR JSON bundles and ingest them into the mock server:
+
+```bash
+# Ingest Synthea bundles into the running mock server (falls back to in-process app if live server is unreachable):
+python util/synthea_loader.py --folder tests/synthea/fhir
+
+# Or specify a custom server URL and batch chunk size (default: 25 bundles per request):
+python util/synthea_loader.py --folder path/to/synthea/fhir --url http://127.0.0.1:8000 --chunk-size 25
+```
+
 ---
 
 ## Automated Study Push (`/api/v1/scp/auto-push`)
