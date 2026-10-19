@@ -2,8 +2,8 @@
 
 **Document Title:** DICOM Conformance Statement for GoSmart.Health DICOM Mock Server  
 **Software Name:** `dicom-py-mock-server`  
-**Software Release:** Version 0.3.5  
-**Document Release Date:** 2026-10-02  
+**Software Release:** Version 0.4.0  
+**Document Release Date:** 2026-10-19  
 **Standard Compliance:** NEMA PS 3.1 – PS 3.22 (DICOM Standard 2024c / 2025)  
 **Document Identifier:** DCS-GSMS-031  
 
@@ -144,7 +144,7 @@ The server supports negotiation and automatic on-the-fly transcoding across the 
 
 | Document Version | Date | Software Version | Author | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| **1.4.0** | 2026-10-19 | v0.3.6 | GoSmart.Health Engineering Team | Preserved native template Transfer Syntax UIDs without trans-conversion in non-synthetic template mode and updated SCU C-MOVE / C-STORE association negotiation to propose each dataset's originally encoded Transfer Syntax UID (including CR Explicit VR Little Endian and US Multi-frame JPEG Baseline). |
+| **1.4.0** | 2026-10-19 | v0.4.0 | GoSmart.Health Engineering Team | Added Synthea FHIR R4 Bundle ingestion, Patient/Study/Series generation, C-FIND and DICOMweb query support, and preserved native template Transfer Syntax UIDs without trans-conversion in non-synthetic template mode. |
 | **1.3.0** | 2026-10-02 | v0.3.5 | GoSmart.Health Engineering Team | Added automated study push (auto-push) C-STORE transmission with configurable target AE schema, intervalSec, targetHost, targetPort, dedicated background thread worker execution, and MCP auto_push tool integration. |
 | **1.2.0** | 2026-09-24 | v0.3.4 | GoSmart.Health Engineering Team | Added Model Context Protocol (MCP) dynamic configuration management, scanning order generation, active worklist inspection and cancellation, and Docker HL7 port mapping. |
 | **1.1.0** | 2026-09-09 | v0.3.1 | GoSmart.Health Engineering Team | Added DICOMweb STOW-RS (Store Over the Web, PS 3.18) storage service supporting multipart/related and raw application/dicom ingestion, configurable duplicate SOP handling policies, and stored GSPS presentation state discovery. |
@@ -332,8 +332,8 @@ The `MOCK_SCP` Application Entity provides Standard Conformance to the following
 - Asynchronous operations window negotiation is not supported. All associations operate synchronously.
 
 ###### 4.2.1.2.4 Implementation Identifying Information
-- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.3.5`
-- Implementation Version Name: `GOSMART_MS_035`
+- Implementation Class UID: `1.2.826.0.1.3680043.9.7433.0.4.0`
+- Implementation Version Name: `GOSMART_MS_040`
 
 ##### 4.2.1.3 Association Acceptance Policy
 
