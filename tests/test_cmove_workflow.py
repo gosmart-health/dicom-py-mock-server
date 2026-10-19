@@ -412,7 +412,7 @@ def test_cstore_push_preserves_negotiated_transfer_syntax_jpeg2000_rle_jpeg_raw(
 
 
 def test_cmove_with_jpeg2000_lossless_transfer_syntax():
-    """Verify C-MOVE operation correctly transfers datasets using JPEG2000 Lossless transfer syntax."""
+    """Verify C-MOVE operation correctly transfers datasets when JPEG2000 Lossless transfer syntax is requested."""
     from pydicom.uid import JPEG2000Lossless
 
     original_syntax = config.transfer_syntax
@@ -428,6 +428,8 @@ def test_cmove_with_jpeg2000_lossless_transfer_syntax():
             "patientId": "J2K-MOVE-001",
             "modality": "CT",
             "accession": "ACC-J2K-99",
+            "num_instances": 2,
+            "transfer_syntax": "JPEG2000_LOSSLESS",
         }
     )
 
@@ -466,6 +468,125 @@ def test_cmove_with_jpeg2000_lossless_transfer_syntax():
         viewer_scp.stop()
         scp_service.stop()
         config.transfer_syntax = original_syntax
+
+
+def test_cmove_and_push_preserve_original_template_transfer_syntax_cr_and_us():
+    """Verify CR (Explicit VR Little Endian) and US (JPEG Baseline lossy multi-frame) templates
+    negotiate with their originally encoded transfer syntaxes without trans-conversion even when
+    config.transfer_syntax is JPEG2000_LOSSLESS and the peer SCP prefers JPEG2000 Lossless.
+    """
+    from pydicom.uid import (
+        ComputedRadiographyImageStorage,
+        ExplicitVRLittleEndian,
+        JPEG2000Lossless,
+        JPEGBaseline8Bit,
+        UltrasoundMultiFrameImageStorage,
+    )
+
+    from dicom_py_mock_server.services.scp import get_prioritized_transfer_syntaxes
+
+    # Verify numeric UID strings resolve to the exact preferred transfer syntax first
+    assert get_prioritized_transfer_syntaxes("1.2.840.10008.1.2.1")[0] == ExplicitVRLittleEndian
+    assert get_prioritized_transfer_syntaxes("1.2.840.10008.1.2.4.50")[0] == JPEGBaseline8Bit
+
+    original_syntax = config.transfer_syntax
+    original_synthetic = config.synthetic_mode
+    config.transfer_syntax = "JPEG2000_LOSSLESS"
+    config.synthetic_mode = False
+
+    scp_port = 11262
+    viewer_port = 11263
+
+    mwl_service = MwlGeneratorService(config)
+    cr_entry = mwl_service.add_entry(
+        custom={
+            "patientName": "CR^TEMPLATE^PATIENT",
+            "patientId": "CR-PAT-001",
+            "modality": "CR",
+            "accession": "ACC-CR-001",
+        }
+    )
+    us_entry = mwl_service.add_entry(
+        custom={
+            "patientName": "US^TEMPLATE^PATIENT",
+            "patientId": "US-PAT-001",
+            "sex": "F",
+            "modality": "US",
+            "accession": "ACC-US-001",
+        }
+    )
+
+    scp_service = DicomScpService(ae_title="ORIG_TS_SCP", port=scp_port, mwl_service=mwl_service)
+    scp_service.start()
+
+    viewer_scp = MockStorageScp(ae_title="MDICOM_MOCK", port=viewer_port)
+    viewer_scp.start()
+    config.move_destinations["MDICOM_MOCK"] = {"host": "127.0.0.1", "port": viewer_port}
+
+    try:
+        # 1. C-MOVE CR study -> must negotiate ExplicitVRLittleEndian (1.2.840.10008.1.2.1)
+        ae_move = AE(ae_title="CLIENT_SCU")
+        ae_move.add_requested_context(StudyRootQueryRetrieveInformationModelMove)
+        assoc_move = ae_move.associate("127.0.0.1", scp_port)
+        assert assoc_move.is_established
+
+        cr_query = Dataset()
+        cr_query.QueryRetrieveLevel = "STUDY"
+        cr_query.StudyInstanceUID = cr_entry["study_uid"]
+        cr_responses = list(assoc_move.send_c_move(cr_query, "MDICOM_MOCK", StudyRootQueryRetrieveInformationModelMove))
+        assoc_move.release()
+        assert any(s and s.Status in (0x0000, 0xFF00) for s, _ in cr_responses)
+
+        time.sleep(0.3)
+        assert len(viewer_scp.received_datasets) == 1
+        cr_ds = viewer_scp.received_datasets[0]
+        assert cr_ds.SOPClassUID == ComputedRadiographyImageStorage
+        assert cr_ds.file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
+        assert cr_ds.file_meta.TransferSyntaxUID != JPEG2000Lossless
+        assert cr_ds.Modality == "CR"
+
+        # 2. C-MOVE US study -> must negotiate JPEGBaseline8Bit (1.2.840.10008.1.2.4.50) without trans-conversion
+        viewer_scp.received_datasets.clear()
+        assoc_move_us = ae_move.associate("127.0.0.1", scp_port)
+        assert assoc_move_us.is_established
+
+        us_query = Dataset()
+        us_query.QueryRetrieveLevel = "STUDY"
+        us_query.StudyInstanceUID = us_entry["study_uid"]
+        us_responses = list(
+            assoc_move_us.send_c_move(us_query, "MDICOM_MOCK", StudyRootQueryRetrieveInformationModelMove)
+        )
+        assoc_move_us.release()
+        assert any(s and s.Status in (0x0000, 0xFF00) for s, _ in us_responses)
+
+        time.sleep(0.3)
+        assert len(viewer_scp.received_datasets) == 1
+        us_ds = viewer_scp.received_datasets[0]
+        assert us_ds.SOPClassUID == UltrasoundMultiFrameImageStorage
+        assert us_ds.file_meta.TransferSyntaxUID == JPEGBaseline8Bit
+        assert us_ds.file_meta.TransferSyntaxUID != JPEG2000Lossless
+        assert us_ds.Modality == "US"
+        assert int(us_ds.NumberOfFrames) == 28
+        assert us_ds.PhotometricInterpretation == "YBR_FULL_422"
+        assert int(us_ds.SamplesPerPixel) == 3
+
+        # 3. Direct push_study_to_destination for US study -> must also preserve JPEGBaseline8Bit
+        viewer_scp.received_datasets.clear()
+        push_res = scp_service.push_study_to_destination(
+            target_ae_title="MDICOM_MOCK",
+            target_host="127.0.0.1",
+            target_port=viewer_port,
+            study_uid=us_entry["study_uid"],
+        )
+        assert push_res["success"] is True
+        assert push_res["instances_sent"] == 1
+        assert len(viewer_scp.received_datasets) == 1
+        assert viewer_scp.received_datasets[0].file_meta.TransferSyntaxUID == JPEGBaseline8Bit
+    finally:
+        viewer_scp.stop()
+        scp_service.stop()
+        config.transfer_syntax = original_syntax
+        config.synthetic_mode = original_synthetic
 
 
 def _is_microdicom_available(host: str = "127.0.0.1", port: int = 11113) -> bool:

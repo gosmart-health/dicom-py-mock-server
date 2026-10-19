@@ -16,7 +16,8 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 > - Patient Name, Patient ID, Patient Sex, Study Date/Time, all DICOM UIDs, and pixel data are generated or replaced.
 > - **All other DICOM elements pass through "as is"**, including pre-existing private data elements, vendor attributes, and secondary metadata. Users must ensure templates contain no sensitive PHI prior to loading.
 > - A standards-compliant DICOM de-identification process is available via [GoSmart.Health DICOM RS Transformer](https://github.com/gosmart-health/dicom-rs-transformer).
-
+> - When the term `coherent` is used, it _does not mean _clinical diagnosable coherency_ of images. It delivers modality images 
+    consistent with the requested modality type. Images are either generated or repeated from template images.
 ---
 
 ## Capabilities & Features
@@ -30,9 +31,10 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 7. **High-Throughput Stress Mode**: Caches compressed frames and reuses payloads across instances to maximize retrieval benchmark throughput.
 8. **Zero-Dependency HL7 v2 MLLP Socket Listener**: Ingests raw `ORM^O01` order messages on TCP port `2575` via MLLP framing, maps demographics into MWL entries, handles order cancellations, and returns `ACK^O01` responses.
 9. **FHIR ServiceRequest & Bundle Ingestion**: REST endpoints for FHIR R4/R5 imaging order bundles (`Bundle`, `ServiceRequest`) that map demographics directly into MWL entries and handle order revocations.
-10. **Model Context Protocol (MCP) Integration**: Exposes server inspection, MWL controls, DICOM generation, and study move tools to AI agents (AGY, Claude Desktop, Cursor) over Server-Sent Events (SSE).
-11. **Automated Study Push (Auto-Push)**: Periodically generate and push DICOM studies (associated series and images) to a configured destination AE at a configured interval in seconds via C-STORE.
-12. **Interactive Jupyter Notebooks**: Pre-configured tutorials in `notebooks/` demonstrating REST API, DICOMweb (QIDO-RS / WADO-RS), and DIMSE (C-ECHO) client workflows.
+10. **Synthea FHIR R4 Bundle Ingestion & Resource Queries**: Load Synthea-generated hospital (`hospitalInformation*.json`), practitioner (`practitionerInformation*.json`), and patient FHIR R4 bundles directly from raw JSON arrays (`POST /api/v1/synthea/load`) into additive memory-resident caches, register _modality-wise_ coherent MWL entries, generate DICOM files, return parsed `FhirBundle` JSON arrays, and query memory-resident practitioners, hospitals, and patient bundles via REST `GET` endpoints.
+11. **Model Context Protocol (MCP) Integration**: Exposes server inspection, MWL controls, DICOM generation, and study move tools to AI agents (AGY, Claude Desktop, Cursor) over Server-Sent Events (SSE).
+12. **Automated Study Push (Auto-Push)**: Periodically generate and push DICOM studies (associated series and images) to a configured destination AE at a configured interval in seconds via C-STORE.
+13. **Interactive Jupyter Notebooks**: Pre-configured tutorials in `notebooks/` demonstrating REST API, DICOMweb (QIDO-RS / WADO-RS), and DIMSE (C-ECHO) client workflows.
 
 ---
 
@@ -275,12 +277,16 @@ The server supports loading multi-slice DICOM image datasets from dedicated subf
 
 ```
 templates/
-├── sample_ct/                 # Multi-slice CT series folder
+├── sample_cr/                 # Computed Radiography (CR) template (Explicit VR Little Endian)
+│   └── cr.dcm
+├── sample_ct/                 # Multi-slice CT series folder (Explicit VR Little Endian)
 │   ├── 1.2.392.200036...dcm
 │   └── ... (10 slices)
-└── sample_mr/                 # Multi-slice MR series folder
-    ├── IM_0001
-    └── ... (10 slices)
+├── sample_mr/                 # Multi-slice MR series folder (Explicit VR Little Endian)
+│   ├── IM_0001
+│   └── ... (10 slices)
+└── sample_us/                 # Multi-frame Ultrasound (US) template (JPEG Baseline Process 1)
+    └── us.dcm
 ```
 
 ### 1. Template Subfolder Rules & Modality Purity
@@ -292,9 +298,9 @@ templates/
 
 ### 2. Non-Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE=false`, Default)
 - **Exact Slice Delivery**: The server delivers the complete DICOM series for the exact slice count present in the selected template series.
-- **Round-Robin Template Selection**: Available modalities are selected randomly. When multiple template series exist for a modality (e.g. two CT series or multiple MR series), the server sequentially cycles through them in round-robin order for subsequent MWL entries.
-- **Pixel Data Preservation & No Burn-In**: Original pixel data and geometry from each slice are preserved untouched without burned-in annotations.
-- **Transfer Syntax Transcoding**: If the requested transfer syntax differs from the template series, slices are transcoded on-the-fly without altering image pixels.
+- **Round-Robin Modality & Template Selection**: Available modalities (`CR`, `CT`, `MR`, `US`, etc.) are selected in round-robin order so every loaded modality is deterministically included in the Modality Worklist. When multiple template series exist for a modality (e.g. two CT series or multiple MR series), the server sequentially cycles through them in round-robin order for subsequent MWL entries.
+- **US Modality Gender Sensitivity (`PatientSex == 'F'`)**: Specific to the `US` modality, when the loaded US template dataset has `PatientSex (0010,0040)` set to `'F'` (e.g., OB ultrasound in `templates/sample_us/us.dcm`), an MWL entry is only generated if the MWL patient gender is `'F'`; if the MWL patient gender is not `'F'`, the MWL entry is skipped (`None`).
+- **Pixel Data & Native Transfer Syntax Preservation (No Trans-Conversion)**: Original pixel data, geometry, and native `TransferSyntaxUID` from each template slice are preserved untouched without burned-in annotations or trans-conversion. Outgoing DIMSE `C-MOVE` and `C-STORE` associations negotiate Presentation Contexts using the template's originally encoded `TransferSyntaxUID` (e.g., `Explicit VR Little Endian` for `CR`/`CT`/`MR` and `JPEG Baseline (Process 1)` for `US`), unless an explicit `transfer_syntax` override is requested.
 
 ### 3. Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE=true`)
 - **Configurable Slice Ranges**: Honors `GOSMART_MS_MIN_SLICES` and `GOSMART_MS_MAX_SLICES` (or custom per-request slice counts).
@@ -409,6 +415,56 @@ A developer utility script and sample bundle are included in the `util/` folder:
 
 # Or specify a custom bundle JSON and endpoint URL:
 ./util/push_fhir.sh path/to/order_bundle.json http://127.0.0.1:8000/api/v1/fhir_service_request
+```
+
+---
+
+## Synthea FHIR R4 Bundle Ingestion & Resource Queries (`/api/v1/synthea/*`)
+
+The server supports loading Synthea-generated FHIR R4 hospital (`hospitalInformation*.json`), practitioner (`practitionerInformation*.json`), and patient bundles from raw JSON arrays pushed directly to the API, keeping them memory-resident and additive across the lifecycle of the application. When patient bundles containing supported `ImagingStudy` modalities (`CT`, `US`, `CR`) are loaded, `SyntheaUtils` extracts and maintains correlated lists of DICOM `PatientModel`, `StudyModel`, and `SeriesModel` objects alongside Modality Worklist (MWL) entries and on-disk DICOM instances so that all patients, studies, series, and instances are immediately discoverable and retrievable via:
+- **DICOM DIMSE C-FIND** (`PatientRootQueryRetrieveInformationModelFind` and `StudyRootQueryRetrieveInformationModelFind` at `PATIENT`, `STUDY`, `SERIES`, and `IMAGE` levels) and **C-MOVE**
+- **DICOMweb QIDO-RS & WADO-RS** (`/dicomweb/studies`, `/dicomweb/series`, `/dicomweb/instances`, `/dicomweb/studies/{uid}/metadata`, `/dicomweb/studies/{uid}`)
+- **Synthea REST Query Endpoints** (`/api/v1/synthea/patients`, `/api/v1/synthea/studies`, `/api/v1/synthea/series`)
+
+### Lifecycle & Prerequisite Rules
+1. **Raw JSON Array Ingestion**: The API accepts raw JSON arrays containing parsed FHIR R4 Bundle objects (or single bundle objects).
+2. **Additive In-Memory Residency**: Hospital, practitioner, and patient bundles (plus derived Patient, Study, and Series records) are cached additively in `SyntheaUtils` with deduplication across incremental `POST /api/v1/synthea/load` calls.
+3. **Hospital & Practitioner Prerequisite**: Hospital resources and practitioner resources must exist in the application lifecycle before patient bundles can be processed. If a patient bundle is sent without hospital resources loaded, it returns HTTP `400` with `"Hospital resources must be sent first."`. If practitioner resources are missing, it returns HTTP `400` with `"Practitioner resources must be sent first."`.
+4. **Non-Imaging Patient Bundles**: Valid patient bundles that do not contain an `ImagingStudy` matching the configured modalities log a warning (`synthea_bundle_no_supported_imaging_study`) and continue processing without failing the request.
+
+### Endpoints
+
+| Method & Endpoint | Supported Aliases | Description |
+| :--- | :--- | :--- |
+| `POST /api/v1/synthea/load` | `POST /api/v1/syntha/load` | Ingest an array of raw Synthea FHIR R4 JSON bundles (`[ { ... }, ... ]`), register Patient/Study/Series records and MWL entries, generate DICOM files, and return an array of parsed `FhirBundle` JSON objects. |
+| `GET /api/v1/synthea/patients` | - | List memory-resident DICOM `PatientModel` records extracted from Synthea bundles (optional `?patient-id=` or `?patient-name=` filter). |
+| `GET /api/v1/synthea/studies` | - | List memory-resident DICOM `StudyModel` records extracted from Synthea bundles (optional `?patient-id=`, `?study-uid=`, or `?accession=` filter). |
+| `GET /api/v1/synthea/series` | - | List memory-resident DICOM `SeriesModel` records extracted from Synthea bundles (optional `?study-uid=`, `?series-uid=`, or `?modality=` filter). |
+| `GET /api/v1/synthea/practitioner` | `GET /api/v1/synthea/practitioners` | List memory-resident `Practitioner` resources (optional `?reference=<id_or_npi>` filter). |
+| `GET /api/v1/synthea/hospitals` | `GET /api/v1/hospitals`, `GET /api/vi/hospitals` | List memory-resident `Organization` (hospital) resources (optional `?reference=<id>` filter). |
+| `GET /api/v1/synthea/patient-bundle` | `GET /api/v1/syntha/patient-bundle` | Retrieve a memory-resident patient `Bundle` by `?patient-id=<value>` (returns HTTP `404` if not found). |
+
+### Example Synthea Workflow
+```bash
+# 1. Load hospital and practitioner FHIR R4 bundles first
+curl -X POST "http://127.0.0.1:8000/api/v1/synthea/load" \
+     -H "Content-Type: application/json" \
+     -d "[ $(cat path/to/hospitalInformation.json), $(cat path/to/practitionerInformation.json) ]"
+
+# 2. Ingest patient bundle JSON
+curl -X POST "http://127.0.0.1:8000/api/v1/synthea/load" \
+     -H "Content-Type: application/json" \
+     -d "[ $(cat path/to/patientBundle.json) ]"
+
+# 3. Query memory-resident patients, studies, series, practitioners, and hospitals
+curl "http://127.0.0.1:8000/api/v1/synthea/patients"
+curl "http://127.0.0.1:8000/api/v1/synthea/studies?patient-id=S99916806"
+curl "http://127.0.0.1:8000/api/v1/synthea/series?modality=US"
+curl "http://127.0.0.1:8000/api/v1/synthea/practitioner"
+curl "http://127.0.0.1:8000/api/v1/synthea/hospitals"
+
+# 4. Retrieve a loaded patient FHIR Bundle by patient-id
+curl "http://127.0.0.1:8000/api/v1/synthea/patient-bundle?patient-id=S99916806"
 ```
 
 ---

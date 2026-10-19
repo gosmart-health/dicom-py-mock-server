@@ -212,14 +212,21 @@ class DicomWebService:
         study_datasets: list[Dataset] = []
         seen_study_uids: set[str] = set()
 
-        # 1. Collect from active MWL generator entries
+        # 1. Collect from active MWL generator and Synthea study/series entries
         if self.mwl_service:
-            self.mwl_service.purge_expired_entries()
-            for entry in self.mwl_service._entries:
-                study_ds = self.mwl_service.to_study_cfind_dataset(entry)
-                study_uid = str(getattr(study_ds, "StudyInstanceUID", ""))
+            all_entries = self.mwl_service.get_all_study_series_entries()
+            entries_by_study: dict[str, list[dict[str, Any]]] = {}
+            for entry in all_entries:
+                st_uid = str(entry.get("study_uid", ""))
+                if st_uid:
+                    entries_by_study.setdefault(st_uid, []).append(entry)
+            for entry in all_entries:
+                study_uid = str(entry.get("study_uid", ""))
                 if study_uid and study_uid not in seen_study_uids:
                     seen_study_uids.add(study_uid)
+                    study_ds = self.mwl_service.to_study_cfind_dataset(
+                        entry, related_series_entries=entries_by_study.get(study_uid)
+                    )
                     study_datasets.append(study_ds)
 
         # 2. Collect from disk storage
@@ -269,13 +276,16 @@ class DicomWebService:
                 continue
             if study_uid_q and not self._matches_filter(getattr(ds, "StudyInstanceUID", None), study_uid_q):
                 continue
-            if study_date and not self._matches_filter(getattr(ds, "StudyDate", None), study_date):
+            if study_date and not MwlGeneratorService._matches_date_filter(getattr(ds, "StudyDate", None), study_date):
                 continue
             if study_desc and not self._matches_filter(getattr(ds, "StudyDescription", None), study_desc):
                 continue
             if modalities:
                 ds_mod = getattr(ds, "ModalitiesInStudy", None) or getattr(ds, "Modality", None)
-                if not self._matches_filter(ds_mod, modalities):
+                if isinstance(ds_mod, (list, tuple)) or hasattr(ds_mod, "__iter__") and not isinstance(ds_mod, str):
+                    if not any(self._matches_filter(m, modalities) for m in ds_mod):
+                        continue
+                elif not self._matches_filter(ds_mod, modalities):
                     continue
             matched.append(ds)
 
@@ -340,13 +350,16 @@ class DicomWebService:
         series_datasets: list[Dataset] = []
         seen_series_uids: set[str] = set()
 
-        # 1. Collect from active MWL generator entries
+        # 1. Collect from active MWL generator and Synthea study/series entries
         if self.mwl_service:
-            self.mwl_service.purge_expired_entries()
-            for entry in self.mwl_service._entries:
+            for entry in self.mwl_service.get_all_study_series_entries():
                 if study_uid and not self._matches_filter(entry.get("study_uid"), study_uid):
                     continue
                 series_ds = self.mwl_service.to_series_cfind_dataset(entry)
+                if entry.get("patient_id"):
+                    series_ds.PatientID = entry.get("patient_id")
+                if entry.get("patient_name"):
+                    series_ds.PatientName = entry.get("patient_name")
                 s_uid = str(getattr(series_ds, "SeriesInstanceUID", ""))
                 if s_uid and s_uid not in seen_series_uids:
                     seen_series_uids.add(s_uid)
@@ -373,6 +386,15 @@ class DicomWebService:
         # Apply filtering
         modality = query_params.get("Modality") or query_params.get("modality")
         series_uid_q = query_params.get("SeriesInstanceUID") or query_params.get("seriesInstanceUID")
+        study_uid_q = (
+            query_params.get("StudyInstanceUID")
+            or query_params.get("studyInstanceUID")
+            or query_params.get("study_uid")
+        )
+        patient_id_q = query_params.get("PatientID") or query_params.get("patientID") or query_params.get("patient_id")
+        patient_name_q = (
+            query_params.get("PatientName") or query_params.get("patientName") or query_params.get("patient_name")
+        )
         series_desc = query_params.get("SeriesDescription") or query_params.get("seriesDescription")
         series_num = query_params.get("SeriesNumber") or query_params.get("seriesNumber")
 
@@ -381,6 +403,12 @@ class DicomWebService:
             if modality and not self._matches_filter(getattr(ds, "Modality", None), modality):
                 continue
             if series_uid_q and not self._matches_filter(getattr(ds, "SeriesInstanceUID", None), series_uid_q):
+                continue
+            if study_uid_q and not self._matches_filter(getattr(ds, "StudyInstanceUID", None), study_uid_q):
+                continue
+            if patient_id_q and not self._matches_filter(getattr(ds, "PatientID", None), patient_id_q):
+                continue
+            if patient_name_q and not self._matches_filter(getattr(ds, "PatientName", None), patient_name_q):
                 continue
             if series_desc and not self._matches_filter(getattr(ds, "SeriesDescription", None), series_desc):
                 continue
@@ -490,10 +518,9 @@ class DicomWebService:
         instance_datasets: list[Dataset] = []
         seen_sop_uids: set[str] = set()
 
-        # 1. Collect from active MWL generator entries
+        # 1. Collect from active MWL generator and Synthea study/series entries
         if self.mwl_service:
-            self.mwl_service.purge_expired_entries()
-            for entry in self.mwl_service._entries:
+            for entry in self.mwl_service.get_all_study_series_entries():
                 if study_uid and not self._matches_filter(entry.get("study_uid"), study_uid):
                     continue
                 if series_uid and not self._matches_filter(entry.get("series_uid"), series_uid):
@@ -609,11 +636,28 @@ class DicomWebService:
         """
         is_stress = stress if stress is not None else getattr(config, "stress", False)
 
+        default_entry_ts: str | None = None
+        if self.mwl_service:
+            matched_for_ts = self.mwl_service.find_study_series_entries(study_uid=study_uid)
+            if matched_for_ts:
+                first_entry = matched_for_ts[0]
+                default_entry_ts = first_entry.get("transfer_syntax")
+                if not default_entry_ts and not getattr(config, "synthetic_mode", False):
+                    ts_series = first_entry.get("template_series")
+                    ts_ds = first_entry.get("template_dataset")
+                    default_entry_ts = getattr(ts_series, "transfer_syntax", None) or (
+                        str(getattr(getattr(ts_ds, "file_meta", None), "TransferSyntaxUID", "")) or None
+                    )
+
         if is_stress:
             if study_uid in self._study_transfer_syntaxes:
                 effective_ts = self._study_transfer_syntaxes[study_uid]
             else:
-                effective_ts = requested_transfer_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
+                effective_ts = (
+                    requested_transfer_syntax
+                    or default_entry_ts
+                    or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
+                )
                 self._study_transfer_syntaxes[study_uid] = effective_ts
 
             if study_uid in self._stress_study_cache:
@@ -625,13 +669,7 @@ class DicomWebService:
             effective_ts = requested_transfer_syntax
 
         # Determine canonical transfer syntax UID for cache key
-        lookup_ts = effective_ts
-        if not lookup_ts and self.mwl_service:
-            matched_entries = self.mwl_service.find_entries(study_uid=study_uid)
-            if matched_entries and matched_entries[0].get("transfer_syntax"):
-                lookup_ts = matched_entries[0].get("transfer_syntax")
-        if not lookup_ts:
-            lookup_ts = getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
+        lookup_ts = effective_ts or default_entry_ts or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
 
         target_ts_uid = str(resolve_transfer_syntax(lookup_ts))
         cache_key = (str(study_uid), target_ts_uid, is_stress)
@@ -660,9 +698,9 @@ class DicomWebService:
 
         datasets: list[Dataset] = []
 
-        # 1. Search in MWL active entries
+        # 1. Search in MWL and Synthea study/series entries
         if self.mwl_service:
-            matched_entries = self.mwl_service.find_entries(study_uid=study_uid)
+            matched_entries = self.mwl_service.find_study_series_entries(study_uid=study_uid)
             for entry in matched_entries:
                 entry_instances = num_instances or entry.get("num_instances")
                 inst_list = DicomGeneratorService.create_instances_from_mwl(

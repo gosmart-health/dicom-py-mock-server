@@ -27,7 +27,10 @@ from pynetdicom.sop_class import (
 
 from dicom_py_mock_server.config import config
 from dicom_py_mock_server.models.dicom import ScpStatusResponse
-from dicom_py_mock_server.services.generator import DicomGeneratorService
+from dicom_py_mock_server.services.generator import (
+    DicomGeneratorService,
+    resolve_transfer_syntax,
+)
 from dicom_py_mock_server.services.uid_generator import generate_dicom_uid
 
 logger = structlog.get_logger(__name__)
@@ -35,21 +38,8 @@ logger = structlog.get_logger(__name__)
 
 def get_prioritized_transfer_syntaxes(preferred_syntax: str | None = None) -> list[Any]:
     """Get list of supported transfer syntaxes ordered with the preferred syntax first."""
-    pref = (preferred_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).upper().strip()
-
-    pref_uid = None
-    if "JPEG2000_LOSSY" in pref:
-        pref_uid = JPEG2000
-    elif "JPEG2000" in pref:
-        pref_uid = JPEG2000Lossless
-    elif "JPEG" in pref:
-        pref_uid = JPEGBaseline8Bit
-    elif "RLE" in pref:
-        pref_uid = RLELossless
-    elif "RAW" in pref or "EXPLICIT" in pref:
-        pref_uid = ExplicitVRLittleEndian
-    elif "IMPLICIT" in pref:
-        pref_uid = ImplicitVRLittleEndian
+    raw_pref = str(preferred_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")).strip()
+    pref = raw_pref.upper()
 
     all_syntaxes = [
         JPEG2000Lossless,
@@ -60,6 +50,30 @@ def get_prioritized_transfer_syntaxes(preferred_syntax: str | None = None) -> li
         ImplicitVRLittleEndian,
     ]
 
+    pref_uid = None
+    for ts in all_syntaxes:
+        if raw_pref == str(ts):
+            pref_uid = ts
+            break
+
+    if pref_uid is None:
+        if "JPEG2000_LOSSY" in pref:
+            pref_uid = JPEG2000
+        elif "JPEG2000" in pref:
+            pref_uid = JPEG2000Lossless
+        elif "JPEG" in pref:
+            pref_uid = JPEGBaseline8Bit
+        elif "RLE" in pref:
+            pref_uid = RLELossless
+        elif "RAW" in pref or "EXPLICIT" in pref:
+            pref_uid = ExplicitVRLittleEndian
+        elif "IMPLICIT" in pref:
+            pref_uid = ImplicitVRLittleEndian
+        else:
+            resolved = resolve_transfer_syntax(raw_pref)
+            if resolved in all_syntaxes:
+                pref_uid = resolved
+
     if pref_uid and pref_uid in all_syntaxes:
         return [pref_uid] + [ts for ts in all_syntaxes if ts != pref_uid]
     return all_syntaxes
@@ -68,19 +82,70 @@ def get_prioritized_transfer_syntaxes(preferred_syntax: str | None = None) -> li
 SUPPORTED_TRANSFER_SYNTAXES = get_prioritized_transfer_syntaxes()
 
 
+def build_storage_contexts_for_datasets(
+    datasets: list[Dataset] | None = None,
+    preferred_syntax: str | None = None,
+) -> list[Any]:
+    """Build Storage presentation contexts proposing the exact transfer syntax of the datasets."""
+    sop_to_syntaxes: dict[str, list[Any]] = {}
+    first_ds_ts = None
+
+    if datasets:
+        for ds in datasets:
+            sop_uid = str(getattr(ds, "SOPClassUID", ""))
+            ds_ts = getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None)
+            if not ds_ts:
+                ds_ts = ImplicitVRLittleEndian if getattr(ds, "is_implicit_VR", True) else ExplicitVRLittleEndian
+            if first_ds_ts is None:
+                first_ds_ts = ds_ts
+            if sop_uid:
+                ts_list = sop_to_syntaxes.setdefault(sop_uid, [])
+                if ds_ts not in ts_list:
+                    ts_list.append(ds_ts)
+
+    if preferred_syntax is not None:
+        default_ts = get_prioritized_transfer_syntaxes(preferred_syntax)[0]
+    elif first_ds_ts is not None:
+        default_ts = first_ds_ts
+    else:
+        default_ts = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
+
+    contexts: list[Any] = []
+    seen_sops: set[str] = set()
+
+    for cx in StoragePresentationContexts:
+        abs_str = str(cx.abstract_syntax)
+        seen_sops.add(abs_str)
+        if preferred_syntax is None and abs_str in sop_to_syntaxes:
+            contexts.append(build_context(cx.abstract_syntax, sop_to_syntaxes[abs_str]))
+        else:
+            contexts.append(build_context(cx.abstract_syntax, [default_ts]))
+
+    for sop_str, ts_list in sop_to_syntaxes.items():
+        if sop_str not in seen_sops:
+            if len(contexts) >= 128:
+                contexts.pop()
+            contexts.insert(0, build_context(sop_str, [default_ts] if preferred_syntax is not None else ts_list))
+
+    return contexts
+
+
 def adapt_dataset_for_accepted_context(ds: Any, accepted_contexts: list[Any]) -> Any:
     """Adapt dataset transfer syntax to match the negotiated context accepted by the peer."""
     sop_class = getattr(ds, "SOPClassUID", None)
     if not sop_class:
         return ds
 
+    ds_ts = getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None)
     accepted_ts = None
     for cx in accepted_contexts:
         if cx.abstract_syntax == sop_class and cx.transfer_syntax:
+            if ds_ts and ds_ts in cx.transfer_syntax:
+                return ds
             accepted_ts = cx.transfer_syntax[0]
             break
 
-    if accepted_ts and getattr(ds.file_meta, "TransferSyntaxUID", None) != accepted_ts:
+    if accepted_ts and ds_ts != accepted_ts:
         ds = DicomGeneratorService.apply_transfer_syntax(ds, str(accepted_ts))
     return ds
 
@@ -160,68 +225,119 @@ class DicomScpService:
             yield (0x0000, None)
         else:
             # Study Root / Patient Root C-FIND
-            study_uid = (
-                str(identifier.get("StudyInstanceUID", ""))
-                if identifier and "StudyInstanceUID" in identifier and identifier.StudyInstanceUID
-                else None
-            )
-            series_uid = (
-                str(identifier.get("SeriesInstanceUID", ""))
-                if identifier and "SeriesInstanceUID" in identifier and identifier.SeriesInstanceUID
-                else None
-            )
-            patient_id = (
-                str(identifier.get("PatientID", ""))
-                if identifier and "PatientID" in identifier and identifier.PatientID
-                else None
-            )
-            accession = (
-                str(identifier.get("AccessionNumber", ""))
-                if identifier and "AccessionNumber" in identifier and identifier.AccessionNumber
-                else None
-            )
+            def _get_tag_str(tag_name: str) -> str | None:
+                if identifier and tag_name in identifier:
+                    val = getattr(identifier, tag_name, None)
+                    if val is not None and str(val).strip():
+                        return str(val).strip()
+                return None
+
+            study_uid = _get_tag_str("StudyInstanceUID")
+            series_uid = _get_tag_str("SeriesInstanceUID")
+            sop_uid_filter = _get_tag_str("SOPInstanceUID")
+            patient_id = _get_tag_str("PatientID")
+            patient_name = _get_tag_str("PatientName")
+            accession = _get_tag_str("AccessionNumber")
+            study_date = _get_tag_str("StudyDate")
+            modality = _get_tag_str("Modality") or _get_tag_str("ModalitiesInStudy")
+            study_description = _get_tag_str("StudyDescription")
+            series_description = _get_tag_str("SeriesDescription")
+            series_number = _get_tag_str("SeriesNumber")
 
             qr_level = "STUDY"
             if identifier and "QueryRetrieveLevel" in identifier and identifier.QueryRetrieveLevel:
                 qr_level = str(identifier.QueryRetrieveLevel).strip().upper()
+            elif sop_class == str(PatientRootQueryRetrieveInformationModelFind) and not study_uid and not series_uid:
+                # Default to STUDY if not specified, unless only patient keys are present
+                qr_level = "STUDY"
 
-            matched_entries = self.mwl_service.find_entries(
-                study_uid=study_uid, series_uid=series_uid, patient_id=patient_id, accession=accession
+            matched_entries = self.mwl_service.find_study_series_entries(
+                study_uid=study_uid,
+                series_uid=series_uid,
+                patient_id=patient_id,
+                patient_name=patient_name,
+                accession=accession,
+                study_date=study_date,
+                modality=modality,
+                study_description=study_description,
+                series_description=series_description,
+                series_number=series_number,
             )
-            if not matched_entries and not study_uid and not series_uid and not patient_id and not accession:
-                # If no specific key passed, return all active MWL entries
-                self.mwl_service.purge_expired_entries()
-                matched_entries = self.mwl_service._entries
+
+            all_known_entries = self.mwl_service.get_all_study_series_entries()
 
             seen_uids: set[str] = set()
             for entry in matched_entries:
-                if qr_level == "SERIES":
-                    cfind_ds = self.mwl_service.to_series_cfind_dataset(entry)
-                    seen_uids.add(str(getattr(cfind_ds, "SeriesInstanceUID", "")))
-                    yield (0xFF00, cfind_ds)
+                if qr_level == "PATIENT":
+                    p_id = str(entry.get("patient_id", ""))
+                    if p_id and p_id not in seen_uids:
+                        seen_uids.add(p_id)
+                        patient_entries = [e for e in all_known_entries if str(e.get("patient_id", "")) == p_id]
+                        cfind_ds = self.mwl_service.to_patient_cfind_dataset(entry, related_entries=patient_entries)
+                        yield (0xFF00, cfind_ds)
+                elif qr_level == "SERIES":
+                    s_uid = str(entry.get("series_uid", ""))
+                    if s_uid and s_uid not in seen_uids:
+                        seen_uids.add(s_uid)
+                        cfind_ds = self.mwl_service.to_series_cfind_dataset(entry)
+                        yield (0xFF00, cfind_ds)
                 elif qr_level in ("IMAGE", "INSTANCE"):
                     image_datasets = self.mwl_service.to_image_cfind_datasets(entry)
                     for img_ds in image_datasets:
-                        seen_uids.add(str(getattr(img_ds, "SOPInstanceUID", "")))
-                        yield (0xFF00, img_ds)
+                        sop_uid = str(getattr(img_ds, "SOPInstanceUID", ""))
+                        if sop_uid_filter and not self.mwl_service._matches_filter(sop_uid, sop_uid_filter):
+                            continue
+                        if sop_uid and sop_uid not in seen_uids:
+                            seen_uids.add(sop_uid)
+                            yield (0xFF00, img_ds)
                 else:
-                    cfind_ds = self.mwl_service.to_study_cfind_dataset(entry)
-                    seen_uids.add(str(getattr(cfind_ds, "StudyInstanceUID", "")))
-                    yield (0xFF00, cfind_ds)
+                    st_uid = str(entry.get("study_uid", ""))
+                    if st_uid and st_uid not in seen_uids:
+                        seen_uids.add(st_uid)
+                        study_entries = [e for e in all_known_entries if str(e.get("study_uid", "")) == st_uid]
+                        cfind_ds = self.mwl_service.to_study_cfind_dataset(entry, related_series_entries=study_entries)
+                        yield (0xFF00, cfind_ds)
 
             # Query STOW-RS received instances
             if self.dicomweb_service and hasattr(self.dicomweb_service, "_stow_datasets"):
                 for ds in self.dicomweb_service._stow_datasets.values():
-                    if study_uid and str(getattr(ds, "StudyInstanceUID", "")) != str(study_uid):
+                    if study_uid and not self.mwl_service._matches_filter(
+                        getattr(ds, "StudyInstanceUID", ""), study_uid
+                    ):
                         continue
-                    if series_uid and str(getattr(ds, "SeriesInstanceUID", "")) != str(series_uid):
+                    if series_uid and not self.mwl_service._matches_filter(
+                        getattr(ds, "SeriesInstanceUID", ""), series_uid
+                    ):
                         continue
-                    if patient_id and str(getattr(ds, "PatientID", "")) != str(patient_id):
+                    if patient_id and not self.mwl_service._matches_filter(getattr(ds, "PatientID", ""), patient_id):
                         continue
-                    if accession and str(getattr(ds, "AccessionNumber", "")) != str(accession):
+                    if patient_name and not self.mwl_service._matches_filter(
+                        getattr(ds, "PatientName", ""), patient_name
+                    ):
+                        continue
+                    if accession and not self.mwl_service._matches_filter(
+                        getattr(ds, "AccessionNumber", ""), accession
+                    ):
+                        continue
+                    if study_date and not self.mwl_service._matches_date_filter(
+                        getattr(ds, "StudyDate", ""), study_date
+                    ):
+                        continue
+                    if modality and not self.mwl_service._matches_filter(getattr(ds, "Modality", ""), modality):
                         continue
 
-                    if qr_level == "SERIES":
+                    if qr_level == "PATIENT":
+                        p_id = str(getattr(ds, "PatientID", ""))
+                        if p_id and p_id not in seen_uids:
+                            seen_uids.add(p_id)
+                            out_ds = Dataset()
+                            out_ds.QueryRetrieveLevel = "PATIENT"
+                            out_ds.PatientID = p_id
+                            out_ds.PatientName = getattr(ds, "PatientName", "")
+                            out_ds.PatientBirthDate = getattr(ds, "PatientBirthDate", "")
+                            out_ds.PatientSex = getattr(ds, "PatientSex", "")
+                            yield (0xFF00, out_ds)
+                    elif qr_level == "SERIES":
                         s_uid = str(getattr(ds, "SeriesInstanceUID", ""))
                         if s_uid and s_uid not in seen_uids:
                             seen_uids.add(s_uid)
@@ -234,6 +350,8 @@ class DicomScpService:
                             yield (0xFF00, out_ds)
                     elif qr_level in ("IMAGE", "INSTANCE"):
                         sop_uid = str(getattr(ds, "SOPInstanceUID", ""))
+                        if sop_uid_filter and not self.mwl_service._matches_filter(sop_uid, sop_uid_filter):
+                            continue
                         if sop_uid and sop_uid not in seen_uids:
                             seen_uids.add(sop_uid)
                             yield (0xFF00, ds)
@@ -279,11 +397,6 @@ class DicomScpService:
             yield (None, None)
             return
 
-        # 1st yield: (addr, port, kwargs) including Storage presentation contexts with the target transfer syntax
-        target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
-        storage_contexts = [build_context(cx.abstract_syntax, [target_syntax]) for cx in StoragePresentationContexts]
-        yield (addr, port, {"contexts": storage_contexts})
-
         identifier = getattr(event, "identifier", None)
         study_uid = (
             str(identifier.get("StudyInstanceUID", ""))
@@ -324,13 +437,10 @@ class DicomScpService:
         else:
             matched_entries = []
             if self.mwl_service:
-                matched_entries = self.mwl_service.find_entries(
+                matched_entries = self.mwl_service.find_study_series_entries(
                     study_uid=study_uid, series_uid=series_uid, patient_id=patient_id, accession=accession
                 )
-                if not matched_entries and not study_uid and not series_uid and not patient_id and not accession:
-                    self.mwl_service.purge_expired_entries()
-                    matched_entries = self.mwl_service._entries
-                elif not matched_entries and (study_uid or patient_id or accession):
+                if not matched_entries and (study_uid or patient_id or accession):
                     # Dynamically synthesize a mock study matching the requested query parameters
                     new_entry = self.mwl_service.add_entry(
                         custom={
@@ -339,10 +449,12 @@ class DicomScpService:
                             "accession": accession,
                         }
                     )
-                    matched_entries = [new_entry]
+                    matched_entries = [new_entry] if new_entry else []
 
             if not matched_entries:
                 logger.warning("dicom_c_move_no_matching_studies", study_uid=study_uid, patient_id=patient_id)
+                storage_contexts = build_storage_contexts_for_datasets()
+                yield (addr, port, {"contexts": storage_contexts})
                 yield 0
                 return
 
@@ -350,6 +462,10 @@ class DicomScpService:
             for entry in matched_entries:
                 datasets = DicomGeneratorService.create_instances_from_mwl(entry)
                 all_datasets.extend(datasets)
+
+        # 1st yield: (addr, port, kwargs) including Storage presentation contexts matching the datasets' transfer syntax
+        storage_contexts = build_storage_contexts_for_datasets(all_datasets)
+        yield (addr, port, {"contexts": storage_contexts})
 
         total_instances = len(all_datasets)
         # 2nd yield: total sub-operations count
@@ -498,14 +614,8 @@ class DicomScpService:
             }
 
         first_ds = datasets[0]
-        if preferred_syntax is None:
-            first_meta = getattr(first_ds, "file_meta", None)
-            preferred_syntax = getattr(first_meta, "TransferSyntaxUID", None) or config.transfer_syntax
-
         ae = AE(ae_title=self.ae_title)
-        target_syntax = get_prioritized_transfer_syntaxes(preferred_syntax)[0]
-        for cx in StoragePresentationContexts:
-            ae.add_requested_context(cx.abstract_syntax, [target_syntax])
+        ae.requested_contexts = build_storage_contexts_for_datasets(datasets, preferred_syntax=preferred_syntax)
 
         assoc = ae.associate(target_host, target_port, ae_title=target_ae_title)
         if not assoc.is_established:
@@ -580,20 +690,15 @@ class DicomScpService:
 
         if stow_matched:
             all_datasets = stow_matched
-            first_ds = all_datasets[0]
-            first_meta = getattr(first_ds, "file_meta", None)
-            preferred_syntax = getattr(first_meta, "TransferSyntaxUID", None) or config.transfer_syntax
+            preferred_syntax = None
             matched_entries = []
         else:
             matched_entries = []
             if self.mwl_service:
-                matched_entries = self.mwl_service.find_entries(
+                matched_entries = self.mwl_service.find_study_series_entries(
                     study_uid=study_uid, patient_id=patient_id, accession=accession
                 )
-                if not matched_entries and not study_uid and not patient_id and not accession:
-                    self.mwl_service.purge_expired_entries()
-                    matched_entries = self.mwl_service._entries
-                elif not matched_entries and (study_uid or patient_id or accession):
+                if not matched_entries and (study_uid or patient_id or accession):
                     # Dynamically synthesize on demand
                     new_entry = self.mwl_service.add_entry(
                         custom={
@@ -602,7 +707,7 @@ class DicomScpService:
                             "accession": accession,
                         }
                     )
-                    matched_entries = [new_entry]
+                    matched_entries = [new_entry] if new_entry else []
 
             if not matched_entries:
                 return {
@@ -618,7 +723,7 @@ class DicomScpService:
             for entry in matched_entries:
                 datasets = DicomGeneratorService.create_instances_from_mwl(entry)
                 all_datasets.extend(datasets)
-            preferred_syntax = matched_entries[0].get("transfer_syntax") or config.transfer_syntax
+            preferred_syntax = matched_entries[0].get("transfer_syntax")
 
         res = self.push_datasets_to_destination(
             datasets=all_datasets,
@@ -657,7 +762,7 @@ class DicomScpService:
             return None
 
         datasets = DicomGeneratorService.create_instances_from_mwl(entry)
-        preferred_syntax = entry.get("transfer_syntax") or config.transfer_syntax
+        preferred_syntax = entry.get("transfer_syntax")
 
         target_host = self.auto_push_host or "127.0.0.1"
         target_port = self.auto_push_port or 11113

@@ -144,6 +144,7 @@ The server supports negotiation and automatic on-the-fly transcoding across the 
 
 | Document Version | Date | Software Version | Author | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| **1.4.0** | 2026-10-19 | v0.3.6 | GoSmart.Health Engineering Team | Preserved native template Transfer Syntax UIDs without trans-conversion in non-synthetic template mode and updated SCU C-MOVE / C-STORE association negotiation to propose each dataset's originally encoded Transfer Syntax UID (including CR Explicit VR Little Endian and US Multi-frame JPEG Baseline). |
 | **1.3.0** | 2026-10-02 | v0.3.5 | GoSmart.Health Engineering Team | Added automated study push (auto-push) C-STORE transmission with configurable target AE schema, intervalSec, targetHost, targetPort, dedicated background thread worker execution, and MCP auto_push tool integration. |
 | **1.2.0** | 2026-09-24 | v0.3.4 | GoSmart.Health Engineering Team | Added Model Context Protocol (MCP) dynamic configuration management, scanning order generation, active worklist inspection and cancellation, and Docker HL7 port mapping. |
 | **1.1.0** | 2026-09-09 | v0.3.1 | GoSmart.Health Engineering Team | Added DICOMweb STOW-RS (Store Over the Web, PS 3.18) storage service supporting multipart/related and raw application/dicom ingestion, configurable duplicate SOP handling policies, and stored GSPS presentation state discovery. |

@@ -864,13 +864,21 @@ class DicomGeneratorService:
 
         if preserve_pixel_data and hasattr(ds, "PixelData") and ds.PixelData:
             if not should_burn:
-                if getattr(ds.file_meta, "TransferSyntaxUID", None) == target_uid:
-                    # Direct passthrough: pixels and transfer syntax already match
+                orig_ts = getattr(ds.file_meta, "TransferSyntaxUID", None)
+                if transfer_syntax is None or orig_ts == target_uid:
+                    # Direct passthrough: preserve original template pixels and transfer syntax without trans-conversion
+                    is_implicit = orig_ts == ImplicitVRLittleEndian
+                    ds._read_implicit = is_implicit
+                    ds._read_little = True
                     return ds
-                # Transfer syntax differs: convert directly on ds without unpacking/repacking pixel array
+                # Explicit transfer syntax requested and differs: convert on ds
                 return cls.apply_transfer_syntax(ds, syntax_name)
 
             orig_pixel_array = ds.pixel_array
+            if orig_pixel_array.ndim > 2:
+                orig_pixel_array = orig_pixel_array[0] if orig_pixel_array.ndim == 4 else orig_pixel_array[:, :, 0]
+                if orig_pixel_array.ndim > 2:
+                    orig_pixel_array = orig_pixel_array[:, :, 0]
             rows = orig_pixel_array.shape[0]
             cols = orig_pixel_array.shape[1]
             ds.Rows = rows
@@ -949,11 +957,8 @@ class DicomGeneratorService:
         """Synthesize DICOM image FileDatasets on the fly matching an MWL record."""
         import random
 
-        target_syntax = (
-            transfer_syntax
-            or mwl_record.get("transfer_syntax")
-            or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
-        )
+        explicit_syntax = transfer_syntax or mwl_record.get("transfer_syntax")
+        target_syntax = explicit_syntax or getattr(config, "transfer_syntax", "JPEG2000_LOSSLESS")
         is_stress = (
             stress
             if stress is not None
@@ -1119,7 +1124,8 @@ class DicomGeneratorService:
                 template_ts = (
                     ImplicitVRLittleEndian if getattr(slices[0], "is_implicit_VR", True) else ExplicitVRLittleEndian
                 )
-            target_ts = resolve_transfer_syntax(target_syntax)
+            slice_syntax = explicit_syntax if (explicit_syntax or not burn_in) else target_syntax
+            target_ts = resolve_transfer_syntax(slice_syntax) if slice_syntax else template_ts
             orig_ts_name = getattr(template_ts, "name", str(template_ts))
             target_ts_name = getattr(target_ts, "name", str(target_ts))
             t_start_series = time.perf_counter()
@@ -1138,7 +1144,7 @@ class DicomGeneratorService:
                 first_slice = slices[0]
                 ds1 = cls.create_dicom_from_template(
                     template=first_slice,
-                    transfer_syntax=target_syntax,
+                    transfer_syntax=slice_syntax,
                     patient_name=patient_name,
                     patient_id=patient_id,
                     study_date=study_date,
@@ -1220,7 +1226,7 @@ class DicomGeneratorService:
                 slice_ds = slices[(i - 1) % m_count]
                 ds = cls.create_dicom_from_template(
                     template=slice_ds,
-                    transfer_syntax=target_syntax,
+                    transfer_syntax=slice_syntax,
                     patient_name=patient_name,
                     patient_id=patient_id,
                     study_date=study_date,
