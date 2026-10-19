@@ -4,6 +4,7 @@ import datetime
 import json
 import os
 import urllib.parse
+import urllib.request
 from typing import Any, List, Tuple
 
 from fhir.resources.R4B.diagnosticreport import DiagnosticReport
@@ -217,9 +218,9 @@ class SyntheaUtils:
             raise ValueError(f"Unsupported URI scheme '{parsed.scheme or 'none'}': only 'file://' URIs are supported.")
 
         if parsed.netloc in ("", "localhost"):
-            raw_path = urllib.parse.unquote(parsed.path)
+            raw_path = urllib.request.url2pathname(urllib.parse.unquote(parsed.path))
         else:
-            raw_path = urllib.parse.unquote(f"{parsed.netloc}{parsed.path}")
+            raw_path = urllib.request.url2pathname(urllib.parse.unquote(f"{parsed.netloc}{parsed.path}"))
 
         if not raw_path:
             raise ValueError(f"Invalid file URI '{uri}': empty file path.")

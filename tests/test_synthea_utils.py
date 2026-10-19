@@ -3,6 +3,7 @@
 import json
 import os
 import pathlib
+import unittest.mock
 
 import pytest
 
@@ -170,6 +171,17 @@ def test_synthea_utils_parse_file_uri_validation():
 
     with pytest.raises(ValueError, match="File not found"):
         SyntheaUtils.parse_file_uri("file:///nonexistent_path/missing_bundle.json")
+
+    # Verify Windows-style file:// URI with drive letter resolves without duplicating drive
+    with (
+        unittest.mock.patch("urllib.request.url2pathname", return_value=r"D:\a\test\patient.json"),
+        unittest.mock.patch("os.path.abspath", side_effect=lambda p: p),
+        unittest.mock.patch("os.path.exists", return_value=True),
+        unittest.mock.patch("os.path.isfile", return_value=True),
+        unittest.mock.patch("os.path.isdir", return_value=False),
+    ):
+        res = SyntheaUtils.parse_file_uri("file:///D:/a/test/patient.json")
+        assert res == r"D:\a\test\patient.json"
 
 
 def test_synthea_utils_additive_uri_loading_and_deduplication():
