@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from util.synthea_loader import load, main
+from util.synthea_loader import load, load_to_hapi_fhir, main, resolve_hapi_fhir_base_url
 
 SAMPLE_HOSPITAL_BUNDLE = {
     "resourceType": "Bundle",
@@ -70,7 +70,57 @@ def test_main_invokes_load(tmp_path):
     with patch("util.synthea_loader.load", return_value=True) as mock_load:
         code = main(["--folder", str(folder), "--url", "http://localhost:9000"])
         assert code == 0
-        mock_load.assert_called_once_with(bundle_folder=str(folder), url="http://localhost:9000", chunk_size=25)
+        mock_load.assert_called_once_with(
+            bundle_folder=str(folder),
+            url="http://localhost:9000",
+            chunk_size=25,
+            hapi_fhir=False,
+        )
+
+
+def test_main_invokes_load_hapi_fhir(tmp_path):
+    """Verify main correctly parses --hapi-fhir and --hapi_fhir flags."""
+    folder = tmp_path / "fhir_files"
+    folder.mkdir()
+
+    with patch("util.synthea_loader.load", return_value=True) as mock_load:
+        code = main(["--folder", str(folder), "--hapi-fhir", "--url", "http://10.200.0.103:8087/fhir"])
+        assert code == 0
+        mock_load.assert_called_once_with(
+            bundle_folder=str(folder),
+            url="http://10.200.0.103:8087/fhir",
+            chunk_size=25,
+            hapi_fhir=True,
+        )
+
+    with patch("util.synthea_loader.load", return_value=True) as mock_load:
+        code = main(["--folder", str(folder), "--hapi_fhir"])
+        assert code == 0
+        mock_load.assert_called_once_with(
+            bundle_folder=str(folder),
+            url=None,
+            chunk_size=25,
+            hapi_fhir=True,
+        )
+
+
+def test_resolve_hapi_fhir_base_url():
+    """Verify resolve_hapi_fhir_base_url normalizes URLs and probes endpoints."""
+    # 1. URL already ending in /fhir
+    assert resolve_hapi_fhir_base_url("http://example.com/fhir") == "http://example.com/fhir"
+    assert resolve_hapi_fhir_base_url("http://example.com/fhir/") == "http://example.com/fhir"
+
+    # 2. Mock client where /metadata returns 200
+    mock_client_root = MagicMock()
+    mock_client_root.get.return_value = MagicMock(status_code=200)
+    assert resolve_hapi_fhir_base_url("http://example.com", client=mock_client_root) == "http://example.com"
+
+    # 3. Mock client where /metadata returns 404 but /fhir/metadata returns 200
+    mock_client_fhir = MagicMock()
+    mock_resp_404 = MagicMock(status_code=404)
+    mock_resp_200 = MagicMock(status_code=200)
+    mock_client_fhir.get.side_effect = [mock_resp_404, mock_resp_200]
+    assert resolve_hapi_fhir_base_url("http://example.com", client=mock_client_fhir) == "http://example.com/fhir"
 
 
 def test_load_nonexistent_folder(capsys):
@@ -172,7 +222,6 @@ def test_load_with_testclient_fallback(tmp_path):
         patch("httpx.get", side_effect=Exception("Connection refused")),
         patch("dicom_py_mock_server.main.app", MagicMock()),
     ):
-        # Mock client inside TestClient
         mock_test_client = MagicMock()
         mock_resp = MagicMock(status_code=200)
         mock_resp.json.return_value = []
@@ -182,6 +231,60 @@ def test_load_with_testclient_fallback(tmp_path):
             success = load(str(tmp_path), url="http://127.0.0.1:8000")
             assert success is True
             assert mock_test_client.post.call_count == 2
+
+
+def test_load_to_hapi_fhir_success(tmp_path):
+    """Verify individual bundle posting to HAPI FHIR server with fhir+json content type."""
+    (tmp_path / "hospitalInformation123.json").write_text(json.dumps(SAMPLE_HOSPITAL_BUNDLE), encoding="utf-8")
+    (tmp_path / "practitionerInformation123.json").write_text(json.dumps(SAMPLE_PRACTITIONER_BUNDLE), encoding="utf-8")
+    (tmp_path / "patient1.json").write_text(json.dumps(SAMPLE_PATIENT_BUNDLE), encoding="utf-8")
+    (tmp_path / "patient2.json").write_text(json.dumps(SAMPLE_PATIENT_BUNDLE), encoding="utf-8")
+
+    mock_client = MagicMock()
+    mock_metadata = MagicMock(status_code=200)
+    mock_post_ok = MagicMock(status_code=200)
+
+    mock_client.get.return_value = mock_metadata
+    mock_client.post.return_value = mock_post_ok
+
+    success = load_to_hapi_fhir(str(tmp_path), url="http://10.200.0.103:8087/fhir", client=mock_client)
+    assert success is True
+
+    # 2 prerequisite resource bundles + 2 patient bundles = 4 individual POST requests
+    assert mock_client.post.call_count == 4
+
+    for call_args in mock_client.post.call_args_list:
+        assert call_args.args[0] == "http://10.200.0.103:8087/fhir"
+        assert isinstance(call_args.kwargs["json"], dict)  # Individual bundle, not a list
+        assert call_args.kwargs["headers"]["Content-Type"] == "application/fhir+json"
+
+
+def test_load_to_hapi_fhir_http_error(tmp_path, capsys):
+    """Verify error reporting and failure return when HAPI FHIR returns non-200/201."""
+    (tmp_path / "patient1.json").write_text(json.dumps(SAMPLE_PATIENT_BUNDLE), encoding="utf-8")
+
+    mock_client = MagicMock()
+    mock_client.get.return_value = MagicMock(status_code=200)
+    mock_client.post.return_value = MagicMock(status_code=400, text="Transaction processing failed")
+
+    success = load(str(tmp_path), url="http://10.200.0.103:8087/fhir", hapi_fhir=True, client=mock_client)
+    assert success is False
+    captured = capsys.readouterr()
+    assert "error loading patient bundle" in captured.err.lower()
+    assert "http 400" in captured.err.lower()
+
+
+def test_load_to_hapi_fhir_unreachable(tmp_path, capsys):
+    """Verify graceful handling when HAPI FHIR server is unreachable."""
+    (tmp_path / "patient1.json").write_text(json.dumps(SAMPLE_PATIENT_BUNDLE), encoding="utf-8")
+
+    mock_client = MagicMock()
+    mock_client.get.side_effect = Exception("Connection refused")
+
+    success = load_to_hapi_fhir(str(tmp_path), url="http://127.0.0.1:59999/fhir", client=mock_client)
+    assert success is False
+    captured = capsys.readouterr()
+    assert "cannot connect to hapi fhir server" in captured.err.lower()
 
 
 def test_load_real_synthea_bundles_in_process(tmp_path, monkeypatch):

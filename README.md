@@ -469,15 +469,24 @@ curl "http://127.0.0.1:8000/api/v1/synthea/patient-bundle?patient-id=S99916806"
 
 ### Synthea FHIR Loader CLI Utility (`synthea_loader.py`)
 
-A developer utility is provided in `util/synthea_loader.py` to scan a directory of Synthea-generated FHIR JSON bundles and ingest them into the mock server:
+A developer utility is provided in `util/synthea_loader.py` (with shell wrappers `synthea_loader.sh` and `hapi_fhir_loader.sh`) to scan a directory of Synthea-generated FHIR JSON bundles and ingest them into either the DICOM mock server or a standard HAPI FHIR server:
 
 ```bash
 # Ingest Synthea bundles into the running mock server (falls back to in-process app if live server is unreachable):
-python util/synthea_loader.py --folder tests/synthea/fhir
+./synthea_loader.sh
+# Or specify a custom folder and server URL:
+./synthea_loader.sh ../synthea/output/fhir --url http://127.0.0.1:8000 --chunk-size 25
 
-# Or specify a custom server URL and batch chunk size (default: 25 bundles per request):
-python util/synthea_loader.py --folder path/to/synthea/fhir --url http://127.0.0.1:8000 --chunk-size 25
+# Bulk load Synthea bundles into a HAPI FHIR server (e.g., http://10.200.0.103:8087/fhir):
+./hapi_fhir_loader.sh
+# Or pass custom folder and target HAPI FHIR endpoint:
+./hapi_fhir_loader.sh ../synthea/output/fhir --url http://10.200.0.103:8087/fhir
+
+# Or invoke directly via python:
+python util/synthea_loader.py --folder ../synthea/output/fhir --hapi-fhir --url http://10.200.0.103:8087/fhir
 ```
+
+Prerequisite resource bundles (`hospitalInformation*.json`, `practitionerInformation*.json`) are automatically ingested first, followed by patient transaction bundles. When targetting HAPI FHIR (`--hapi-fhir`), bundles are submitted individually with `Content-Type: application/fhir+json`.
 
 ---
 
