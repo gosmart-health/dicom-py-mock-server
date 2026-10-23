@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > [!NOTE]
 > **Source-Code Release Distribution**: Releases of `dicom-py-mock-server` are distributed strictly as source-code releases. No binary compilation or wheel build pipeline is required.
 
+## [0.4.1] - 2026-10-21
+
+### Added
+- **HAPI FHIR Bulk Loading Ingestion Mode (`util/synthea_loader.py`)**:
+  - Added `--hapi-fhir` / `--hapi_fhir` CLI flag to support directly streaming Synthea-generated FHIR R4 JSON bundles into standard HAPI FHIR servers.
+  - Implemented automatic endpoint resolution (`resolve_hapi_fhir_base_url()`) that checks `/metadata` and `/fhir/metadata` to auto-detect and normalize server base URLs (e.g. resolving `http://10.200.0.103:8087` to `http://10.200.0.103:8087/fhir`).
+  - Added sequential individual transaction/batch bundle posting with `Content-Type: application/fhir+json` adhering to the HL7 FHIR REST specification.
+  - Enforced strict prerequisite loading sequence ensuring hospital (`hospitalInformation*.json`) and practitioner (`practitionerInformation*.json`) bundles are posted and resolved before patient bundles.
+  - Added support for `HAPI_FHIR_URL` environment variable.
+  - Configured 300-second request timeouts to safely ingest multi-megabyte Synthea patient bundles without transport timeouts.
+- **Dedicated Shell Wrapper for HAPI FHIR (`hapi_fhir_loader.sh`)**:
+  - Added executable wrapper script configured to bulk load Synthea bundles directly into a HAPI FHIR server (`http://10.200.0.103:8087/fhir` by default).
+  - Includes `--help` usage documentation, folder override, and passthrough CLI arguments.
+- **Expanded Test Suite (`tests/test_synthea_loader.py`)**:
+  - Added 5 new unit and integration tests covering `--hapi-fhir` CLI argument parsing, base URL auto-resolution, individual bundle posting with FHIR headers, non-200 HTTP error handling, and server unreachable reporting (increasing test suite to 194 passing tests).
+
+### Changed
+- **Synthea Mock Server Launcher (`synthea_loader.sh`)**:
+  - Updated default Synthea search directory from `../../synthea/output/fhir` to `../synthea/output/fhir`.
+  - Added structured usage documentation (`-h`, `--help`), positional directory override, and passthrough argument forwarding.
+- **Synthea Loader Lazy In-Process TestClient Import**:
+  - Deferred importing `dicom_py_mock_server.main.app` until `TestClient` fallback is required, providing instant startup for HAPI FHIR operations without unnecessary template scanning or memory allocation.
+- **System Architecture & Design Diagrams**:
+  - Updated `docs/design/Overall-System.drawio` and exported diagram `docs/design/Overall-System.png` to clarify FHIR ServiceRequest order ingestion and DICOM implementations.
+- **Documentation & References**:
+  - Updated `README.md` and `docs/articles/synthea_fhir_and_HL7_integration.md` with usage examples and workflows for `hapi_fhir_loader.sh` and `--hapi-fhir`.
+  - Updated System Design Specification (`docs/design/gsms_010_system_design_specification.md`) and Verification & Validation Plan (`docs/design/gsms_030_verification_and_validation_plan.md`).
+
 ## [0.4.0] - 2026-10-19
 
 ### Added

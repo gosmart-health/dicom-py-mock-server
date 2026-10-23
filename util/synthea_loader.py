@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI utility to scan and load Synthea-generated FHIR R4 JSON files into the DICOM mock server."""
+"""CLI utility to scan and load Synthea-generated FHIR R4 JSON files into DICOM mock server or HAPI FHIR."""
 
 import argparse
 import json
@@ -9,70 +9,61 @@ import sys
 import httpx
 from fastapi.testclient import TestClient
 
-from dicom_py_mock_server.main import app
 
+def resolve_hapi_fhir_base_url(url: str, client: httpx.Client | None = None) -> str:
+    """Normalize and resolve the FHIR base URL for a HAPI FHIR server.
 
-def load(bundle_folder: str, url: str | None = None, chunk_size: int = 25) -> bool:
-    """Scan a folder for Synthea FHIR JSON bundles and ingest them into the mock server.
-
-    Prerequisite resource bundles (hospitals, practitioners) are posted first, followed
-    by patient bundles in chunks of `chunk_size` (default: 25). If the live server is
-    unreachable, falls back to in-process TestClient.
-
-    Args:
-        bundle_folder: Directory path containing Synthea FHIR JSON files.
-        url: Base URL of the mock server. Defaults to $GOSMART_MS_BASE_URL or http://127.0.0.1:8000.
-        chunk_size: Number of patient bundles to post per request (default: 25).
-
-    Returns:
-        True if all bundles loaded successfully; False if errors occurred.
+    If given a root URL (e.g. http://host:port), checks whether /metadata or /fhir/metadata
+    serves the CapabilityStatement and returns the working base URL.
     """
-    if not bundle_folder:
-        print("Error: Bundle folder path must be specified.", file=sys.stderr)
-        return False
+    clean_url = url.rstrip("/")
+    if clean_url.endswith("/fhir"):
+        return clean_url
 
-    if not os.path.exists(bundle_folder):
-        print(f"Error: Bundle folder does not exist: {bundle_folder}", file=sys.stderr)
-        return False
-
-    if not os.path.isdir(bundle_folder):
-        print(f"Error: Path is not a directory: {bundle_folder}", file=sys.stderr)
-        return False
-
-    # Prefer calling the live running dicom-py-mock-server on http://127.0.0.1:8000
-    # so its DICOM SCP listener (e.g. port 11112 / 11114) receives the Synthea patients/studies.
-    if not url:
-        url = os.environ.get("GOSMART_MS_BASE_URL", "http://127.0.0.1:8000")
-    url = url.rstrip("/")
+    local_client = client or httpx.Client(timeout=5.0)
+    try:
+        # Check if clean_url directly serves CapabilityStatement
+        resp = local_client.get(f"{clean_url}/metadata")
+        if resp.status_code == 200:
+            return clean_url
+    except Exception:
+        pass
 
     try:
-        health_resp = httpx.get(f"{url}/health", timeout=2.0)
-        if health_resp.status_code == 200:
-            client = httpx.Client(base_url=url, timeout=120.0)
-            print(f"Connected to live server at {url}")
-        else:
-            client = TestClient(app)
-            print(
-                f"Live server at {url} returned HTTP {health_resp.status_code}; "
-                "falling back to in-process TestClient(app)"
-            )
-    except Exception as exc:
-        client = TestClient(app)
-        print(f"Live server at {url} not reachable ({exc}); falling back to in-process TestClient(app)")
+        # Check if clean_url/fhir serves CapabilityStatement
+        resp = local_client.get(f"{clean_url}/fhir/metadata")
+        if resp.status_code == 200:
+            return f"{clean_url}/fhir"
+    except Exception:
+        pass
+    finally:
+        if client is None:
+            local_client.close()
 
-    resources: list[dict] = []
-    patients: list[dict] = []
-    scanned_count = 0
-    parse_errors = 0
+    # Fallback default convention for HAPI FHIR
+    return f"{clean_url}/fhir"
 
+
+def scan_bundles(
+    bundle_folder: str,
+) -> tuple[list[tuple[str, dict]], list[tuple[str, dict]], int, int] | None:
+    """Scan a directory for Synthea FHIR JSON files.
+
+    Returns:
+        A tuple of (resources, patients, scanned_count, parse_errors), or None if folder cannot be listed.
+    """
     try:
         file_list = sorted(os.listdir(bundle_folder))
     except OSError as exc:
         print(f"Error: Cannot list contents of directory '{bundle_folder}': {exc}", file=sys.stderr)
-        return False
+        return None
+
+    resources: list[tuple[str, dict]] = []
+    patients: list[tuple[str, dict]] = []
+    scanned_count = 0
+    parse_errors = 0
 
     for file_name in file_list:
-        # Task: Check if the file contains .js else continue
         if ".js" not in file_name.lower():
             continue
 
@@ -91,9 +82,234 @@ def load(bundle_folder: str, url: str | None = None, chunk_size: int = 25) -> bo
 
         name_lower = file_name.lower()
         if "hospital" in name_lower or "resource" in name_lower or "practitioner" in name_lower:
-            resources.append(js)
+            resources.append((file_name, js))
         else:
-            patients.append(js)
+            patients.append((file_name, js))
+
+    return resources, patients, scanned_count, parse_errors
+
+
+def load_to_hapi_fhir(
+    bundle_folder: str,
+    url: str | None = None,
+    client: httpx.Client | None = None,
+) -> bool:
+    """Scan a folder for Synthea FHIR JSON bundles and ingest each into HAPI FHIR server.
+
+    Prerequisite resource bundles (hospitals, practitioners) are posted first as individual
+    transaction/batch bundles, followed by individual patient transaction bundles.
+
+    Args:
+        bundle_folder: Directory path containing Synthea FHIR JSON files.
+        url: Base URL of the HAPI FHIR server. Defaults to $HAPI_FHIR_URL or http://10.200.0.103:8087/fhir.
+        client: Optional httpx.Client instance for testing or custom configuration.
+
+    Returns:
+        True if all bundles loaded successfully; False if any errors occurred.
+    """
+    if not bundle_folder:
+        print("Error: Bundle folder path must be specified.", file=sys.stderr)
+        return False
+
+    if not os.path.exists(bundle_folder):
+        print(f"Error: Bundle folder does not exist: {bundle_folder}", file=sys.stderr)
+        return False
+
+    if not os.path.isdir(bundle_folder):
+        print(f"Error: Path is not a directory: {bundle_folder}", file=sys.stderr)
+        return False
+
+    if not url:
+        url = os.environ.get("HAPI_FHIR_URL", "http://10.200.0.103:8087/fhir")
+
+    fhir_base = resolve_hapi_fhir_base_url(url, client=client)
+    close_client = False
+    if client is None:
+        client = httpx.Client(base_url=fhir_base, timeout=300.0)
+        close_client = True
+
+    try:
+        # Check connectivity to HAPI FHIR CapabilityStatement
+        cap_resp = client.get(f"{fhir_base}/metadata")
+        if cap_resp.status_code == 200:
+            print(f"Connected to HAPI FHIR server at {fhir_base}")
+        else:
+            print(
+                f"Warning: HAPI FHIR metadata endpoint at {fhir_base}/metadata returned HTTP {cap_resp.status_code}.",
+                file=sys.stderr,
+            )
+    except Exception as exc:
+        print(f"Error: Cannot connect to HAPI FHIR server at {fhir_base}: {exc}", file=sys.stderr)
+        if close_client:
+            client.close()
+        return False
+
+    scan_result = scan_bundles(bundle_folder)
+    if scan_result is None:
+        if close_client:
+            client.close()
+        return False
+
+    resources, patients, scanned_count, parse_errors = scan_result
+    print(
+        f"Scanned {scanned_count} JSON file(s) from '{bundle_folder}': "
+        f"{len(resources)} resource bundle(s), {len(patients)} patient bundle(s), "
+        f"{parse_errors} parse error(s)."
+    )
+
+    if not resources and not patients:
+        print("Warning: No valid Synthea FHIR JSON bundles found to load.", file=sys.stderr)
+        if close_client:
+            client.close()
+        return parse_errors == 0
+
+    headers = {
+        "Content-Type": "application/fhir+json",
+        "Accept": "application/fhir+json",
+    }
+    overall_success = parse_errors == 0
+    loaded_resources = 0
+    loaded_patients = 0
+
+    try:
+        # 1. Post prerequisite resources (hospitals, practitioners)
+        if resources:
+            print(f"Posting {len(resources)} prerequisite resource bundle(s) (hospitals/practitioners)...")
+            for idx, (file_name, js) in enumerate(resources, start=1):
+                try:
+                    resp = client.post(fhir_base, json=js, headers=headers)
+                    if resp.status_code in (200, 201):
+                        loaded_resources += 1
+                        print(
+                            f"  [{idx}/{len(resources)}] Successfully loaded prerequisite '{file_name}' "
+                            f"(HTTP {resp.status_code})."
+                        )
+                    else:
+                        print(
+                            f"  [{idx}/{len(resources)}] Error loading '{file_name}': "
+                            f"HTTP {resp.status_code} - {resp.text[:300]}",
+                            file=sys.stderr,
+                        )
+                        overall_success = False
+                except Exception as exc:
+                    print(
+                        f"  [{idx}/{len(resources)}] Exception posting '{file_name}': {exc}",
+                        file=sys.stderr,
+                    )
+                    overall_success = False
+        else:
+            print("Notice: No prerequisite resource bundles (hospitals/practitioners) found in folder.")
+
+        # 2. Post patient bundles
+        if patients:
+            print(f"Posting {len(patients)} patient bundle(s)...")
+            for idx, (file_name, js) in enumerate(patients, start=1):
+                try:
+                    resp = client.post(fhir_base, json=js, headers=headers)
+                    if resp.status_code in (200, 201):
+                        loaded_patients += 1
+                        print(
+                            f"  [{idx}/{len(patients)}] Successfully loaded patient bundle '{file_name}' "
+                            f"(HTTP {resp.status_code})."
+                        )
+                    else:
+                        print(
+                            f"  [{idx}/{len(patients)}] Error loading patient bundle '{file_name}': "
+                            f"HTTP {resp.status_code} - {resp.text[:300]}",
+                            file=sys.stderr,
+                        )
+                        overall_success = False
+                except Exception as exc:
+                    print(
+                        f"  [{idx}/{len(patients)}] Exception posting patient bundle '{file_name}': {exc}",
+                        file=sys.stderr,
+                    )
+                    overall_success = False
+        else:
+            print("Notice: No patient bundles found to load.")
+
+        print(
+            f"HAPI FHIR Load Summary: {loaded_resources}/{len(resources)} prerequisite bundle(s) loaded, "
+            f"{loaded_patients}/{len(patients)} patient bundle(s) loaded."
+        )
+    finally:
+        if close_client:
+            client.close()
+
+    return overall_success
+
+
+def load(
+    bundle_folder: str,
+    url: str | None = None,
+    chunk_size: int = 25,
+    hapi_fhir: bool = False,
+    client: httpx.Client | None = None,
+) -> bool:
+    """Scan a folder for Synthea FHIR JSON bundles and ingest them.
+
+    When `hapi_fhir=True`, ingests each bundle individually into the target HAPI FHIR server.
+    When `hapi_fhir=False` (default), ingests bundles into the DICOM mock server using batch chunks
+    and falls back to in-process TestClient if the live server is unreachable.
+
+    Args:
+        bundle_folder: Directory path containing Synthea FHIR JSON files.
+        url: Base URL of the target server.
+        chunk_size: Number of patient bundles to post per request in mock server mode (default: 25).
+        hapi_fhir: Whether to load to a standard HAPI FHIR server.
+        client: Optional httpx.Client instance.
+
+    Returns:
+        True if all bundles loaded successfully; False if errors occurred.
+    """
+    if hapi_fhir:
+        return load_to_hapi_fhir(bundle_folder=bundle_folder, url=url, client=client)
+
+    if not bundle_folder:
+        print("Error: Bundle folder path must be specified.", file=sys.stderr)
+        return False
+
+    if not os.path.exists(bundle_folder):
+        print(f"Error: Bundle folder does not exist: {bundle_folder}", file=sys.stderr)
+        return False
+
+    if not os.path.isdir(bundle_folder):
+        print(f"Error: Path is not a directory: {bundle_folder}", file=sys.stderr)
+        return False
+
+    # Prefer calling the live running dicom-py-mock-server on http://127.0.0.1:8000
+    # so its DICOM SCP listener (e.g. port 11112 / 11114) receives the Synthea patients/studies.
+    if not url:
+        url = os.environ.get("GOSMART_MS_BASE_URL", "http://127.0.0.1:8000")
+    url = url.rstrip("/")
+
+    if client is None:
+        try:
+            health_resp = httpx.get(f"{url}/health", timeout=2.0)
+            if health_resp.status_code == 200:
+                client = httpx.Client(base_url=url, timeout=120.0)
+                print(f"Connected to live server at {url}")
+            else:
+                from dicom_py_mock_server.main import app
+
+                client = TestClient(app)
+                print(
+                    f"Live server at {url} returned HTTP {health_resp.status_code}; "
+                    "falling back to in-process TestClient(app)"
+                )
+        except Exception as exc:
+            from dicom_py_mock_server.main import app
+
+            client = TestClient(app)
+            print(f"Live server at {url} not reachable ({exc}); falling back to in-process TestClient(app)")
+
+    scan_result = scan_bundles(bundle_folder)
+    if scan_result is None:
+        return False
+
+    resources_with_names, patients_with_names, scanned_count, parse_errors = scan_result
+    resources = [b[1] for b in resources_with_names]
+    patients = [b[1] for b in patients_with_names]
 
     print(
         f"Scanned {scanned_count} JSON file(s) from '{bundle_folder}': "
@@ -172,10 +388,8 @@ def load(bundle_folder: str, url: str | None = None, chunk_size: int = 25) -> bo
 
 def main(argv: list[str] | None = None) -> int:
     """Parse CLI arguments and load Synthea FHIR bundles."""
-    # TASK: Take an argument of --url <API base url> and --folder <folder path>
-    # then call load() above
     parser = argparse.ArgumentParser(
-        description="CLI utility to scan and load Synthea-generated FHIR JSON files into the DICOM mock server."
+        description="CLI utility to scan and load Synthea FHIR JSON files into DICOM mock server or HAPI FHIR."
     )
     parser.add_argument(
         "--folder",
@@ -187,18 +401,34 @@ def main(argv: list[str] | None = None) -> int:
         "--url",
         "-u",
         default=None,
-        help="DICOM mock server base URL (default: $GOSMART_MS_BASE_URL or http://127.0.0.1:8000).",
+        help=(
+            "Target server base URL. "
+            "For mock server: defaults to $GOSMART_MS_BASE_URL or http://127.0.0.1:8000. "
+            "For HAPI FHIR: defaults to $HAPI_FHIR_URL or http://10.200.0.103:8087/fhir."
+        ),
     )
     parser.add_argument(
         "--chunk-size",
         "-c",
         type=int,
         default=25,
-        help="Number of patient bundles to post per request (default: 25).",
+        help="Number of patient bundles to post per request in mock server mode (default: 25).",
+    )
+    parser.add_argument(
+        "--hapi-fhir",
+        "--hapi_fhir",
+        action="store_true",
+        dest="hapi_fhir",
+        help="Load bundles into a standard HAPI FHIR server instead of the DICOM mock server.",
     )
 
     args = parser.parse_args(argv)
-    success = load(bundle_folder=args.folder, url=args.url, chunk_size=args.chunk_size)
+    success = load(
+        bundle_folder=args.folder,
+        url=args.url,
+        chunk_size=args.chunk_size,
+        hapi_fhir=args.hapi_fhir,
+    )
     return 0 if success else 1
 
 
