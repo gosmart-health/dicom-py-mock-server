@@ -1120,7 +1120,7 @@ class MwlGeneratorService:
         if val is None:
             return False
         q_str = str(query).strip()
-        # Handle multi-valued query separated by backslash (DICOM list of UIDs / values)
+        # Handle multivalued query separated by backslash (DICOM list of UIDs / values)
         if "\\" in q_str:
             parts = [p.strip() for p in q_str.split("\\") if p.strip()]
             return any(MwlGeneratorService._matches_filter(val, p) for p in parts)
@@ -1137,7 +1137,7 @@ class MwlGeneratorService:
 
     @staticmethod
     def _matches_date_filter(val: Any, query: str | None) -> bool:
-        """Match DICOM Date (DA) value against exact date, wildcard, or DICOM range (YYYYMMDD-YYYYMMDD)."""
+        """Match DICOM Date (DA) value against the exact date, wildcard, or DICOM range (YYYYMMDD-YYYYMMDD)."""
         if not query or not str(query).strip() or str(query).strip() == "*":
             return True
         if val is None:
@@ -1572,9 +1572,9 @@ class MwlGeneratorService:
                     if curr_loop is loop:
                         task.cancel()
                     else:
-                        loop.call_soon_threadsafe(task.cancel)
+                        loop.call_soon_threadsafe(task.cancel, None)
                 except RuntimeError:
-                    loop.call_soon_threadsafe(task.cancel)
+                    loop.call_soon_threadsafe(task.cancel, None)
             else:
                 task.cancel()
             self._auto_gen_task = None
