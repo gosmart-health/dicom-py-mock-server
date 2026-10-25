@@ -71,7 +71,7 @@ This document outlines the Verification & Validation strategy for `dicom-py-mock
 | **CLI Application Verification** | `uv run dicom-py-mock-server` | Verifies installed CLI entry point and Uvicorn server startup. |
 | **HL7 Message Pusher Verification** | `uv run push-hl7` / `python util/push_hl7.py` | Verifies HL7 v2 ORM message MLLP transmission and MWL creation. |
 | **FHIR Order Pusher Verification** | `./util/push_fhir.sh` | Verifies FHIR ServiceRequest bundle ingestion via HTTP POST. |
-| **Synthea FHIR Loader Verification** | `python util/synthea_loader.py --folder tests/synthea/fhir` | Verifies Synthea FHIR JSON scanning, prerequisite resource loading, and patient ingestion via CLI. |
+| **Synthea FHIR Loader Verification** | `python util/synthea_loader.py --folder tests/synthea/fhir` / `./hapi_fhir_loader.sh` | Verifies Synthea FHIR JSON scanning, prerequisite resource loading, and patient ingestion via CLI into mock server or HAPI FHIR. |
 
 ---
 

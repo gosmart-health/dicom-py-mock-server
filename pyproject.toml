@@ -3,14 +3,14 @@ name = "dicom-py-mock-server"
 version = "0.4.0"
 description = "Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 dependencies = [
     "fastapi>=0.110.0",
     "fhir-resources>=8.3.0",
     "ipykernel>=7.3.0",
     "numpy>=2.2.6",
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
     "pydantic>=2.6.0",
     "pydantic-settings>=2.15.0",
     "pydicom>=2.4.0",
@@ -43,7 +43,7 @@ dev = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [

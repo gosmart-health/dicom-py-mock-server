@@ -86,21 +86,20 @@ Because patient studies link to performing facilities and attending practitioner
 > **Resource Loading Order**:
 > Hospital and practitioner resource bundles must be ingested prior to patient bundles. If a patient bundle is ingested before hospitals or practitioners are loaded, the server responds with HTTP `400 Bad Request` (`"Hospital resources must be sent first."` or `"Practitioner resources must be sent first."`).
 
-To automate this ordering, batching, and fallback logic, the repository includes a Python utility [`util/synthea_loader.py`](file:///Users/manabutokunaga/development/dicom-root/dicom-py-mock-server/util/synthea_loader.py) and a shell wrapper [`synthea_loader.sh`](file:///Users/manabutokunaga/development/dicom-root/dicom-py-mock-server/synthea_loader.sh):
+To automate this ordering, batching, and fallback logic, the repository includes a Python utility [`util/synthea_loader.py`](file:///Users/manabutokunaga/development/dicom-fhir/dicom-py-mock-server/util/synthea_loader.py) and shell wrappers [`synthea_loader.sh`](file:///Users/manabutokunaga/development/dicom-fhir/dicom-py-mock-server/synthea_loader.sh) and [`hapi_fhir_loader.sh`](file:///Users/manabutokunaga/development/dicom-fhir/dicom-py-mock-server/hapi_fhir_loader.sh):
 
 ```bash
-# Start your mock server instance
-./start.sh
+# Option A: Ingest into DICOM mock server
+./synthea_loader.sh ../synthea/output/fhir
 
-# In another terminal, trigger the loader script targeting your Synthea FHIR output directory
-./synthea_loader.sh
+# Option B: Bulk load into standard HAPI FHIR server (e.g., http://10.200.0.103:8087/fhir)
+./hapi_fhir_loader.sh ../synthea/output/fhir --url http://10.200.0.103:8087/fhir
 ```
 
 Under the hood, `synthea_loader.py`:
 1. Scans the directory and segregates hospital/practitioner bundles from patient files.
-2. Posts prerequisite infrastructure resources to `/api/v1/synthea/load`.
-3. Streams patient bundles in configurable chunks (default: 25 bundles per request) to prevent memory bottlenecks.
-4. If the live server is running (default `http://127.0.0.1:8000`), it delivers via HTTP; if offline, it falls back to in-process testing via FastAPI's `TestClient`.
+2. In Mock Server mode: posts prerequisite resources to `/api/v1/synthea/load`, followed by patient bundles in chunks (default: 25). If the mock server is offline, falls back to in-process testing via FastAPI's `TestClient`.
+3. In HAPI FHIR mode (`--hapi-fhir`): verifies the FHIR base URL (`/fhir/metadata`), posts prerequisite hospital/practitioner bundles individually with `Content-Type: application/fhir+json`, and then posts individual patient transaction bundles directly to the FHIR base URL.
 
 ### Step 3: What Happens Internally During Ingestion?
 
