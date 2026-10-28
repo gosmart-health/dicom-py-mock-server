@@ -3,7 +3,7 @@
 **Document Title:** DICOM Conformance Statement for GoSmart.Health DICOM Mock Server  
 **Software Name:** `dicom-py-mock-server`  
 **Software Release:** Version 0.4.0  
-**Document Release Date:** 2026-10-19  
+**Document Release Date:** 2026-10-28  
 **Standard Compliance:** NEMA PS 3.1 – PS 3.22 (DICOM Standard 2024c / 2025)  
 **Document Identifier:** DCS-GSMS-031  
 
@@ -21,7 +21,7 @@
 ## 1. Conformance Statement Overview
 
 The GoSmart.Health DICOM Mock Server (`dicom-py-mock-server`) is an open-source, multi-protocol medical imaging server that provides:
-1. Standard DICOM Upper Layer (DIMSE) network communication over TCP/IP as both a Service Class Provider (SCP) and Service Class User (SCU).
+1. Standard DICOM Upper Layer (DIMSE) network communication over TCP/IP as both a Service Class Provider (SCP) and Service Class User (SCU), supporting Verification (C-ECHO), Query/Retrieve (C-FIND, C-MOVE, C-GET), and Storage (C-STORE).
 2. DICOMweb RESTful services (QIDO-RS, WADO-RS, WADO-URI) adhering to DICOM PS 3.18.
 3. Realistic, on-the-fly DICOM SOP Instance and Modality Worklist (MWL) synthesis from user-provided multi-slice templates or synthetic volumes.
 4. Dynamic compression transcoding supporting JPEG Baseline (Process 1), JPEG 2000 Lossless, JPEG 2000 Lossy, RLE Lossless, and uncompressed Explicit/Implicit VR Little Endian.
@@ -42,7 +42,10 @@ The following table summarizes the network services and SOP Classes supported by
 | **Query/Retrieve (C-MOVE)** | | | |
 | Patient Root Query/Retrieve Information Model - MOVE | `1.2.840.10008.5.1.4.1.2.1.2` | No | **Yes** |
 | Study Root Query/Retrieve Information Model - MOVE | `1.2.840.10008.5.1.4.1.2.2.2` | No | **Yes** |
-| **Storage (C-STORE & Move Sub-Operations)** | | | |
+| **Query/Retrieve (C-GET)** | | | |
+| Patient Root Query/Retrieve Information Model - GET | `1.2.840.10008.5.1.4.1.2.1.3` | No | **Yes** |
+| Study Root Query/Retrieve Information Model - GET | `1.2.840.10008.5.1.4.1.2.2.3` | No | **Yes** |
+| **Storage (C-STORE, Move & Get Sub-Operations)** | | | |
 | CT Image Storage | `1.2.840.10008.5.1.4.1.1.2` | **Yes** | **Yes** |
 | Enhanced CT Image Storage | `1.2.840.10008.5.1.4.1.1.2.1` | **Yes** | **Yes** |
 | MR Image Storage | `1.2.840.10008.5.1.4.1.1.4` | **Yes** | **Yes** |
@@ -84,7 +87,7 @@ The server supports negotiation and automatic on-the-fly transcoding across the 
 
 | DICOMweb Service | Protocol / Specification | Supported URI Paths & Capabilities |
 | :--- | :--- | :--- |
-| **STOW-RS** | PS 3.18 Section 10.5 | `POST /dicomweb/studies`<br>`POST /dicomweb/studies/{studyUID}`<br>*(Accepts `multipart/related; type="application/dicom"` or raw DICOM; composes and saves Part-10 files to `./received`; retains in memory for QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE retrieval; returns standard `application/dicom+json` receipt with `ReferencedSOPSequence` and `FailedSOPSequence`)* |
+| **STOW-RS** | PS 3.18 Section 10.5 | `POST /dicomweb/studies`<br>`POST /dicomweb/studies/{studyUID}`<br>*(Accepts `multipart/related; type="application/dicom"` or raw DICOM; composes and saves Part-10 files to `./received`; retains in memory for QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE/C-GET retrieval; returns standard `application/dicom+json` receipt with `ReferencedSOPSequence` and `FailedSOPSequence`)* |
 | **QIDO-RS** | PS 3.18 Section 10.6 | `GET /dicomweb/studies`<br>`GET /dicomweb/studies/{studyUID}/series`<br>`GET /dicomweb/series`<br>`GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances`<br>`GET /dicomweb/instances`<br>*(Returns `application/dicom+json` with wildcard filtering, pagination, and sorting)* |
 | **WADO-RS** | PS 3.18 Section 10.4 | `GET /dicomweb/studies/{studyUID}`<br>`GET /dicomweb/studies/{studyUID}/series/{seriesUID}`<br>`GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}`<br>`GET /dicomweb/studies/{studyUID}/.../frames/{frameList}`<br>`GET /dicomweb/studies/{studyUID}/.../metadata`<br>`GET /dicomweb/studies/{studyUID}/.../rendered`<br>*(Multipart DICOM, JSON metadata, raw/transcoded frames, JPEG/PNG previews)* |
 | **WADO-URI** | PS 3.18 Section 9 | `GET /dicomweb/wado?requestType=WADO&studyUID=...&seriesUID=...&objectUID=...`<br>*(Single-part Part 10 DICOM or rendered JPEG preview)* |
@@ -144,6 +147,7 @@ The server supports negotiation and automatic on-the-fly transcoding across the 
 
 | Document Version | Date | Software Version | Author | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| **1.5.0** | 2026-10-28 | v0.4.0 | GoSmart.Health Engineering Team | Added DIMSE Query/Retrieve C-GET Service Class Provider (SCP) support for Patient Root and Study Root models, reverse C-STORE SCU role negotiation, and transfer syntax adaptation. Added FHIR patient identifier system configuration (`GOSMART_MS_FHIR_PATIENT_ID_SYSTEM`) and raw demographics preservation. |
 | **1.4.0** | 2026-10-19 | v0.4.0 | GoSmart.Health Engineering Team | Added Synthea FHIR R4 Bundle ingestion, Patient/Study/Series generation, C-FIND and DICOMweb query support, and preserved native template Transfer Syntax UIDs without trans-conversion in non-synthetic template mode. |
 | **1.3.0** | 2026-10-02 | v0.3.5 | GoSmart.Health Engineering Team | Added automated study push (auto-push) C-STORE transmission with configurable target AE schema, intervalSec, targetHost, targetPort, dedicated background thread worker execution, and MCP auto_push tool integration. |
 | **1.2.0** | 2026-09-24 | v0.3.4 | GoSmart.Health Engineering Team | Added Model Context Protocol (MCP) dynamic configuration management, scanning order generation, active worklist inspection and cancellation, and Docker HL7 port mapping. |
@@ -221,6 +225,7 @@ flowchart TD
             FIND_HANDLER["Query / Retrieve (C-FIND) SCP"]
             MWL_HANDLER["Modality Worklist (MWL) SCP"]
             MOVE_HANDLER["Query / Retrieve (C-MOVE) SCP"]
+            GET_HANDLER["Query / Retrieve (C-GET) SCP"]
             STORE_SCP["Storage (C-STORE) SCP"]
             STORE_SCU["Storage (C-STORE) SCU Push"]
         end
@@ -229,6 +234,7 @@ flowchart TD
             QIDO["QIDO-RS (/dicomweb/studies...)"]
             WADO_RS["WADO-RS (/dicomweb/.../frames)"]
             WADO_URI["WADO-URI (/dicomweb/wado)"]
+            STOW_RS["STOW-RS (/dicomweb/studies)"]
         end
 
         subgraph Ingestion_Engine ["Order Ingestion Pipeline"]
@@ -240,6 +246,8 @@ flowchart TD
             MWL_SVC["MWL Generator & Active Memory Store"]
             GEN_SVC["DicomGeneratorService (Transcoder & Synthesizer)"]
             DISK_STORE[("Local Disk Storage")]
+            RECEIVED_STORE[("STOW Received Storage")]
+            STOW_MEM[("In-Memory STOW Cache")]
             TEMPLATES[("Multi-Slice DICOM Templates")]
         end
     end
@@ -255,13 +263,21 @@ flowchart TD
 
     PACS -- "Study C-FIND Request" --> FIND_HANDLER
     FIND_HANDLER <--> MWL_SVC
+    FIND_HANDLER <--> STOW_MEM
 
     PACS -- "C-MOVE Request" --> MOVE_HANDLER
     MOVE_HANDLER <--> MWL_SVC
+    MOVE_HANDLER <--> STOW_MEM
     MOVE_HANDLER --> GEN_SVC
     GEN_SVC <--> TEMPLATES
     GEN_SVC --> STORE_SCU
-    STORE_SCU -- "C-STORE Sub-operations" --> PACS
+    STORE_SCU -- "C-STORE Sub-operations (Secondary Assoc)" --> PACS
+
+    PACS -- "C-GET Request" --> GET_HANDLER
+    GET_HANDLER <--> MWL_SVC
+    GET_HANDLER <--> STOW_MEM
+    GET_HANDLER --> GEN_SVC
+    GET_HANDLER -- "C-STORE Sub-operations (Same Assoc)" --> PACS
 
     MOD -- "C-STORE Request" --> STORE_SCP
     STORE_SCP --> DISK_STORE
@@ -269,7 +285,7 @@ flowchart TD
     VIEWER -- "QIDO Search" --> QIDO
     VIEWER -- "WADO Retrieval" --> WADO_RS
     VIEWER -- "Rendered Preview" --> WADO_URI
-    CLIENT -- "STOW Store" --> STOW_RS
+    VIEWER -- "STOW Store" --> STOW_RS
     QIDO <--> MWL_SVC
     QIDO <--> DISK_STORE
     QIDO <--> STOW_MEM
@@ -284,18 +300,20 @@ flowchart TD
 
 - **Verification SCP (`_handle_echo`)**: Accepts presentation contexts for Verification SOP Class and returns Success (`0x0000`).
 - **Query/Retrieve C-FIND SCP (`_handle_find`)**: Accepts presentation contexts for Patient Root, Study Root, and Modality Worklist Find models. Evaluates incoming query identifiers against active in-memory MWL entries, local storage records, and in-memory STOW-RS received datasets. Returns matches using status Pending (`0xFF00`) and concludes with Success (`0x0000`).
-- **Query/Retrieve C-MOVE SCP (`_handle_move`)**: Accepts presentation contexts for Patient Root and Study Root Move models. Evaluates requested studies against received STOW-RS datasets and MWL entries, synthesizes or extracts matching instances, and initiates outgoing C-STORE SCU sub-operations to the destination AE.
+- **Query/Retrieve C-MOVE SCP (`_handle_move`)**: Accepts presentation contexts for Patient Root and Study Root Move models. Evaluates requested studies against received STOW-RS datasets and MWL entries, synthesizes or extracts matching instances, and initiates outgoing C-STORE SCU sub-operations to the destination AE over a secondary association.
+- **Query/Retrieve C-GET SCP (`_handle_get`)**: Accepts presentation contexts for Patient Root and Study Root Get models. Evaluates requested studies, series, or instances against received STOW-RS datasets and MWL entries, performs reverse SCP/SCU role selection extended negotiation, adapts transfer syntaxes to the peer's negotiated presentation context, and transmits C-STORE sub-operations directly back to the requesting SCU across the **same established association**.
 - **Storage C-STORE SCP (`_handle_store`)**: Accepts presentation contexts for all standard DICOM composite storage SOP classes and writes incoming datasets to Part 10 compliant files on disk under `config.storage_dir`.
 - **Storage C-STORE SCU (`push_study_to_destination`)**: Initiates DICOM associations to remote Storage SCPs to transfer generated or retrieved image series, transcoding images to the peer's negotiated transfer syntax on the fly.
-- **DICOMweb STOW-RS Provider (`stow_store_instances`)**: Accepts HTTP POST requests containing multipart/related Part-10 DICOM objects or raw datasets, saves them into the configured received folder (`./received`), indexes them in memory, and allows immediate retrieval via QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE. Duplicate SOP instances are managed via configurable policy (`accept`, `warn`, `reject`).
+- **DICOMweb STOW-RS Provider (`stow_store_instances`)**: Accepts HTTP POST requests containing multipart/related Part-10 DICOM objects or raw datasets, saves them into the configured received folder (`./received`), indexes them in memory, and allows immediate retrieval via QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE/C-GET. Duplicate SOP instances are managed via configurable policy (`accept`, `warn`, `reject`).
 
 #### 4.1.3 Sequencing of Real-World Activities
 
 1. **Order Creation**: An EHR sends an HL7 `ORM^O01` message over MLLP (port 2575) or POSTs a FHIR R4 `Bundle` (port 8000). The ingestion engine parses patient demographics, order numbers, and modality codes, checks template availability, creates an active MWL entry, and returns an acknowledgement (`ACK^O01` or HTTP 200).
 2. **Modality Query**: An imaging modality queries the mock server via MWL C-FIND (port 11112). The server returns the active scheduled procedure step items.
 3. **Image Retrieval / Push**:
-   - A viewing workstation or PACS issues a C-MOVE request specifying a Study UID. The server synthesizes the study from multi-slice templates, transcode slices to the negotiated syntax, and transmits them to the destination AE via C-STORE sub-operations.
-   - Alternatively, automated background schedules push completed studies during simulated business hours.
+   - A viewing workstation or PACS issues a **C-MOVE** request specifying a Study UID. The server synthesizes the study from multi-slice templates, transcodes slices to the negotiated syntax, and transmits them to the destination AE via C-STORE sub-operations on a secondary association.
+   - A viewing workstation issues a **C-GET** request specifying a Study UID, Series UID, or SOP Instance UID. The server reverses storage roles on the established association, adapts transfer syntaxes to the negotiated context, and sends C-STORE sub-operations back across the existing association.
+   - Alternatively, automated background schedules (`auto-push`) push completed studies during simulated business hours.
 4. **DICOMweb Query & Visualization**: A web-based viewer searches for studies using QIDO-RS and retrieves multipart DICOM instances, single frames, or rendered PNG/JPEG previews using WADO-RS.
 
 ---
@@ -314,8 +332,10 @@ The `MOCK_SCP` Application Entity provides Standard Conformance to the following
 | Modality Worklist Information Model - FIND | `1.2.840.10008.5.1.4.31` | No | Yes |
 | Patient Root Q/R Information Model - FIND | `1.2.840.10008.5.1.4.1.2.1.1` | No | Yes |
 | Patient Root Q/R Information Model - MOVE | `1.2.840.10008.5.1.4.1.2.1.2` | No | Yes |
+| Patient Root Q/R Information Model - GET | `1.2.840.10008.5.1.4.1.2.1.3` | No | Yes |
 | Study Root Q/R Information Model - FIND | `1.2.840.10008.5.1.4.1.2.2.1` | No | Yes |
 | Study Root Q/R Information Model - MOVE | `1.2.840.10008.5.1.4.1.2.2.2` | No | Yes |
+| Study Root Q/R Information Model - GET | `1.2.840.10008.5.1.4.1.2.2.3` | No | Yes |
 | All Standard Composite Storage SOP Classes | *Refer to Table 1-1* | Yes | Yes |
 
 ##### 4.2.1.2 Association Policies
@@ -394,7 +414,28 @@ The `MOCK_SCP` Application Entity provides Standard Conformance to the following
   - `0xA801`: Refused: Move Destination Unknown.
   - `0xFE00`: Cancel: Sub-operations terminated due to cancel request.
 
-###### 4.2.1.3.4 Activity - Storage (C-STORE SCP)
+###### 4.2.1.3.4 Activity - Retrieve / Get (C-GET)
+- **Description**: Synthesizes and transmits matching studies, series, or instances to the requesting SCU across the **same established DICOM association**.
+- **Accepted Presentation Contexts**:
+  - Study Root Q/R Information Model - GET (`1.2.840.10008.5.1.4.1.2.2.3`)
+  - Patient Root Q/R Information Model - GET (`1.2.840.10008.5.1.4.1.2.1.3`)
+- **Role Selection Extended Negotiation**:
+  - The SCP accepts SCP/SCU role selection for all supported composite Storage SOP Classes with `scp_role=True, scu_role=True`.
+  - This enables the SCP to reverse roles during the association and act as a C-STORE SCU, delivering image instances directly to the client acting as a C-STORE SCP.
+- **Sub-Operation Workflow**:
+  1. Extracts query identifier parameters (`QueryRetrieveLevel`, `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID`, `PatientID`, `AccessionNumber`).
+  2. Resolves matching composite instances from in-memory MWL entries, multi-slice templates, or STOW-RS stores.
+  3. Yields the total number of sub-operations (`NumberOfRemainingSuboperations`).
+  4. Adapts each dataset's transfer syntax to the client's negotiated presentation context on the existing association and sends C-STORE sub-operations.
+  5. Concludes the C-GET operation with final status (`0x0000`).
+- **Response Status Codes**:
+  - `0xFF00`: Pending (sub-operation in progress).
+  - `0x0000`: Success (all sub-operations complete, 0 failures).
+  - `0xB000`: Warning (sub-operations complete with one or more warnings).
+  - `0xA702`: Refused: Out of Resources - Unable to perform sub-operations.
+  - `0xFE00`: Cancel: Sub-operations terminated due to cancel request.
+
+###### 4.2.1.3.5 Activity - Storage (C-STORE SCP)
 - **Description**: Accepts incoming DICOM Part 10 SOP instances and saves them to local disk under `config.storage_dir`.
 - **Accepted Presentation Contexts**: All standard DICOM storage SOP classes configured with any of the 6 supported transfer syntaxes.
 - **Response Status Codes**:
@@ -404,7 +445,7 @@ The `MOCK_SCP` Application Entity provides Standard Conformance to the following
 ##### 4.2.1.4 Association Initiation Policy
 
 ###### 4.2.1.4.1 Activity - Storage (C-STORE SCU)
-- **Description**: Transmits synthesized DICOM SOP instances to a remote Storage SCP during C-MOVE sub-operations or scheduled auto-pushes (`push_study_to_destination`).
+- **Description**: Transmits synthesized DICOM SOP instances to a remote Storage SCP during C-MOVE sub-operations, C-GET sub-operations, or scheduled auto-pushes (`push_study_to_destination`).
 - **Proposed Presentation Contexts**:
   - Proposes all standard storage SOP classes matching the modality being transferred (CT, MR, DX, CR, etc.).
   - Proposes the preferred configured transfer syntax (`config.transfer_syntax`) followed by the full prioritized fallback list.
@@ -442,7 +483,7 @@ All parameters are configurable via environment variables (with `GOSMART_MS_` pr
 | Parameter | Environment Variable | Default Value | Description |
 | :--- | :--- | :--- | :--- |
 | **SCP AE Title** | `GOSMART_MS_SCP_AE_TITLE`<br>`GOSMART_MS_AE_TITLE` | `GOSMART_SCP` | Local DICOM Application Entity Title |
-| **SCP Port** | `GOSMART_MS_SCP_PORT`<br>`SCP_PORT` | `11112` | DICOM Upper Layer TCP listen port |
+| **SCP Port** | `GOSMART_MS_SCP_PORT`<br>`SCP_PORT` | `11112` | DICOM Upper Layer TCP listen port (C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE, MWL) |
 | **HTTP Host** | `GOSMART_MS_HOST`<br>`HOST` | `127.0.0.1` | HTTP API & DICOMweb listen host |
 | **HTTP Port** | `GOSMART_MS_PORT`<br>`PORT` | `8000` | HTTP API & DICOMweb listen port |
 | **HL7 MLLP Host** | `GOSMART_MS_HL7_HOST` | `0.0.0.0` | HL7 v2 MLLP listen host |
@@ -459,6 +500,10 @@ All parameters are configurable via environment variables (with `GOSMART_MS_` pr
 | **Stress Mode** | `GOSMART_MS_STRESS` | `false` | Enable single-frame compression cloning |
 | **MWL Window (Hours)** | `GOSMART_MS_MWL_WINDOW_HR` | `24` | Retention window for active worklist entries |
 | **MWL Peak Hourly Rate** | `GOSMART_MS_MWL_RATE_PER_HR` | `12.0` | New MWL entries generated per hour (9am-5pm) |
+| **MWL Generator Mode** | `GOSMART_MS_WML_GENERATOR_MODE`<br>`GOSMART_MS_MWL_GENERATOR_MODE` | `internal` | Modality Worklist generator mode (`internal` or `fhir`) |
+| **FHIR Plugin URL** | `GOSMART_MS_FHIR_PLUGIN_URL` | `http://localhost:8088` | Base URL of peer `gosmart-fhir-py-plugin` service |
+| **FHIR Raw Count** | `GOSMART_MS_FHIR_RAW_COUNT` | `200` | Raw imaging study bundles requested per batch in FHIR mode |
+| **FHIR Patient ID System** | `GOSMART_MS_FHIR_PATIENT_ID_SYSTEM`<br>`FHIR_PATIENT_ID_SYSTEM` | `urn:oid:2.16.840.1.113883.4.3.25` | Target `patient.identifier.system` URI used to extract the primary Patient ID |
 | **Patient Suffix** | `GOSMART_MS_PATIENT_SUFFIX` | `_GSH` | Suffix appended to patient names |
 | **Physician Suffix** | `GOSMART_MS_PN_SUFFIX` | `_GSH` | Suffix appended to physician names |
 | **Institution Name** | `GOSMART_MS_INSTITUTION_NAME` | `GO SMART CLINIC` | Default Institution Name `(0008,0080)` |
@@ -585,4 +630,3 @@ Modality codes adhere to standard PS 3.16 CID 29 (Acquisition Modality): `CT`, `
   - Metadata: `application/dicom+json`
   - Rendered Views: `image/jpeg`, `image/png`
 - Dynamic Transfer Syntax Negotiation: Supports standard semicolon- and comma-delimited `Accept` headers (e.g. `multipart/related; type="application/dicom"; transfer-syntax=1.2.840.10008.1.2.4.90`) as well as query parameters (`?transferSyntax=...`).
-
