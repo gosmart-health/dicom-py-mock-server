@@ -105,7 +105,7 @@ class _MwlEntriesList(list):
 
     def clear(self) -> None:
         super().clear()
-        self._owner._synthea_entries.clear()
+        self._owner.clear_synthea_entries()
 
 
 class MwlGeneratorService:
@@ -220,14 +220,14 @@ class MwlGeneratorService:
                             "format": "json",
                             "data": data,
                         }
-                    except Exception:
+                    except [ValueError] as _:
                         pass
                     continue
 
                 # Attempt to read as DICOM
                 try:
                     ds = pydicom.dcmread(file_path, force=True)
-                except Exception as exc:
+                except [ValueError] as exc:
                     logger.debug("skipping_non_dicom_file", path=str(file_path), error=str(exc))
                     continue
 
@@ -404,6 +404,20 @@ class MwlGeneratorService:
             loaded_modalities=list(self.template_modalities.keys()),
             datasets_per_modality={m: len(ds) for m, ds in self.template_datasets_by_modality.items()},
         )
+
+    def clear_synthea_entries(self):
+        self._synthea_entries.clear()
+
+    @staticmethod
+    def set_perf_phys(ds: Dataset, entry: dict, json_e: dict):
+        perf_phys = entry.get("performing_physician")
+        if not perf_phys and "00081050" in json_e and json_e["00081050"].get("Value"):
+            perf_raw = json_e["00081050"]["Value"][0]
+            perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
+        if perf_phys:
+            ds.PerformingPhysicianName = perf_phys
+
+
 
     def get_template_modalities(self) -> list[str]:
         """Get the list of currently loaded in-memory template modalities."""
@@ -1252,16 +1266,15 @@ class MwlGeneratorService:
         return matched
 
     @staticmethod
-    def to_patient_cfind_dataset(
+    def _populate_patient_demographics(
+        ds: Dataset,
         entry: dict[str, Any],
-        related_entries: list[dict[str, Any]] | None = None,
-    ) -> Dataset:
-        """Convert patient/study/series entry record(s) into a DICOM Patient Level C-FIND response Dataset."""
-        ds = Dataset()
-        json_e = entry.get("json_entry", {})
+        json_e: dict[str, Any] | None = None,
+    ) -> None:
+        """Populate patient demographic attributes (Name, ID, BirthDate, Sex) on a Dataset."""
+        if json_e is None:
+            json_e = entry.get("json_entry", {})
 
-        ds.SpecificCharacterSet = "ISO_IR 192"
-        ds.QueryRetrieveLevel = "PATIENT"
         ds.PatientName = entry.get("patient_name", "")
         ds.PatientID = entry.get("patient_id", "")
 
@@ -1276,6 +1289,19 @@ class MwlGeneratorService:
             sex = json_e["00100040"]["Value"][0]
         if sex is not None:
             ds.PatientSex = str(sex)
+
+    @staticmethod
+    def to_patient_cfind_dataset(
+        entry: dict[str, Any],
+        related_entries: list[dict[str, Any]] | None = None,
+    ) -> Dataset:
+        """Convert patient/study/series entry record(s) into a DICOM Patient Level C-FIND response Dataset."""
+        ds = Dataset()
+        json_e = entry.get("json_entry", {})
+
+        ds.SpecificCharacterSet = "ISO_IR 192"
+        ds.QueryRetrieveLevel = "PATIENT"
+        MwlGeneratorService._populate_patient_demographics(ds, entry, json_e)
 
         entries_for_patient = related_entries if related_entries else [entry]
         distinct_studies = {str(e.get("study_uid", "")) for e in entries_for_patient if e.get("study_uid")}
@@ -1301,19 +1327,7 @@ class MwlGeneratorService:
         json_e = entry.get("json_entry", {})
 
         ds.QueryRetrieveLevel = "STUDY"
-        ds.PatientName = entry.get("patient_name", "")
-        ds.PatientID = entry.get("patient_id", "")
-        dob = entry.get("patient_birth_date") or entry.get("dob")
-        if not dob and "00100030" in json_e and json_e["00100030"].get("Value"):
-            dob = json_e["00100030"]["Value"][0]
-        if dob is not None:
-            ds.PatientBirthDate = str(dob)
-
-        sex = entry.get("patient_sex") or entry.get("sex")
-        if not sex and "00100040" in json_e and json_e["00100040"].get("Value"):
-            sex = json_e["00100040"]["Value"][0]
-        if sex is not None:
-            ds.PatientSex = str(sex)
+        MwlGeneratorService._populate_patient_demographics(ds, entry, json_e)
 
         ds.StudyInstanceUID = entry.get("study_uid", "")
         ds.AccessionNumber = entry.get("accession", "")
@@ -1330,12 +1344,7 @@ class MwlGeneratorService:
         if ref_phys:
             ds.ReferringPhysicianName = ref_phys
 
-        perf_phys = entry.get("performing_physician")
-        if not perf_phys and "00081050" in json_e and json_e["00081050"].get("Value"):
-            perf_raw = json_e["00081050"]["Value"][0]
-            perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
-        if perf_phys:
-            ds.PerformingPhysicianName = perf_phys
+        MwlGeneratorService.set_perf_phys(ds, entry, json_e)
 
         read_phys = entry.get("reading_physician")
         if not read_phys and "00081060" in json_e and json_e["00081060"].get("Value"):
@@ -1405,12 +1414,7 @@ class MwlGeneratorService:
         if inst_name:
             ds.InstitutionName = inst_name
 
-        perf_phys = entry.get("performing_physician")
-        if not perf_phys and "00081050" in json_e and json_e["00081050"].get("Value"):
-            perf_raw = json_e["00081050"]["Value"][0]
-            perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
-        if perf_phys:
-            ds.PerformingPhysicianName = perf_phys
+        MwlGeneratorService.set_perf_phys(ds, entry, json_e)
 
         ds.AccessionNumber = entry.get("accession", "")
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]

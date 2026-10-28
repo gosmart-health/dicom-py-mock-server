@@ -405,3 +405,48 @@ def test_us_modality_female_gender_sensitivity():
             assert rec is not None
             assert rec["modality"] == mod
             assert rec["dataset"].PatientSex == sex_val
+
+
+def test_cfind_dataset_patient_demographics_population():
+    """Verify patient demographic helper populates PatientName, PatientID, PatientBirthDate, and PatientSex."""
+    service = MwlGeneratorService()
+    record = {
+        "patient_name": "DOE^JOHN",
+        "patient_id": "MRN12345",
+        "patient_birth_date": "19800101",
+        "patient_sex": "M",
+        "study_uid": "1.2.3.4",
+        "series_uid": "1.2.3.4.1",
+        "accession": "ACC123",
+        "num_instances": 10,
+    }
+
+    patient_ds = service.to_patient_cfind_dataset(record)
+    assert patient_ds.PatientName == "DOE^JOHN"
+    assert patient_ds.PatientID == "MRN12345"
+    assert patient_ds.PatientBirthDate == "19800101"
+    assert patient_ds.PatientSex == "M"
+
+    study_ds = service.to_study_cfind_dataset(record)
+    assert study_ds.PatientName == "DOE^JOHN"
+    assert study_ds.PatientID == "MRN12345"
+    assert study_ds.PatientBirthDate == "19800101"
+    assert study_ds.PatientSex == "M"
+
+    # Test fallback to json_entry when top-level fields are missing
+    record_fallback = {
+        "patient_name": "DOE^JANE",
+        "patient_id": "MRN67890",
+        "json_entry": {
+            "00100030": {"Value": ["19900505"]},
+            "00100040": {"Value": ["F"]},
+        },
+        "study_uid": "1.2.3.5",
+    }
+    pat_fallback_ds = service.to_patient_cfind_dataset(record_fallback)
+    assert pat_fallback_ds.PatientBirthDate == "19900505"
+    assert pat_fallback_ds.PatientSex == "F"
+
+    study_fallback_ds = service.to_study_cfind_dataset(record_fallback)
+    assert study_fallback_ds.PatientBirthDate == "19900505"
+    assert study_fallback_ds.PatientSex == "F"
