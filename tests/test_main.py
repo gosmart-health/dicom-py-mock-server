@@ -56,3 +56,25 @@ def test_app_lifespan_starts_scp_and_seeds_mock_studies(monkeypatch):
         status = assoc.send_c_echo()
         assert status and status.Status == 0x0000
         assoc.release()
+
+
+def test_app_lifespan_in_fhir_mode(monkeypatch):
+    """Verify app lifespan behavior in fhir mode."""
+    test_port = 11130
+    monkeypatch.setattr(config, "scp_port", test_port)
+    monkeypatch.setattr(config, "generator_mode", "fhir")
+    scp_service.port = test_port
+    scp_service.stop()
+    time.sleep(0.1)
+
+    from dicom_py_mock_server.api.routes import mwl_service
+
+    mwl_service.clear_synthea_entries()
+    mwl_service._entries.clear()
+
+    with TestClient(app) as client:
+        res_mwl = client.get("/api/v1/mwl/status")
+        assert res_mwl.status_code == 200
+        data = res_mwl.json()
+        assert data["generator_mode"] == "fhir"
+        assert "fhir_plugin_url" in data

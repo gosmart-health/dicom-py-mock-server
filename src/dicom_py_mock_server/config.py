@@ -223,6 +223,27 @@ class AppConfig(BaseSettings):
         validation_alias=AliasChoices("GOSMART_MS_FHIR_ENABLED", "FHIR_ENABLED"),
         description="Enable FHIR ServiceRequest / Bundle REST endpoints",
     )
+    fhir_plugin_url: str = Field(
+        default="http://localhost:8088",
+        validation_alias=AliasChoices("GOSMART_MS_FHIR_PLUGIN_URL", "FHIR_PLUGIN_URL"),
+        description="FHIR Plugin Module URL. Always local.",
+    )
+    generator_mode: str = Field(
+        default="internal",
+        validation_alias=AliasChoices(
+            "GOSMART_MS_WML_GENERATOR_MODE",
+            "GOSMART_MS_MWL_GENERATOR_MODE",
+            "GENERATOR_MODE",
+            "WML_GENERATOR_MODE",
+            "MWL_GENERATOR_MODE",
+        ),
+        description="Study generator mode 'internal', 'fhir', or empty, 'internal' as default",
+    )
+    fhir_raw_count: int = Field(
+        default=200,
+        validation_alias=AliasChoices("GOSMART_MS_FHIR_RAW_COUNT", "FHIR_RAW_COUNT"),
+        description="Raw records to request per FHIR query",
+    )
 
     @property
     def ae_title(self) -> str:

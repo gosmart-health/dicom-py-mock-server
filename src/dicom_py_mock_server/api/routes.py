@@ -25,6 +25,7 @@ router = APIRouter()
 generator_service = DicomGeneratorService()
 mwl_service = MwlGeneratorService(config)
 scp_service = DicomScpService(ae_title=config.ae_title, port=config.scp_port, mwl_service=mwl_service)
+mwl_service.set_scp_service(scp_service)
 
 
 @router.get("/health")

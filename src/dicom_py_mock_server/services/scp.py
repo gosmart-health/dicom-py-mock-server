@@ -755,6 +755,10 @@ class DicomScpService:
 
         entry = self._auto_push_queue.pop(0) if self._auto_push_queue else None
         if entry is None and self.mwl_service:
+            gen_mode = str(getattr(self.mwl_service.config, "generator_mode", "internal")).strip().lower()
+            if gen_mode == "fhir":
+                logger.debug("dicom_auto_push_fhir_queue_empty_idling")
+                return None
             entry = self.mwl_service.add_entry()
 
         if not entry:

@@ -8,6 +8,7 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "fastapi>=0.110.0",
     "fhir-resources>=8.3.0",
+    "httpx>=0.27.0",
     "ipykernel>=7.3.0",
     "numpy>=2.2.6",
     "pillow>=13.0.0",
@@ -62,5 +63,3 @@ filterwarnings = [
     "ignore:.*is_little_endian.*:DeprecationWarning",
     "ignore:.*is_implicit_VR.*:DeprecationWarning",
 ]
-
-

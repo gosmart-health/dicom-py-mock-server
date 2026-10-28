@@ -132,3 +132,31 @@ def test_env_file_reading(tmp_path, monkeypatch):
     assert cfg.pn_suffix == "_DOTENV_PN"
     assert cfg.institution_name == "DOTENV CLINIC"
     assert cfg.id_prefix == "DOTENV-"
+
+
+def test_fhir_plugin_and_generator_mode_defaults():
+    """Test default values for FHIR plugin URL and generator mode."""
+    cfg = AppConfig(_env_file=None)
+    assert cfg.fhir_plugin_url == "http://localhost:8088"
+    assert cfg.generator_mode == "internal"
+    assert cfg.fhir_raw_count == 200
+
+
+def test_fhir_plugin_and_generator_mode_aliases(monkeypatch):
+    """Test aliases for generator mode and fhir plugin url."""
+    monkeypatch.setenv("GOSMART_MS_WML_GENERATOR_MODE", "fhir")
+    monkeypatch.setenv("GOSMART_MS_FHIR_PLUGIN_URL", "http://10.0.0.1:9099")
+    monkeypatch.setenv("GOSMART_MS_FHIR_RAW_COUNT", "50")
+
+    cfg = AppConfig()
+    assert cfg.generator_mode == "fhir"
+    assert cfg.fhir_plugin_url == "http://10.0.0.1:9099"
+    assert cfg.fhir_raw_count == 50
+
+    monkeypatch.delenv("GOSMART_MS_WML_GENERATOR_MODE")
+    monkeypatch.delenv("GOSMART_MS_FHIR_PLUGIN_URL")
+    monkeypatch.setenv("GENERATOR_MODE", "fhir_alt")
+    monkeypatch.setenv("FHIR_PLUGIN_URL", "http://127.0.0.1:8080")
+    cfg2 = AppConfig()
+    assert cfg2.generator_mode == "fhir_alt"
+    assert cfg2.fhir_plugin_url == "http://127.0.0.1:8080"

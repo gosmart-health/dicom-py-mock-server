@@ -17,6 +17,8 @@ from pydicom.uid import CTImageStorage
 from dicom_py_mock_server.config import AppConfig
 from dicom_py_mock_server.config import config as global_config
 from dicom_py_mock_server.models.template import TemplateSeriesDataset
+from dicom_py_mock_server.services.fhir_imaging_client import FhirPluginClient
+from dicom_py_mock_server.services.fhir_imaging_parser import FhirImagingParser
 from dicom_py_mock_server.services.generator import get_random_study_description
 from dicom_py_mock_server.services.person_generator import PersonGenerator
 from dicom_py_mock_server.services.uid_generator import (
@@ -116,6 +118,8 @@ class MwlGeneratorService:
         app_config: AppConfig | None = None,
         patient_generator: PersonGenerator | None = None,
         synthea_utils: Any | None = None,
+        fhir_client: Any | None = None,
+        fhir_parser: Any | None = None,
     ) -> None:
         self.config = app_config or global_config
         self.patient_generator = patient_generator or PersonGenerator(
@@ -124,6 +128,12 @@ class MwlGeneratorService:
             pn_suffix=self.config.pn_suffix,
         )
         self.synthea_utils = synthea_utils
+        self.fhir_client = fhir_client or FhirPluginClient(base_url=self.config.fhir_plugin_url)
+        self.fhir_parser = fhir_parser or FhirImagingParser(mwl_service=self)
+        self._fhir_bundle_queue: list[dict[str, Any]] = []
+        self._fhir_raw_offset: int = 0
+        self._fhir_is_exhausted: bool = False
+        self._scp_service: Any | None = None
         self.template_modalities: dict[str, dict[str, Any]] = {}
         self.dicom_templates: dict[str, list[Dataset]] = {}
         self.template_datasets_by_modality: dict[str, list[TemplateSeriesDataset]] = defaultdict(list)
@@ -151,6 +161,86 @@ class MwlGeneratorService:
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store reference to the main asyncio event loop."""
         self._loop = loop
+
+    def set_scp_service(self, scp_service: Any) -> None:
+        """Store reference to DicomScpService for auto-push propagation."""
+        self._scp_service = scp_service
+
+    async def _fetch_fhir_bundles_if_needed(self, items_needed: int = 1) -> None:
+        """Fetch more bundles from patient-imaging API if local queue has fewer than items_needed."""
+        if len(self._fhir_bundle_queue) < items_needed:
+            queue_len_before = len(self._fhir_bundle_queue)
+            modalities = self.get_template_modalities() or None
+            fetched_bundles, new_offset, raw_count = await self.fhir_client.fetch_patient_imaging(
+                raw_offset=self._fhir_raw_offset,
+                raw_count=self.config.fhir_raw_count,
+                modalities=modalities,
+            )
+            logger.info(
+                "fhir_patient_imaging_fetched",
+                items_returned=len(fetched_bundles),
+                raw_count=raw_count,
+                raw_offset=new_offset,
+                queue_depth_before=queue_len_before,
+                queue_depth_after=queue_len_before + len(fetched_bundles),
+            )
+            self._fhir_raw_offset = new_offset
+            self._fhir_bundle_queue.extend(fetched_bundles)
+            self._fhir_is_exhausted = len(fetched_bundles) == 0 and len(self._fhir_bundle_queue) == 0
+
+    async def _generate_one_fhir_study(self) -> dict[str, Any] | None:
+        """Generate one MWL/C-FIND study entry from the local FHIR bundle queue."""
+        await self._fetch_fhir_bundles_if_needed(items_needed=1)
+
+        if not self._fhir_bundle_queue:
+            logger.warning(
+                "fhir_patient_imaging_exhausted",
+                raw_offset=self._fhir_raw_offset,
+                message="No FHIR imaging studies available from patient-imaging API; generation paused.",
+            )
+            return None
+
+        bundle_data = self._fhir_bundle_queue.pop(0)
+        custom_entries = self.fhir_parser.parse_bundle_to_custom_entries(bundle_data)
+        if not custom_entries:
+            logger.warning("fhir_bundle_has_no_usable_imaging_series")
+            return None
+
+        first_record: dict[str, Any] | None = None
+        for custom_entry in custom_entries:
+            entry_record = self.add_entry(custom=custom_entry)
+            if entry_record is not None:
+                self.register_synthea_entry(entry_record)
+            else:
+                entry_record = self.register_study_series_entry(custom=custom_entry)
+
+            if entry_record:
+                if first_record is None:
+                    first_record = entry_record
+                if self._scp_service and getattr(self.config, "auto_push_ae", ""):
+                    self._scp_service.enqueue_auto_push_study(entry_record)
+
+                logger.info(
+                    "fhir_mwl_entry_activated",
+                    patient_id=entry_record.get("patient_id"),
+                    study_uid=entry_record.get("study_uid"),
+                    accession=entry_record.get("accession"),
+                    modality=entry_record.get("modality"),
+                    queue_depth_remaining=len(self._fhir_bundle_queue),
+                )
+
+        return first_record
+
+    async def seed_initial_fhir_entries(self, count: int = 1) -> list[dict[str, Any]]:
+        """Prime the MWL worklist with initial entries from the FHIR plugin at startup."""
+        seeded: list[dict[str, Any]] = []
+        for _ in range(count):
+            rec = await self._generate_one_fhir_study()
+            if rec:
+                seeded.append(rec)
+            else:
+                break
+        return seeded
 
     def _load_templates(self) -> None:
         """Load template modalities and multi-slice DICOM templates into memory from templates_path.
@@ -416,8 +506,6 @@ class MwlGeneratorService:
             perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
         if perf_phys:
             ds.PerformingPhysicianName = perf_phys
-
-
 
     def get_template_modalities(self) -> list[str]:
         """Get the list of currently loaded in-memory template modalities."""
@@ -1490,7 +1578,8 @@ class MwlGeneratorService:
         current_rate = self.get_current_rate_per_hr(now)
         is_biz_hrs = 9 <= now.hour < 17
 
-        return {
+        mode = str(getattr(self.config, "generator_mode", "internal")).strip().lower()
+        res: dict[str, Any] = {
             "active_entries_count": len(self._entries),
             "window_hr": self.config.mwl_window_hr,
             "base_rate_per_hr": float(self.config.mwl_rate_per_hr),
@@ -1498,11 +1587,18 @@ class MwlGeneratorService:
             "is_business_hours": is_biz_hrs,
             "template_modalities": self.get_template_modalities(),
             "is_auto_generating": self._is_auto_generating,
+            "generator_mode": mode,
         }
+        if mode == "fhir":
+            res["fhir_plugin_url"] = self.config.fhir_plugin_url
+            res["fhir_raw_offset"] = self._fhir_raw_offset
+            res["fhir_queue_depth"] = len(self._fhir_bundle_queue)
+            res["is_exhausted"] = self._fhir_is_exhausted
+        return res
 
     async def _auto_generation_loop(self) -> None:
         """Async background task that generates MWL entries according to the current rate."""
-        logger.info("mwl_auto_generation_loop_started")
+        logger.info("mwl_auto_generation_loop_started", generator_mode=self.config.generator_mode)
         try:
             while self._is_auto_generating:
                 now = datetime.now()
@@ -1510,12 +1606,19 @@ class MwlGeneratorService:
                 # Interval in seconds: 3600 / rate_per_hr
                 interval = 3600.0 / max(rate_per_hr, 0.01)
 
-                # Sleep interval seconds or wait for stop
-                await asyncio.sleep(min(interval, 60.0))
-                if not self._is_auto_generating:
-                    break
+                is_fhir_mode = str(getattr(self.config, "generator_mode", "internal")).strip().lower() == "fhir"
 
-                self.add_entry()
+                if is_fhir_mode:
+                    await self._generate_one_fhir_study()
+                else:
+                    self.add_entry()
+
+                # Responsive interruptible sleep for interval seconds
+                remaining = interval
+                while remaining > 0 and self._is_auto_generating:
+                    step = min(remaining, 1.0)
+                    await asyncio.sleep(step)
+                    remaining -= step
         except asyncio.CancelledError:
             logger.info("mwl_auto_generation_loop_cancelled")
         except Exception as exc:
