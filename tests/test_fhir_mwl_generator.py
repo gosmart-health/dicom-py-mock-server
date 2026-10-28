@@ -9,20 +9,33 @@ from dicom_py_mock_server.services.mwl_generator import MwlGeneratorService
 from dicom_py_mock_server.services.scp import DicomScpService
 
 
-def create_sample_fhir_bundle(study_uid="1.2.840.111.1", patient_id="P-001", modality="CT"):
+def create_sample_fhir_bundle(
+    study_uid="1.2.840.111.1",
+    patient_id="P-001",
+    modality="CT",
+    identifier_system="urn:oid:2.16.840.1.113883.4.3.25",
+):
     """Helper to create a valid FHIR bundle payload with Patient and ImagingStudy."""
+    patient_res = {
+        "resourceType": "Patient",
+        "id": patient_id,
+        "name": [{"family": "Taylor", "given": ["Jordan"]}],
+        "gender": "female",
+        "birthDate": "1988-06-14",
+    }
+    if identifier_system:
+        patient_res["identifier"] = [
+            {
+                "system": identifier_system,
+                "value": patient_id,
+            }
+        ]
     return {
         "resourceType": "Bundle",
         "type": "collection",
         "entry": [
             {
-                "resource": {
-                    "resourceType": "Patient",
-                    "id": patient_id,
-                    "name": [{"family": "Taylor", "given": ["Jordan"]}],
-                    "gender": "female",
-                    "birthDate": "1988-06-14",
-                }
+                "resource": patient_res,
             },
             {
                 "resource": {
@@ -71,7 +84,7 @@ async def test_fhir_mwl_replenishment_and_pacing():
     rec1 = await mwl_service._generate_one_fhir_study()
     assert rec1 is not None
     assert rec1["study_uid"] == "1.2.840.111.101"
-    assert rec1["patient_id"].endswith("P-101")
+    assert rec1["patient_id"] == "P-101"
     assert rec1["modality"] == "CT"
 
     # Verify client was called with offset 0 and raw_count 200
@@ -86,7 +99,7 @@ async def test_fhir_mwl_replenishment_and_pacing():
     rec2 = await mwl_service._generate_one_fhir_study()
     assert rec2 is not None
     assert rec2["study_uid"] == "1.2.840.111.102"
-    assert rec2["patient_id"].endswith("P-102")
+    assert rec2["patient_id"] == "P-102"
     assert rec2["modality"] == "MR"
 
     mock_client.fetch_patient_imaging.assert_not_called()
@@ -166,6 +179,11 @@ async def test_fhir_mwl_cfind_discovery():
     patient_id = rec["patient_id"]
     accession = rec["accession"]
 
+    # Verify patient_id and accession are exactly without prefix
+    assert patient_id == "P-501"
+    assert not patient_id.startswith("GSH-")
+    assert not accession.startswith("GSH-")
+
     # 1. MWL C-FIND query by StudyInstanceUID
     mwl_results = mwl_service.find_entries(study_uid=study_uid)
     assert len(mwl_results) == 1
@@ -194,3 +212,52 @@ async def test_fhir_mwl_cfind_discovery():
     image_datasets = mwl_service.to_image_cfind_datasets(sr_results[0])
     assert len(image_datasets) == sr_results[0]["num_instances"]
     assert hasattr(image_datasets[0], "SOPInstanceUID")
+
+
+@pytest.mark.anyio
+async def test_fhir_mwl_skips_when_patient_id_system_missing(capsys, caplog):
+    """Verify that when a FHIR patient lacks the required identifier system, no MWL or C-FIND records are created."""
+    cfg = AppConfig(
+        generator_mode="fhir",
+        fhir_patient_id_system="urn:oid:2.16.840.1.113883.4.3.25",
+    )
+    # Bundle where patient identifier has wrong system
+    b_invalid = create_sample_fhir_bundle(
+        study_uid="1.2.840.111.901",
+        patient_id="PAT-INVALID-01",
+        modality="CT",
+        identifier_system="http://hl7.org/fhir/sid/us-ssn",
+    )
+    mock_client = AsyncMock()
+    mock_client.fetch_patient_imaging.return_value = ([b_invalid], 1, 1)
+
+    mwl_service = MwlGeneratorService(app_config=cfg, fhir_client=mock_client)
+    rec = await mwl_service._generate_one_fhir_study()
+
+    assert rec is None
+    assert len(mwl_service._entries) == 0
+    assert len(mwl_service._synthea_entries) == 0
+
+    expected_log = (
+        "FHIR Patient Resource PAT-INVALID-01 does not contain the identifier matching "
+        "GOSMART_MS_FHIR_PATIENT_ID_SYSTEM=urn:oid:2.16.840.1.113883.4.3.25"
+    )
+    captured = capsys.readouterr()
+    assert expected_log in captured.out or expected_log in captured.err or expected_log in caplog.text
+
+
+@pytest.mark.anyio
+async def test_trigger_generation_immediate():
+    """Verify trigger_generation generates immediately without waiting for timer."""
+    cfg = AppConfig(generator_mode="fhir")
+    b1 = create_sample_fhir_bundle("1.2.840.111.999", "P-999", "CT")
+    mock_client = AsyncMock()
+    mock_client.fetch_patient_imaging.return_value = ([b1], 1, 1)
+
+    mwl_service = MwlGeneratorService(app_config=cfg, fhir_client=mock_client)
+    rec = await mwl_service.trigger_generation()
+
+    assert rec is not None
+    assert rec["study_uid"] == "1.2.840.111.999"
+    assert rec["patient_id"] == "P-999"
+    assert len(mwl_service._entries) == 1

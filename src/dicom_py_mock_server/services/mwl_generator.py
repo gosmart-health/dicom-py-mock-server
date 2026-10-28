@@ -129,7 +129,7 @@ class MwlGeneratorService:
         )
         self.synthea_utils = synthea_utils
         self.fhir_client = fhir_client or FhirPluginClient(base_url=self.config.fhir_plugin_url)
-        self.fhir_parser = fhir_parser or FhirImagingParser(mwl_service=self)
+        self.fhir_parser = fhir_parser or FhirImagingParser(mwl_service=self, app_config=self.config)
         self._fhir_bundle_queue: list[dict[str, Any]] = []
         self._fhir_raw_offset: int = 0
         self._fhir_is_exhausted: bool = False
@@ -681,7 +681,9 @@ class MwlGeneratorService:
         institution = self.config.institution_name
 
         # IDs and UIDs
-        accession = PersonGenerator.generate_random_id(8, prefix=self.config.id_prefix)
+        is_fhir = str(getattr(self.config, "generator_mode", "")).strip().lower() == "fhir"
+        id_prefix = "" if is_fhir else self.config.id_prefix
+        accession = PersonGenerator.generate_random_id(8, prefix=id_prefix)
         sps_id = PersonGenerator.generate_random_id(5)
         req_proc_id = PersonGenerator.generate_random_id(4)
 
@@ -1596,6 +1598,13 @@ class MwlGeneratorService:
             res["is_exhausted"] = self._fhir_is_exhausted
         return res
 
+    async def trigger_generation(self) -> dict[str, Any] | None:
+        """Trigger immediate generation of a single study (FHIR or synthetic/internal)."""
+        is_fhir_mode = str(getattr(self.config, "generator_mode", "internal")).strip().lower() == "fhir"
+        if is_fhir_mode:
+            return await self._generate_one_fhir_study()
+        return self.add_entry()
+
     async def _auto_generation_loop(self) -> None:
         """Async background task that generates MWL entries according to the current rate."""
         logger.info("mwl_auto_generation_loop_started", generator_mode=self.config.generator_mode)
@@ -1608,13 +1617,21 @@ class MwlGeneratorService:
 
                 is_fhir_mode = str(getattr(self.config, "generator_mode", "internal")).strip().lower() == "fhir"
 
+                rec = None
                 if is_fhir_mode:
-                    await self._generate_one_fhir_study()
+                    rec = await self._generate_one_fhir_study()
                 else:
-                    self.add_entry()
+                    rec = self.add_entry()
 
-                # Responsive interruptible sleep for interval seconds
-                remaining = interval
+                # If in FHIR mode and no study was generated (e.g. empty queue or ID mismatch),
+                # use a short backoff (e.g. 5 seconds) so we don't stall for hours before checking again.
+                if is_fhir_mode and rec is None:
+                    sleep_time = min(interval, 5.0)
+                else:
+                    sleep_time = interval
+
+                # Responsive interruptible sleep for sleep_time seconds
+                remaining = sleep_time
                 while remaining > 0 and self._is_auto_generating:
                     step = min(remaining, 1.0)
                     await asyncio.sleep(step)

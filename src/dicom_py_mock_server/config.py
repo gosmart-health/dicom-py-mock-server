@@ -244,6 +244,14 @@ class AppConfig(BaseSettings):
         validation_alias=AliasChoices("GOSMART_MS_FHIR_RAW_COUNT", "FHIR_RAW_COUNT"),
         description="Raw records to request per FHIR query",
     )
+    fhir_patient_id_system: str = Field(
+        default="urn:oid:2.16.840.1.113883.4.3.25",
+        validation_alias=AliasChoices(
+            "GOSMART_MS_FHIR_PATIENT_ID_SYSTEM",
+            "FHIR_PATIENT_ID_SYSTEM",
+        ),
+        description="FHIR Patient identifier.system URI used to locate the primary patient ID (default Mass DL)",
+    )
 
     @property
     def ae_title(self) -> str:

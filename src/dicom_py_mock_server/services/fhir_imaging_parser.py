@@ -11,7 +11,7 @@ from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.imagingstudy import ImagingStudy
 from fhir.resources.R4B.patient import Patient
 
-from dicom_py_mock_server.config import config
+from dicom_py_mock_server.config import config as global_config
 from dicom_py_mock_server.models.fhir_models import format_human_name_to_dicom
 from dicom_py_mock_server.services.person_generator import PersonGenerator
 from dicom_py_mock_server.services.uid_generator import generate_series_uid, generate_study_uid
@@ -50,50 +50,68 @@ def clean_dicom_uid(raw_uid: str | None) -> str | None:
 class FhirImagingParser:
     """Parses FHIR Patient and ImagingStudy resources into normalized DICOM MWL records."""
 
-    def __init__(self, mwl_service: Any | None = None) -> None:
+    def __init__(self, mwl_service: Any | None = None, app_config: Any | None = None) -> None:
         self.mwl_service = mwl_service
+        self.config = app_config or (getattr(mwl_service, "config", None) if mwl_service else None) or global_config
         self._study_accessions: dict[str, str] = {}
 
-    def extract_patient_demographics(self, patient: Patient | None) -> dict[str, str]:
-        """Extract standardized DICOM patient demographics from FHIR Patient resource."""
-        patient_id = ""
-        if patient and patient.identifier:
-            for ident in patient.identifier:
-                if ident.value:
-                    val = str(ident.value).strip()
-                    if config.id_prefix and not val.startswith(config.id_prefix):
-                        patient_id = f"{config.id_prefix}{val}"
-                    else:
-                        patient_id = val
-                    break
-        if not patient_id and patient and patient.id:
-            val = str(patient.id).strip()
-            if config.id_prefix and not val.startswith(config.id_prefix):
-                patient_id = f"{config.id_prefix}{val}"
-            else:
-                patient_id = val
-        if not patient_id:
-            patient_id = f"{config.id_prefix}MOCK-PATIENT-001"
+    def extract_patient_demographics(self, patient: Patient | None) -> dict[str, str] | None:
+        """Extract standardized DICOM patient demographics from FHIR Patient resource.
+
+        Requires an identifier matching GOSMART_MS_FHIR_PATIENT_ID_SYSTEM. If missing or
+        patient is None, logs a warning and returns None.
+        """
+        target_system = str(
+            getattr(self.config, "fhir_patient_id_system", "urn:oid:2.16.840.1.113883.4.3.25") or ""
+        ).strip()
+        patient_res_id = (getattr(patient, "id", None) or "UNKNOWN") if patient else "UNKNOWN"
+
+        if not patient:
+            warn_msg = (
+                f"FHIR Patient Resource {patient_res_id} does not contain the identifier matching "
+                f"GOSMART_MS_FHIR_PATIENT_ID_SYSTEM={target_system}"
+            )
+            logger.warning(warn_msg, patient_resource_id=patient_res_id, target_system=target_system)
+            return None
+
+        matched_value: str | None = None
+        for ident in getattr(patient, "identifier", None) or []:
+            ident_system = getattr(ident, "system", None)
+            ident_value = getattr(ident, "value", None)
+            if isinstance(ident, dict):
+                ident_system = ident.get("system")
+                ident_value = ident.get("value")
+
+            if ident_system and str(ident_system).strip() == target_system and ident_value and str(ident_value).strip():
+                matched_value = str(ident_value).strip()
+                break
+
+        if not matched_value:
+            warn_msg = (
+                f"FHIR Patient Resource {patient_res_id} does not contain the identifier matching "
+                f"GOSMART_MS_FHIR_PATIENT_ID_SYSTEM={target_system}"
+            )
+            logger.warning(warn_msg, patient_resource_id=patient_res_id, target_system=target_system)
+            return None
+
+        # For FHIR-based patient ID, do not prefix with GSH- or any other prefix
+        patient_id = matched_value
 
         patient_name = "UNKNOWN^PATIENT"
-        if patient and patient.name:
+        if patient.name:
             for name in patient.name:
                 pn = format_human_name_to_dicom(name)
                 if pn:
-                    if config.patient_suffix and not pn.endswith(config.patient_suffix):
-                        parts = pn.split("^")
-                        parts[0] = f"{parts[0]}{config.patient_suffix}"
-                        patient_name = "^".join(parts)
-                    else:
-                        patient_name = pn
+                    # Raw Demographics Preservation: do not append synthetic _GSH suffix
+                    patient_name = pn
                     break
 
         patient_birth_date = "19700101"
-        if patient and patient.birthDate:
+        if patient.birthDate:
             patient_birth_date = str(patient.birthDate).replace("-", "")[:8]
 
         patient_sex = "O"
-        if patient and patient.gender:
+        if patient.gender:
             g = str(patient.gender).lower().strip()
             patient_sex = "M" if g in ("male", "m") else ("F" if g in ("female", "f") else "O")
 
@@ -137,34 +155,81 @@ class FhirImagingParser:
             elif isinstance(res, ImagingStudy):
                 imaging_studies.append(res)
 
+        if not patient_res:
+            target_system = str(
+                getattr(self.config, "fhir_patient_id_system", "urn:oid:2.16.840.1.113883.4.3.25") or ""
+            ).strip()
+            warn_msg = (
+                "FHIR Patient Resource UNKNOWN does not contain the identifier matching "
+                f"GOSMART_MS_FHIR_PATIENT_ID_SYSTEM={target_system}"
+            )
+            logger.warning(warn_msg, patient_resource_id="UNKNOWN", target_system=target_system)
+            return []
+
         demo = self.extract_patient_demographics(patient_res)
+        if not demo:
+            return []
+
         custom_entries: list[dict[str, Any]] = []
 
         # Select physicians
         ref_physician = (
             self.mwl_service.referring_physicians[0]
             if self.mwl_service and getattr(self.mwl_service, "referring_physicians", None)
-            else f"Dr. Referring{config.pn_suffix}"
+            else f"Dr. Referring{self.config.pn_suffix}"
         )
         perf_physician = (
             self.mwl_service.performing_physicians[0]
             if self.mwl_service and getattr(self.mwl_service, "performing_physicians", None)
-            else f"Dr. Performing{config.pn_suffix}"
+            else f"Dr. Performing{self.config.pn_suffix}"
         )
 
         for imaging in imaging_studies:
             raw_study_uid: str | None = None
             if imaging.identifier:
                 for ident in imaging.identifier:
-                    if ident.value:
-                        cleaned = clean_dicom_uid(ident.value)
+                    ident_val = getattr(ident, "value", None)
+                    if isinstance(ident, dict):
+                        ident_val = ident.get("value")
+                    if ident_val:
+                        cleaned = clean_dicom_uid(ident_val)
                         if cleaned:
                             raw_study_uid = cleaned
                             break
 
+            explicit_accession: str | None = None
+            if imaging.identifier:
+                for ident in imaging.identifier:
+                    ident_val = getattr(ident, "value", None)
+                    if isinstance(ident, dict):
+                        ident_val = ident.get("value")
+                    if not ident_val:
+                        continue
+                    clean_val = str(ident_val).strip()
+                    ident_type = getattr(ident, "type", None) or (
+                        ident.get("type") if isinstance(ident, dict) else None
+                    )
+                    if ident_type:
+                        codings = (
+                            getattr(ident_type, "coding", None)
+                            or (ident_type.get("coding") if isinstance(ident_type, dict) else None)
+                            or []
+                        )
+                        for c in codings:
+                            code = getattr(c, "code", None) if not isinstance(c, dict) else c.get("code")
+                            if code == "ACSN":
+                                explicit_accession = clean_val
+                                break
+                    if explicit_accession:
+                        break
+
             study_key = raw_study_uid or getattr(imaging, "id", None) or f"{demo['patient_id']}:study"
             if study_key not in self._study_accessions:
-                self._study_accessions[study_key] = PersonGenerator.generate_random_id(8, prefix=config.id_prefix)
+                if explicit_accession:
+                    self._study_accessions[study_key] = explicit_accession
+                else:
+                    # For FHIR-based accession numbers, do not prefix with GSH- or any other prefix
+                    self._study_accessions[study_key] = PersonGenerator.generate_random_id(8, prefix="")
             study_accession = self._study_accessions[study_key]
 
             study_uid = raw_study_uid or generate_study_uid(demo["patient_name"], demo["patient_id"], study_accession)
@@ -198,7 +263,7 @@ class FhirImagingParser:
                     pass
 
             # Institution name
-            institution_name = config.institution_name
+            institution_name = self.config.institution_name
             if imaging.location and imaging.location.display:
                 institution_name = imaging.location.display
 

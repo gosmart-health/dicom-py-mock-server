@@ -4,7 +4,7 @@ from fhir.resources.R4B.bundle import Bundle
 from fhir.resources.R4B.imagingstudy import ImagingStudy
 from fhir.resources.R4B.patient import Patient
 
-from dicom_py_mock_server.config import config
+from dicom_py_mock_server.config import AppConfig
 from dicom_py_mock_server.services.fhir_imaging_parser import FhirImagingParser, clean_dicom_uid
 
 
@@ -18,13 +18,18 @@ def test_clean_dicom_uid():
 
 
 def test_extract_patient_demographics():
-    """Verify extraction of DICOM PN and ID formats with prefixes and suffixes."""
+    """Verify extraction of DICOM PN and ID formats without synthetic prefixes or suffixes."""
     parser = FhirImagingParser()
     patient = Patient.model_validate(
         {
             "resourceType": "Patient",
             "id": "pat-12345",
-            "identifier": [{"value": "ID-9999"}],
+            "identifier": [
+                {
+                    "system": "urn:oid:2.16.840.1.113883.4.3.25",
+                    "value": "ID-9999",
+                }
+            ],
             "name": [{"family": "Smith", "given": ["Alice"]}],
             "gender": "female",
             "birthDate": "1985-04-12",
@@ -32,8 +37,13 @@ def test_extract_patient_demographics():
     )
 
     demo = parser.extract_patient_demographics(patient)
-    assert demo["patient_id"] == f"{config.id_prefix}ID-9999"
-    assert demo["patient_name"].startswith(f"Smith{config.patient_suffix}")
+    assert demo is not None
+    # Patient ID from FHIR must NOT be prefixed with id_prefix (e.g. GSH-)
+    assert demo["patient_id"] == "ID-9999"
+    assert not demo["patient_id"].startswith("GSH-")
+    # Patient name from FHIR must NOT be suffixed with patient_suffix (e.g. _GSH)
+    assert demo["patient_name"].startswith("Smith")
+    assert "_GSH" not in demo["patient_name"]
     assert demo["dob"] == "19850412"
     assert demo["sex"] == "F"
 
@@ -44,6 +54,12 @@ def test_parse_bundle_to_custom_entries():
         {
             "resourceType": "Patient",
             "id": "pat-ct-01",
+            "identifier": [
+                {
+                    "system": "urn:oid:2.16.840.1.113883.4.3.25",
+                    "value": "pat-ct-01",
+                }
+            ],
             "name": [{"family": "Johnson", "given": ["Bob"]}],
             "gender": "male",
             "birthDate": "1972-11-20",
@@ -95,9 +111,12 @@ def test_parse_bundle_to_custom_entries():
     assert len(entries) == 2
     e1, e2 = entries[0], entries[1]
 
-    # Check first series
-    assert e1["patient_id"] == f"{config.id_prefix}pat-ct-01"
-    assert e1["patient_name"].startswith(f"Johnson{config.patient_suffix}")
+    # Check first series - patient_id, patient_name, and accession are clean
+    assert e1["patient_id"] == "pat-ct-01"
+    assert not e1["patient_id"].startswith("GSH-")
+    assert not e1["accession"].startswith("GSH-")
+    assert e1["patient_name"].startswith("Johnson")
+    assert "_GSH" not in e1["patient_name"]
     assert e1["dob"] == "19721120"
     assert e1["sex"] == "M"
     assert e1["study_uid"] == "1.2.840.999.1.1"
@@ -126,6 +145,12 @@ def test_parse_bundle_dict_payload():
                 "resource": {
                     "resourceType": "Patient",
                     "id": "pat-us-02",
+                    "identifier": [
+                        {
+                            "system": "urn:oid:2.16.840.1.113883.4.3.25",
+                            "value": "pat-us-02",
+                        }
+                    ],
                     "name": [{"family": "Williams", "given": ["Clara"]}],
                     "gender": "female",
                     "birthDate": "1990-01-15",
@@ -156,7 +181,108 @@ def test_parse_bundle_dict_payload():
     entries = parser.parse_bundle_to_custom_entries(payload)
 
     assert len(entries) == 1
+    assert entries[0]["patient_id"] == "pat-us-02"
+    assert not entries[0]["patient_id"].startswith("GSH-")
+    assert not entries[0]["accession"].startswith("GSH-")
+    assert "_GSH" not in entries[0]["patient_name"]
     assert entries[0]["modality"] == "US"
     assert entries[0]["sex"] == "F"
     assert entries[0]["study_uid"] == "1.2.840.777.2"
     assert entries[0]["series_uid"] == "1.2.840.777.2.1"
+
+
+def test_extract_patient_missing_id_system_logs_and_returns_none(capsys, caplog):
+    """Verify missing matching identifier logs warning and returns None without creating records."""
+    parser = FhirImagingParser()
+    patient = Patient.model_validate(
+        {
+            "resourceType": "Patient",
+            "id": "pat-no-match-01",
+            "identifier": [
+                {
+                    "system": "http://hl7.org/fhir/sid/us-ssn",
+                    "value": "000-12-3456",
+                }
+            ],
+            "name": [{"family": "Doe", "given": ["John"]}],
+            "gender": "male",
+            "birthDate": "1980-01-01",
+        }
+    )
+
+    demo = parser.extract_patient_demographics(patient)
+    assert demo is None
+
+    expected_msg = (
+        "FHIR Patient Resource pat-no-match-01 does not contain the identifier matching "
+        "GOSMART_MS_FHIR_PATIENT_ID_SYSTEM=urn:oid:2.16.840.1.113883.4.3.25"
+    )
+    captured = capsys.readouterr()
+    assert expected_msg in captured.out or expected_msg in captured.err or expected_msg in caplog.text
+
+
+def test_extract_patient_multiple_identifiers_finds_correct_system():
+    """Verify correct identifier is selected when multiple identifiers are present without prefixing."""
+    parser = FhirImagingParser()
+    patient = Patient.model_validate(
+        {
+            "resourceType": "Patient",
+            "id": "pat-multi-01",
+            "identifier": [
+                {
+                    "system": "http://hl7.org/fhir/sid/us-ssn",
+                    "value": "111-22-3333",
+                },
+                {
+                    "system": "urn:oid:2.16.840.1.113883.4.3.25",
+                    "value": "DL-MASS-8888",
+                },
+                {
+                    "system": "http://hospital.smarthealthit.org",
+                    "value": "MRN-12345",
+                },
+            ],
+            "name": [{"family": "Franklin", "given": ["Benjamin"]}],
+            "gender": "male",
+            "birthDate": "1975-03-15",
+        }
+    )
+
+    demo = parser.extract_patient_demographics(patient)
+    assert demo is not None
+    assert demo["patient_id"] == "DL-MASS-8888"
+    assert not demo["patient_id"].startswith("GSH-")
+
+
+def test_custom_fhir_patient_id_system_override():
+    """Verify overriding fhir_patient_id_system extracts matching custom identifier without prefixing."""
+    custom_cfg = AppConfig(
+        fhir_patient_id_system="http://custom.hospital.org/pat-id",
+        id_prefix="CUSTOM-",
+    )
+    parser = FhirImagingParser(app_config=custom_cfg)
+    patient = Patient.model_validate(
+        {
+            "resourceType": "Patient",
+            "id": "pat-custom-sys",
+            "identifier": [
+                {
+                    "system": "urn:oid:2.16.840.1.113883.4.3.25",
+                    "value": "DL-999",
+                },
+                {
+                    "system": "http://custom.hospital.org/pat-id",
+                    "value": "RAW-PAT-777",
+                },
+            ],
+            "name": [{"family": "Adams", "given": ["Abigail"]}],
+            "gender": "female",
+            "birthDate": "1982-10-10",
+        }
+    )
+
+    demo = parser.extract_patient_demographics(patient)
+    assert demo is not None
+    assert demo["patient_id"] == "RAW-PAT-777"
+    assert not demo["patient_id"].startswith("CUSTOM-")
+    assert "_GSH" not in demo["patient_name"]

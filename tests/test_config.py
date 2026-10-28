@@ -27,6 +27,7 @@ def test_default_config_values():
     assert cfg.auto_push_host == "127.0.0.1"
     assert cfg.auto_push_port == 11113
     assert cfg.auto_push_sec == 0.0
+    assert cfg.fhir_patient_id_system == "urn:oid:2.16.840.1.113883.4.3.25"
 
 
 def test_env_variables_override(monkeypatch):
@@ -160,3 +161,18 @@ def test_fhir_plugin_and_generator_mode_aliases(monkeypatch):
     cfg2 = AppConfig()
     assert cfg2.generator_mode == "fhir_alt"
     assert cfg2.fhir_plugin_url == "http://127.0.0.1:8080"
+
+
+def test_fhir_patient_id_system_env_and_aliases(monkeypatch):
+    """Test default, GOSMART_MS_FHIR_PATIENT_ID_SYSTEM, and FHIR_PATIENT_ID_SYSTEM aliases."""
+    cfg_default = AppConfig(_env_file=None)
+    assert cfg_default.fhir_patient_id_system == "urn:oid:2.16.840.1.113883.4.3.25"
+
+    monkeypatch.setenv("GOSMART_MS_FHIR_PATIENT_ID_SYSTEM", "http://custom.hospital.org/mrn")
+    cfg1 = AppConfig(_env_file=None)
+    assert cfg1.fhir_patient_id_system == "http://custom.hospital.org/mrn"
+
+    monkeypatch.delenv("GOSMART_MS_FHIR_PATIENT_ID_SYSTEM")
+    monkeypatch.setenv("FHIR_PATIENT_ID_SYSTEM", "http://another.hospital.org/patid")
+    cfg2 = AppConfig(_env_file=None)
+    assert cfg2.fhir_patient_id_system == "http://another.hospital.org/patid"
