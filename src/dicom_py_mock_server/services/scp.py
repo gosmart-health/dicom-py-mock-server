@@ -195,7 +195,7 @@ class DicomScpService:
         self.is_running = False
         self.auto_push_ae: str = getattr(config, "auto_push_ae", "")
         self.auto_push_host: str = getattr(config, "auto_push_host", "127.0.0.1")
-        self.auto_push_port: int = int(getattr(config, "auto_push_port", 11113))
+        self.auto_push_port: int = int(getattr(config, "auto_push_port", 11112))
         self.auto_push_sec: float = float(getattr(config, "auto_push_sec", 0.0))
         self._is_auto_pushing: bool = False
         self._auto_push_thread: threading.Thread | None = None
