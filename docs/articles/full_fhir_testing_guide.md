@@ -164,8 +164,8 @@ GOSMART_MS_AUTO_PUSH_SEC=60
 
 ## Generate FHIR with Synthea and Load to Your FHIR
 
-I will be using the Syntha and HAPI FHIR server as an example. If you have
-specific requirements, we can enage in helping you set up FHIR test exams.
+I will be using the Synthea and HAPI FHIR server as an example. If you have
+specific requirements, we can engage in helping you set up FHIR test exams.
 
 CAUTION: HAPI FHIR ingestion process takes a very long time. Ingesting  
 1000 patient bundles will take upwards of 30 min or more. Limit to a few 
