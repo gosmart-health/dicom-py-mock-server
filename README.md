@@ -32,7 +32,7 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 8. **Zero-Dependency HL7 v2 MLLP Socket Listener**: Ingests raw `ORM^O01` order messages on TCP port `2575` via MLLP framing, maps demographics into MWL entries, handles order cancellations, and returns `ACK^O01` responses.
 9. **FHIR ServiceRequest & Bundle Ingestion**: REST endpoints for FHIR R4/R5 imaging order bundles (`Bundle`, `ServiceRequest`) that map demographics directly into MWL entries and handle order revocations.
 10. **Synthea FHIR R4 Bundle Ingestion & Resource Queries**: Load Synthea-generated hospital (`hospitalInformation*.json`), practitioner (`practitionerInformation*.json`), and patient FHIR R4 bundles directly from raw JSON arrays (`POST /api/v1/synthea/load`) into additive memory-resident caches, register _modality-wise_ coherent MWL entries, generate DICOM files, return parsed `FhirBundle` JSON arrays, and query memory-resident practitioners, hospitals, and patient bundles via REST `GET` endpoints.
-11. **FHIR-Driven Modality Worklist (MWL) & C-FIND Generation**: When configured with `GOSMART_MS_WML_GENERATOR_MODE=fhir`, stream imaging study bundles on demand from the peer `gosmart-fhir-py-plugin` service (`/api/v1/fhir/patient-imaging`). Features an in-memory bundle queue with pagination (`raw_offset`, `raw_count`), strict hourly rate pacing (`GOSMART_MS_MWL_RATE_PER_HR`), and data exhaustion safety (pauses cleanly without synthesizing fake patients).
+11. **FHIR-Driven Modality Worklist (MWL) & C-FIND Generation**: When configured with `GOSMART_MS_WML_GENERATOR_MODE=fhir`, stream imaging study bundles on demand from the peer `gosmart-fhir-py-plugin` service (`/api/v1/fhir/patient-imaging`). Features an in-memory bundle queue with configurable batch count (`count` via `GOSMART_MS_FHIR_PATIENT_COUNT`), strict hourly rate pacing (`GOSMART_MS_MWL_RATE_PER_HR`), and data exhaustion safety (pauses cleanly without synthesizing fake patients).
 12. **Model Context Protocol (MCP) Integration**: Exposes server inspection, MWL controls, DICOM generation, and study move tools to AI agents (AGY, Claude Desktop, Cursor) over Server-Sent Events (SSE).
 13. **Automated Study Push (Auto-Push)**: Periodically generate and push DICOM studies (associated series and images) to a configured destination AE at a configured interval in seconds via C-STORE.
 14. **Interactive Jupyter Notebooks**: Pre-configured tutorials in `notebooks/` demonstrating REST API, DICOMweb (QIDO-RS / WADO-RS), and DIMSE (C-ECHO) client workflows.
@@ -130,7 +130,7 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | `GOSMART_MS_MWL_RATE_PER_HR` | `MWL_RATE_PER_HR` | `12.0` | Base MWL creation rate per hour during business hours (9 AM - 5 PM local; 5% rate off-hours). |
 | `GOSMART_MS_WML_GENERATOR_MODE` | `GOSMART_MS_MWL_GENERATOR_MODE`, `GENERATOR_MODE`, `WML_GENERATOR_MODE` | `internal` | Modality Worklist (MWL) generator mode: `internal` (uses built-in Synthea/synthetic generation) or `fhir` (streams imaging studies from external FHIR imaging plugin). |
 | `GOSMART_MS_FHIR_PLUGIN_URL` | `FHIR_PLUGIN_URL` | `http://localhost:8088` | Base URL of the peer `gosmart-fhir-py-plugin` service serving `/api/v1/fhir/patient-imaging`. |
-| `GOSMART_MS_FHIR_RAW_COUNT` | `FHIR_RAW_COUNT` | `200` | Batch size count for raw imaging bundles requested per query from the FHIR imaging plugin. |
+| `GOSMART_MS_FHIR_PATIENT_COUNT` | `GOSMART_FHIR_PATIENT_COUNT`, `FHIR_PATIENT_COUNT` | `200` | Batch size (`count`, 1–1000) for patient imaging bundles requested per query from the FHIR imaging plugin. |
 | `GOSMART_MS_FHIR_PATIENT_ID_SYSTEM` | `FHIR_PATIENT_ID_SYSTEM` | `urn:oid:2.16.840.1.113883.4.3.25` | Target `patient.identifier.system` URI used to select primary Patient ID in FHIR mode (`GOSMART_MS_WML_GENERATOR_MODE=fhir`). Studies are skipped with a warning if matching identifier is absent. |
 | `GOSMART_MS_MCP_ENABLED` | `MCP_ENABLED` | `true` | Enable Model Context Protocol (MCP) SSE integration endpoints. |
 | `GOSMART_MS_MCP_SSE_PATH` | `MCP_SSE_PATH` | `/sse` | Base HTTP endpoint path for MCP SSE streams. |
@@ -508,7 +508,7 @@ When configured with `GOSMART_MS_WML_GENERATOR_MODE=fhir` (or alias `GOSMART_MS_
    The background generation loop uses a responsive 1-second interruptible sleep loop to terminate promptly on shutdown.
 
 2. **In-Memory Buffer Queue & Batch Pagination**:
-   The generator maintains an in-memory queue (`_fhir_bundle_queue`). On each generation cycle (or during startup seeding), if the queue is empty or has fewer items than needed, it requests the next batch from the FHIR imaging plugin with `raw_offset` and `raw_count` (configured by `GOSMART_MS_FHIR_RAW_COUNT`, default 200) for loaded template modalities (`CR`, `CT`, `MR`, `US`).
+   The generator maintains an in-memory queue (`_fhir_bundle_queue`). On each generation cycle (or during startup seeding), if the queue is empty or has fewer items than needed, it requests the next batch from the FHIR imaging plugin with `count` (configured by `GOSMART_MS_FHIR_PATIENT_COUNT`, default 200) for loaded template modalities (`CR`, `CT`, `MR`, `US`).
 
 3. **Data Exhaustion Safety (No Synthetic Fallback)**:
    When the FHIR plugin endpoint returns 0 studies and the local queue is empty, the generator logs a warning (`fhir_patient_imaging_exhausted`), marks `is_exhausted = True`, and cleanly idles. **It does NOT fall back to synthetic or random patient generation.**
@@ -529,7 +529,6 @@ When configured with `GOSMART_MS_WML_GENERATOR_MODE=fhir` (or alias `GOSMART_MS_
      "is_auto_generating": false,
      "generator_mode": "fhir",
      "fhir_plugin_url": "http://localhost:8088",
-     "fhir_raw_offset": 0,
      "fhir_queue_depth": 0,
      "is_exhausted": true
    }
@@ -553,7 +552,7 @@ A dedicated startup script [`start-fhir.sh`](./start-fhir.sh) is provided to lau
 
 # Or with custom FHIR plugin URL, batch count, and patient identifier system
 GOSMART_MS_FHIR_PLUGIN_URL=http://localhost:8088 \
-GOSMART_MS_FHIR_RAW_COUNT=100 \
+GOSMART_MS_FHIR_PATIENT_COUNT=100 \
 GOSMART_MS_FHIR_PATIENT_ID_SYSTEM=urn:oid:2.16.840.1.113883.4.3.25 \
 ./start-fhir.sh
 ```
