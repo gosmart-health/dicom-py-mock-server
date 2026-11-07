@@ -17,9 +17,8 @@ We will load HAPI FHIR Syntha generated patients and their histories. Using the 
 @router.get("/patient-imaging")
 async def get_imaging_study_endpoint(
     modalities: list[str] = Query(default=["CT", "US", "DR"]),  # noqa: B008
-    raw_count: int = Query(default=200, ge=1, le=1000),
-    raw_offset: int = Query(default=0, ge=0),
-)
+    count: int = Query(default=200, ge=1, le=1000),
+) -> ImagingStudyBundleDTO:
 ```
 
 ### New Environment Variables Introduced
@@ -52,7 +51,7 @@ async def get_imaging_study_endpoint(
 
 ## Call `/api/v1/patient-imaging`
 
-It accepts `raw_count` and `row_offset` and also returns these values for paging through. Create those local values for the application life-time.
+It accepts `count` and returns the batch of patient imaging bundles.
 
 We will use the same `wake_up` timer configured with `GOSMART_MS_MWL_RATE_PER_HR`, and if `GOSMART_MS_WML_GENERATOR_MODE` holds the value `fhir` then it will operate to generate the MWL entries only from
 the FHIR values.
@@ -64,14 +63,12 @@ The call to `/api/v1/patient-imaging` will provide the following DTO structure.
 #### The DTO Structure
 
 ```python
-
 from fhir.resources.R4B.bundle import Bundle
 from pydantic import BaseModel
 
 
 class ImagingStudyBundleDTO(BaseModel):
-    raw_offset: int = 0
-    raw_count: int = 0
+    count: int = 0
     imaging_study: list[Bundle] = []
 ```
 
@@ -80,6 +77,3 @@ With this we should be able to form MWL entries.
 
 If it returns an empty list we have exhausted all the records. Instead of complicating the logic, just continue to call
 the API and get 0 results.
-
-For each "wake up" iteration, pass the raw_offset back to the /api/v1/patient-imaging call.
-
