@@ -502,7 +502,7 @@ All parameters are configurable via environment variables (with `GOSMART_MS_` pr
 | **MWL Peak Hourly Rate** | `GOSMART_MS_MWL_RATE_PER_HR` | `12.0` | New MWL entries generated per hour (9am-5pm) |
 | **MWL Generator Mode** | `GOSMART_MS_WML_GENERATOR_MODE`<br>`GOSMART_MS_MWL_GENERATOR_MODE` | `internal` | Modality Worklist generator mode (`internal` or `fhir`) |
 | **FHIR Plugin URL** | `GOSMART_MS_FHIR_PLUGIN_URL` | `http://localhost:8088` | Base URL of peer `gosmart-fhir-py-plugin` service |
-| **FHIR Raw Count** | `GOSMART_MS_FHIR_RAW_COUNT` | `200` | Raw imaging study bundles requested per batch in FHIR mode |
+| **FHIR Patient Count** | `GOSMART_MS_FHIR_PATIENT_COUNT`<br>`GOSMART_FHIR_PATIENT_COUNT`<br>`FHIR_PATIENT_COUNT` | `200` | Patient imaging study bundles requested per batch in FHIR mode |
 | **FHIR Patient ID System** | `GOSMART_MS_FHIR_PATIENT_ID_SYSTEM`<br>`FHIR_PATIENT_ID_SYSTEM` | `urn:oid:2.16.840.1.113883.4.3.25` | Target `patient.identifier.system` URI used to extract the primary Patient ID |
 | **Patient Suffix** | `GOSMART_MS_PATIENT_SUFFIX` | `_GSH` | Suffix appended to patient names |
 | **Physician Suffix** | `GOSMART_MS_PN_SUFFIX` | `_GSH` | Suffix appended to physician names |
