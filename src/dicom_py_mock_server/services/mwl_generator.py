@@ -131,7 +131,6 @@ class MwlGeneratorService:
         self.fhir_client = fhir_client or FhirPluginClient(base_url=self.config.fhir_plugin_url)
         self.fhir_parser = fhir_parser or FhirImagingParser(mwl_service=self, app_config=self.config)
         self._fhir_bundle_queue: list[dict[str, Any]] = []
-        self._fhir_raw_offset: int = 0
         self._fhir_is_exhausted: bool = False
         self._scp_service: Any | None = None
         self.template_modalities: dict[str, dict[str, Any]] = {}
@@ -171,20 +170,17 @@ class MwlGeneratorService:
         if len(self._fhir_bundle_queue) < items_needed:
             queue_len_before = len(self._fhir_bundle_queue)
             modalities = self.get_template_modalities() or None
-            fetched_bundles, new_offset, raw_count = await self.fhir_client.fetch_patient_imaging(
-                raw_offset=self._fhir_raw_offset,
-                raw_count=self.config.fhir_raw_count,
+            fetched_bundles, count = await self.fhir_client.fetch_patient_imaging(
+                count=self.config.fhir_patient_count,
                 modalities=modalities,
             )
             logger.info(
                 "fhir_patient_imaging_fetched",
                 items_returned=len(fetched_bundles),
-                raw_count=raw_count,
-                raw_offset=new_offset,
+                count=count,
                 queue_depth_before=queue_len_before,
                 queue_depth_after=queue_len_before + len(fetched_bundles),
             )
-            self._fhir_raw_offset = new_offset
             self._fhir_bundle_queue.extend(fetched_bundles)
             self._fhir_is_exhausted = len(fetched_bundles) == 0 and len(self._fhir_bundle_queue) == 0
 
@@ -195,7 +191,6 @@ class MwlGeneratorService:
         if not self._fhir_bundle_queue:
             logger.warning(
                 "fhir_patient_imaging_exhausted",
-                raw_offset=self._fhir_raw_offset,
                 message="No FHIR imaging studies available from patient-imaging API; generation paused.",
             )
             return None
@@ -217,7 +212,11 @@ class MwlGeneratorService:
             if entry_record:
                 if first_record is None:
                     first_record = entry_record
-                if self._scp_service and getattr(self.config, "auto_push_ae", ""):
+                if self._scp_service and (
+                    getattr(self._scp_service, "auto_push_ae", "")
+                    or getattr(self.config, "auto_push_ae", "")
+                    or getattr(global_config, "auto_push_ae", "")
+                ):
                     self._scp_service.enqueue_auto_push_study(entry_record)
 
                 logger.info(
@@ -1593,7 +1592,6 @@ class MwlGeneratorService:
         }
         if mode == "fhir":
             res["fhir_plugin_url"] = self.config.fhir_plugin_url
-            res["fhir_raw_offset"] = self._fhir_raw_offset
             res["fhir_queue_depth"] = len(self._fhir_bundle_queue)
             res["is_exhausted"] = self._fhir_is_exhausted
         return res

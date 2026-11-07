@@ -118,7 +118,7 @@ GOSMART_FHIR_BASE_URL=http://localhost:8087/fhir
 
 - GOSMART_MS_WML_GENERATOR_MODE: Set this to `fhir` mode.
 - GOSMART_MS_FHIR_PLUGIN_URL: URL of the FHIR Plugin API root usually http://localhost:8088.
-- GOSMART_MS_FHIR_RAW_COUNT: Number of raw FHIR ImagingStudy to pull per 
+- GOSMART_MS_FHIR_PATIENT_COUNT: Number of patient FHIR ImagingStudy bundles to pull per 
   iteration.
 - GOSMART_MS_FHIR_PATIENT_ID_SYSTEM: System used for generating patient IDs.
 - GOSMART_MS_TRANSFER_SYNTAX: Transfer syntax to use for generated images.
@@ -137,14 +137,14 @@ GOSMART_FHIR_BASE_URL=http://localhost:8087/fhir
   0 (zero) will disable the feature
 
 GOSMART_MS_AUTO_PUSH_AE=GO_GRAPHITE
-GOSMART_MS_AUTO_PUSH_HOST=loclhost
+GOSMART_MS_AUTO_PUSH_HOST=localhost
 GOSMART_MS_AUTO_PUSH_PORT=11112
 GOSMART_MS_AUTO_PUSH_SEC=60
 
 ```shell
 GOSMART_MS_WML_GENERATOR_MODE=fhir
 GOSMART_MS_FHIR_PLUGIN_URL=http://localhost:8088
-GOSMART_MS_FHIR_RAW_COUNT=200
+GOSMART_MS_FHIR_PATIENT_COUNT=200
 # This URN refers to Massachusetts Drivers Licence number in Synthea
 # short string that looks like a hospital MRN.
 # Use any other you feel is right.
@@ -191,4 +191,3 @@ Inspect and run `gosmart-fhir-py-plugin/start-api.sh`
 ### Start the Mock Server. 
 
 Inspect and run `gosmart-fhir-py-plugin/start.sh`
-

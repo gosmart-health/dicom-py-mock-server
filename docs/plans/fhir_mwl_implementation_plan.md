@@ -7,10 +7,10 @@ This plan specifies the implementation of FHIR-driven Modality Worklist (MWL) an
 - **Generation Rate**: Exactly `GOSMART_MS_MWL_RATE_PER_HR` (scaled by business hours vs. off-hours) new MWL and C-FIND entries are generated per hour.
 - **Queue-Driven Ingestion**:
   1. Maintain an in-memory queue of FHIR `Bundle` objects (`self._fhir_bundle_queue`).
-  2. On each wake-up cycle, if the queue is empty or does not contain enough items for the cycle, fetch the next batch from the `gosmart-fhir-py-plugin` `/api/v1/fhir/patient-imaging` endpoint using `raw_offset` and `raw_count`.
+  2. On each wake-up cycle, if the queue is empty or does not contain enough items for the cycle, fetch the next batch from the `gosmart-fhir-py-plugin` `/api/v1/fhir/patient-imaging` endpoint using `count`.
   3. Studies are generated strictly up to the rate defined by `GOSMART_MS_MWL_RATE_PER_HR`.
   4. Upon data exhaustion from the API (API returns 0 bundles and queue is empty), the generator halts further generation, cleanly idling without generating synthetic patients.
-  5. The status of number of items returned, raw count, raw offset, and exhaustion state are explicitly logged.
+  5. The status of number of items returned, count, and exhaustion state are explicitly logged.
 
 ---
 
@@ -23,8 +23,8 @@ flowchart TD
     end
 
     subgraph Plugin["gosmart-fhir-py-plugin (:8088)"]
-        API["GET /api/v1/fhir/patient-imaging\nParams: modalities, raw_count, raw_offset"]
-        DTO["ImagingStudyBundleDTO\n{raw_offset, raw_count, imaging_study: [Bundle]}"]
+        API["GET /api/v1/fhir/patient-imaging\nParams: modalities, count"]
+        DTO["ImagingStudyBundleDTO\n{count, imaging_study: [Bundle]}"]
         API --> DTO
     end
 
@@ -71,25 +71,21 @@ while self._is_auto_generating:
     items_needed = 1  # 1 study per interval ticks
     if len(self._fhir_bundle_queue) < items_needed:
         # 2. Fetch more from patient-imaging API
-        fetched_bundles, new_offset, raw_count = await self._fetch_fhir_bundles(
-            offset=self._fhir_raw_offset,
-            count=self.config.fhir_raw_count,
+        fetched_bundles, count = await self._fetch_fhir_bundles(
+            count=self.config.fhir_patient_count,
         )
         logger.info(
             "fhir_patient_imaging_fetched",
             items_returned=len(fetched_bundles),
-            raw_count=raw_count,
-            raw_offset=new_offset,
+            count=count,
             queue_depth_before=len(self._fhir_bundle_queue),
         )
-        self._fhir_raw_offset = new_offset
         self._fhir_bundle_queue.extend(fetched_bundles)
 
     # 3. Check for Data Exhaustion
     if not self._fhir_bundle_queue:
         logger.warning(
             "fhir_patient_imaging_exhausted",
-            raw_offset=self._fhir_raw_offset,
             message="No FHIR imaging studies available from patient-imaging API; generation paused.",
         )
     else:
@@ -131,9 +127,9 @@ while self._is_auto_generating:
 | **GAP-5** | **Batch Spikes vs Hourly Pacing** | Ingesting all 200 items in one timer tick violates `GOSMART_MS_MWL_RATE_PER_HR`. | Local queue buffers batches; the timer loop consumes exactly 1 study per `3600.0 / rate_per_hr` interval. |
 | **GAP-6** | **Auto-Push Synthetic Leakage** | `DicomScpService._push_one_auto_study()` falls back to synthetic generation when its auto-push queue is empty. | In `fhir` mode, auto-push only dequeues studies that originated from the FHIR ingestion queue; if empty, it idles without creating synthetic patients. |
 | **GAP-7** | **Bundle Parsing Differences** | The returned DTO packages `Patient` and `ImagingStudy` (no hospital/practitioner bundles). | Cleanly extract patient demographics and study/series metadata, strip `urn:oid:` and `urn:uuid:` prefixes, and fallback to `config.institution_name` and physician pools. |
-| **GAP-8** | **Plugin Fault Tolerance** | If the plugin is temporarily unreachable (network timeout / 500 error), mock server loop must not crash. | Catch `httpx.HTTPError`, log structured error, retain `raw_offset` without advancement, and retry after backoff. |
-| **GAP-9** | **Exhaustion Handling** | When all HAPI FHIR records have been processed, the API returns an empty `imaging_study` list and `raw_count=0`. | Persist `raw_offset`, log exhaustion warning, and idle gracefully without generating new studies until more data is available. |
-| **GAP-10**| **Observability** | Need runtime visibility into FHIR sync status (`raw_offset`, queue depth, last fetch). | Expose `generator_mode`, `fhir_plugin_url`, `fhir_raw_offset`, `fhir_queue_depth`, and `is_exhausted` in `/api/v1/mwl/status`. |
+| **GAP-8** | **Plugin Fault Tolerance** | If the plugin is temporarily unreachable (network timeout / 500 error), mock server loop must not crash. | Catch `httpx.HTTPError`, log structured error, and retry after backoff. |
+| **GAP-9** | **Exhaustion Handling** | When all HAPI FHIR records have been processed, the API returns an empty `imaging_study` list and `count=0`. | Log exhaustion warning and idle gracefully without generating new studies until more data is available. |
+| **GAP-10**| **Observability** | Need runtime visibility into FHIR sync status (queue depth, last fetch). | Expose `generator_mode`, `fhir_plugin_url`, `fhir_queue_depth`, and `is_exhausted` in `/api/v1/mwl/status`. |
 
 ---
 
@@ -145,7 +141,7 @@ while self._is_auto_generating:
 - **File**: [`src/dicom_py_mock_server/config.py`](file:///Users/manabutokunaga/development/dicom-fhir/dicom-py-mock-server/src/dicom_py_mock_server/config.py)
   - `fhir_plugin_url: str = Field(default="http://localhost:8088", validation_alias=AliasChoices("GOSMART_MS_FHIR_PLUGIN_URL", "FHIR_PLUGIN_URL"))`
   - `generator_mode: str = Field(default="internal", validation_alias=AliasChoices("GOSMART_MS_WML_GENERATOR_MODE", "GOSMART_MS_MWL_GENERATOR_MODE", "GENERATOR_MODE", "WML_GENERATOR_MODE"))`
-  - `fhir_raw_count: int = Field(default=200, validation_alias=AliasChoices("GOSMART_MS_FHIR_RAW_COUNT", "FHIR_RAW_COUNT"))`
+  - `fhir_patient_count: int = Field(default=200, validation_alias=AliasChoices("GOSMART_MS_FHIR_PATIENT_COUNT", "GOSMART_FHIR_PATIENT_COUNT", "FHIR_PATIENT_COUNT"))`
 
 ### Task 2: FHIR Imaging Parser Service
 - **File**: [`src/dicom_py_mock_server/services/fhir_parser.py`](file:///Users/manabutokunaga/development/dicom-fhir/dicom-py-mock-server/src/dicom_py_mock_server/services/fhir_parser.py) (or `fhir_imaging_parser.py`)
@@ -159,9 +155,8 @@ while self._is_auto_generating:
 - **File**: [`src/dicom_py_mock_server/services/mwl_generator.py`](file:///Users/manabutokunaga/development/dicom-fhir/dicom-py-mock-server/src/dicom_py_mock_server/services/mwl_generator.py)
   - Add state variables:
     - `self._fhir_bundle_queue: list[Any] = []`
-    - `self._fhir_raw_offset: int = 0`
     - `self._fhir_is_exhausted: bool = False`
-  - Implement `_fetch_fhir_bundles(raw_offset: int, raw_count: int) -> tuple[list[Any], int, int]`.
+  - Implement `_fetch_fhir_bundles(count: int) -> tuple[list[Any], int]`.
   - Update `_auto_generation_loop()`:
     - If `generator_mode == "fhir"`: run the queue-checking, API replenishment, hourly pacing, and exhaustion-handling algorithm.
     - If `generator_mode == "internal"`: keep standard internal synthesis.
@@ -186,7 +181,6 @@ while self._is_auto_generating:
 3. **Queue & Replenishment Integration Tests** (`tests/test_fhir_imaging_generator.py`):
    - Mock `/patient-imaging` endpoint via `httpx` mock transport.
    - Test queue replenishment when queue is empty or has insufficient items.
-   - Verify `raw_offset` increases monotonically with returned `raw_offset`.
    - Test exhaustion: API returns 0 items -> generator logs exhaustion and stops creating entries.
    - Test error recovery: API returns 500 or network timeout -> generator handles error gracefully without terminating.
 4. **C-FIND & DICOMweb Integration Tests**:

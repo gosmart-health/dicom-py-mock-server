@@ -20,18 +20,16 @@ class FhirPluginClient:
 
     async def fetch_patient_imaging(
         self,
-        raw_offset: int = 0,
-        raw_count: int = 200,
+        count: int = 200,
         modalities: list[str] | None = None,
-    ) -> tuple[list[dict[str, Any]], int, int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """Fetch patient imaging studies bundle from gosmart-fhir-py-plugin.
 
         Returns:
-            A tuple of (imaging_study_bundles, returned_raw_offset, returned_raw_count).
+            A tuple of (imaging_study_bundles, returned_count).
         """
         params: dict[str, Any] = {
-            "raw_offset": raw_offset,
-            "raw_count": raw_count,
+            "count": count,
         }
         if modalities:
             params["modalities"] = modalities
@@ -50,8 +48,7 @@ class FhirPluginClient:
                 response.raise_for_status()
                 data = response.json()
 
-                new_offset = data.get("raw_offset", raw_offset)
-                new_count = data.get("raw_count", 0)
+                new_count = data.get("count", 0)
                 imaging_study = data.get("imaging_study", [])
 
                 logger.debug(
@@ -59,26 +56,23 @@ class FhirPluginClient:
                     url=str(response.url),
                     status_code=response.status_code,
                     bundles_count=len(imaging_study),
-                    raw_offset=new_offset,
-                    raw_count=new_count,
+                    count=new_count,
                 )
-                return imaging_study, new_offset, new_count
+                return imaging_study, new_count
 
         except httpx.HTTPError as exc:
             logger.error(
                 "fhir_patient_imaging_http_error",
                 url=url,
                 error=str(exc),
-                raw_offset=raw_offset,
-                raw_count=raw_count,
+                count=count,
             )
-            return [], raw_offset, 0
+            return [], 0
         except Exception as exc:
             logger.error(
                 "fhir_patient_imaging_unexpected_error",
                 url=url,
                 error=str(exc),
-                raw_offset=raw_offset,
-                raw_count=raw_count,
+                count=count,
             )
-            return [], raw_offset, 0
+            return [], 0
