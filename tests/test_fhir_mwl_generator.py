@@ -73,11 +73,10 @@ async def test_fhir_mwl_replenishment_and_pacing():
     b2 = create_sample_fhir_bundle("1.2.840.111.102", "P-102", "MR")
 
     mock_client = AsyncMock()
-    # First call returns 2 bundles and new offset=2
-    mock_client.fetch_patient_imaging.return_value = ([b1, b2], 2, 2)
+    # First call returns 2 bundles and count=2
+    mock_client.fetch_patient_imaging.return_value = ([b1, b2], 2)
 
     mwl_service = MwlGeneratorService(app_config=cfg, fhir_client=mock_client)
-    assert mwl_service._fhir_raw_offset == 0
     assert len(mwl_service._fhir_bundle_queue) == 0
 
     # 1. Generate one study
@@ -87,9 +86,8 @@ async def test_fhir_mwl_replenishment_and_pacing():
     assert rec1["patient_id"] == "P-101"
     assert rec1["modality"] == "CT"
 
-    # Verify client was called with offset 0 and raw_count 200
+    # Verify client was called with count 200
     mock_client.fetch_patient_imaging.assert_called_once()
-    assert mwl_service._fhir_raw_offset == 2
     # 1 was popped, so 1 remaining in queue
     assert len(mwl_service._fhir_bundle_queue) == 1
     assert len(mwl_service._entries) == 1
@@ -113,7 +111,7 @@ async def test_fhir_mwl_data_exhaustion():
     cfg = AppConfig(generator_mode="fhir", mwl_rate_per_hr=12.0)
     mock_client = AsyncMock()
     # API query returns 0 bundles (exhausted)
-    mock_client.fetch_patient_imaging.return_value = ([], 50, 0)
+    mock_client.fetch_patient_imaging.return_value = ([], 0)
 
     mwl_service = MwlGeneratorService(app_config=cfg, fhir_client=mock_client)
 
@@ -142,7 +140,7 @@ async def test_fhir_mwl_auto_push_forwarding():
 
     b1 = create_sample_fhir_bundle("1.2.840.111.301", "P-301", "CT")
     mock_client = AsyncMock()
-    mock_client.fetch_patient_imaging.return_value = ([b1], 1, 1)
+    mock_client.fetch_patient_imaging.return_value = ([b1], 1)
 
     mwl_service = MwlGeneratorService(app_config=cfg, fhir_client=mock_client)
     scp_service = DicomScpService(ae_title="TEST_SCP", port=11118, mwl_service=mwl_service)
@@ -163,13 +161,41 @@ async def test_fhir_mwl_auto_push_forwarding():
 
 
 @pytest.mark.anyio
+async def test_fhir_mwl_auto_push_dynamic_config_propagation():
+    """Verify that configuring auto-push on DicomScpService propagates to MwlGeneratorService in FHIR mode."""
+    cfg = AppConfig()
+    cfg.generator_mode = "fhir"
+    cfg.auto_push_ae = ""
+    b1 = create_sample_fhir_bundle("1.2.840.111.302", "P-302", "CT")
+    mock_client = AsyncMock()
+    mock_client.fetch_patient_imaging.return_value = ([b1], 1)
+
+    mwl_service = MwlGeneratorService(app_config=cfg, fhir_client=mock_client)
+    scp_service = DicomScpService(ae_title="TEST_SCP", port=11120, mwl_service=mwl_service)
+    mwl_service.set_scp_service(scp_service)
+
+    try:
+        scp_service.configure_auto_push(
+            target_ae_title="DYN_PACS", interval_sec=10.0, target_host="localhost", target_port=11112
+        )
+        assert mwl_service.config.auto_push_ae == "DYN_PACS"
+
+        rec = await mwl_service._generate_one_fhir_study()
+        assert rec is not None
+        assert len(scp_service._auto_push_queue) == 1
+        assert scp_service._auto_push_queue[0]["study_uid"] == "1.2.840.111.302"
+    finally:
+        scp_service.stop_auto_push()
+
+
+@pytest.mark.anyio
 async def test_fhir_mwl_cfind_discovery():
     """Verify that FHIR-generated studies are discoverable by MWL C-FIND and Study Root C-FIND."""
     cfg = AppConfig(generator_mode="fhir")
     b1 = create_sample_fhir_bundle("1.2.840.111.501", "P-501", "CT")
 
     mock_client = AsyncMock()
-    mock_client.fetch_patient_imaging.return_value = ([b1], 1, 1)
+    mock_client.fetch_patient_imaging.return_value = ([b1], 1)
 
     mwl_service = MwlGeneratorService(app_config=cfg, fhir_client=mock_client)
     rec = await mwl_service._generate_one_fhir_study()
@@ -229,7 +255,7 @@ async def test_fhir_mwl_skips_when_patient_id_system_missing(capsys, caplog):
         identifier_system="http://hl7.org/fhir/sid/us-ssn",
     )
     mock_client = AsyncMock()
-    mock_client.fetch_patient_imaging.return_value = ([b_invalid], 1, 1)
+    mock_client.fetch_patient_imaging.return_value = ([b_invalid], 1)
 
     mwl_service = MwlGeneratorService(app_config=cfg, fhir_client=mock_client)
     rec = await mwl_service._generate_one_fhir_study()
@@ -252,7 +278,7 @@ async def test_trigger_generation_immediate():
     cfg = AppConfig(generator_mode="fhir")
     b1 = create_sample_fhir_bundle("1.2.840.111.999", "P-999", "CT")
     mock_client = AsyncMock()
-    mock_client.fetch_patient_imaging.return_value = ([b1], 1, 1)
+    mock_client.fetch_patient_imaging.return_value = ([b1], 1)
 
     mwl_service = MwlGeneratorService(app_config=cfg, fhir_client=mock_client)
     rec = await mwl_service.trigger_generation()
