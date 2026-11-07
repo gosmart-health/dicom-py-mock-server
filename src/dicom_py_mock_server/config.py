@@ -239,10 +239,14 @@ class AppConfig(BaseSettings):
         ),
         description="Study generator mode 'internal', 'fhir', or empty, 'internal' as default",
     )
-    fhir_raw_count: int = Field(
+    fhir_patient_count: int = Field(
         default=200,
-        validation_alias=AliasChoices("GOSMART_MS_FHIR_RAW_COUNT", "FHIR_RAW_COUNT"),
-        description="Raw records to request per FHIR query",
+        validation_alias=AliasChoices(
+            "GOSMART_MS_FHIR_PATIENT_COUNT",
+            "GOSMART_FHIR_PATIENT_COUNT",
+            "FHIR_PATIENT_COUNT",
+        ),
+        description="Patient imaging records to request per FHIR query",
     )
     fhir_patient_id_system: str = Field(
         default="urn:oid:2.16.840.1.113883.4.3.25",
