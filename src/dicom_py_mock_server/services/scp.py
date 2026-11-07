@@ -193,14 +193,36 @@ class DicomScpService:
         self.ae: AE | None = None
         self.server = None
         self.is_running = False
-        self.auto_push_ae: str = getattr(config, "auto_push_ae", "")
-        self.auto_push_host: str = getattr(config, "auto_push_host", "127.0.0.1")
-        self.auto_push_port: int = int(getattr(config, "auto_push_port", 11112))
-        self.auto_push_sec: float = float(getattr(config, "auto_push_sec", 0.0))
+        active_cfg = getattr(mwl_service, "config", None) or config
+        self.auto_push_ae: str = str(
+            getattr(active_cfg, "auto_push_ae", "") or getattr(config, "auto_push_ae", "")
+        ).strip()
+        self.auto_push_host: str = (
+            str(getattr(active_cfg, "auto_push_host", "") or getattr(config, "auto_push_host", "127.0.0.1")).strip()
+            or "127.0.0.1"
+        )
+        self.auto_push_port: int = int(
+            getattr(active_cfg, "auto_push_port", 0) or getattr(config, "auto_push_port", 11113) or 11113
+        )
+        self.auto_push_sec: float = float(
+            getattr(active_cfg, "auto_push_sec", 0.0) or getattr(config, "auto_push_sec", 0.0) or 0.0
+        )
         self._is_auto_pushing: bool = False
         self._auto_push_thread: threading.Thread | None = None
         self._auto_push_stop_event: threading.Event = threading.Event()
         self._auto_push_queue: list[dict[str, Any]] = []
+
+    def _sync_auto_push_config(self) -> None:
+        """Synchronize auto-push settings to global config and mwl_service.config."""
+        config.auto_push_ae = self.auto_push_ae
+        config.auto_push_host = self.auto_push_host
+        config.auto_push_port = self.auto_push_port
+        config.auto_push_sec = self.auto_push_sec
+        if self.mwl_service and hasattr(self.mwl_service, "config") and self.mwl_service.config is not None:
+            self.mwl_service.config.auto_push_ae = self.auto_push_ae
+            self.mwl_service.config.auto_push_host = self.auto_push_host
+            self.mwl_service.config.auto_push_port = self.auto_push_port
+            self.mwl_service.config.auto_push_sec = self.auto_push_sec
 
     def _handle_echo(self, event: evt.Event) -> int:
         """Handle C-ECHO request."""
@@ -496,7 +518,9 @@ class DicomScpService:
 
         accepted_contexts = getattr(event.assoc, "accepted_contexts", []) if event.assoc else []
         if accepted_contexts:
-            dataset_sops = {str(getattr(ds, "SOPClassUID", "")) for ds in all_datasets if getattr(ds, "SOPClassUID", None)}
+            dataset_sops = {
+                str(getattr(ds, "SOPClassUID", "")) for ds in all_datasets if getattr(ds, "SOPClassUID", None)
+            }
             for cx in accepted_contexts:
                 if str(cx.abstract_syntax) in dataset_sops and not getattr(cx, "as_scu", False):
                     cx._as_scu = True
@@ -743,9 +767,13 @@ class DicomScpService:
         preferred_syntax: str | None = None,
     ) -> dict[str, Any]:
         """Send a list of DICOM datasets to target Storage SCP via C-STORE association."""
+        target_ae_title = str(target_ae_title or "").strip()
+        target_host = str(target_host or "127.0.0.1").strip()
+        target_port = int(target_port or 11113)
+
         dest_info = config.move_destinations.get(target_ae_title)
         if dest_info:
-            target_host = dest_info.get("host", target_host)
+            target_host = str(dest_info.get("host", target_host)).strip()
             target_port = int(dest_info.get("port", target_port))
 
         if not datasets:
@@ -762,7 +790,26 @@ class DicomScpService:
         ae = AE(ae_title=self.ae_title)
         ae.requested_contexts = build_storage_contexts_for_datasets(datasets, preferred_syntax=preferred_syntax)
 
-        assoc = ae.associate(target_host, target_port, ae_title=target_ae_title)
+        try:
+            assoc = ae.associate(target_host, target_port, ae_title=target_ae_title)
+        except OSError as exc:
+            err_msg = f"Failed to connect to target AE '{target_ae_title}' at {target_host}:{target_port}: {exc}"
+            logger.error(
+                "dicom_move_push_association_failed",
+                target_ae=target_ae_title,
+                host=target_host,
+                port=target_port,
+                error=str(exc),
+            )
+            return {
+                "success": False,
+                "message": err_msg,
+                "instances_sent": 0,
+                "target_ae_title": target_ae_title,
+                "target_host": target_host,
+                "target_port": target_port,
+            }
+
         if not assoc.is_established:
             err_msg = (
                 f"Failed to establish association with target AE '{target_ae_title}' at {target_host}:{target_port}"
@@ -895,7 +942,8 @@ class DicomScpService:
 
     def _push_one_auto_study(self) -> dict[str, Any] | None:
         """Generate a study (series and images) and push to the auto_push_ae destination."""
-        if not self.auto_push_ae:
+        target_ae = str(self.auto_push_ae or getattr(config, "auto_push_ae", "")).strip()
+        if not target_ae:
             return None
 
         entry = self._auto_push_queue.pop(0) if self._auto_push_queue else None
@@ -913,12 +961,12 @@ class DicomScpService:
         datasets = DicomGeneratorService.create_instances_from_mwl(entry)
         preferred_syntax = entry.get("transfer_syntax")
 
-        target_host = self.auto_push_host or "127.0.0.1"
-        target_port = self.auto_push_port or 11113
+        target_host = str(self.auto_push_host or getattr(config, "auto_push_host", "127.0.0.1")).strip() or "127.0.0.1"
+        target_port = int(self.auto_push_port or getattr(config, "auto_push_port", 11113) or 11113)
 
         res = self.push_datasets_to_destination(
             datasets=datasets,
-            target_ae_title=self.auto_push_ae,
+            target_ae_title=target_ae,
             target_host=target_host,
             target_port=target_port,
             preferred_syntax=preferred_syntax,
@@ -927,7 +975,7 @@ class DicomScpService:
             "dicom_auto_push_study_sent",
             success=res.get("success"),
             instances_sent=res.get("instances_sent"),
-            target_ae_title=self.auto_push_ae,
+            target_ae_title=target_ae,
             target_host=target_host,
             target_port=target_port,
             patient_id=entry.get("patient_id"),
@@ -955,7 +1003,13 @@ class DicomScpService:
                 try:
                     self._push_one_auto_study()
                 except Exception as exc:
-                    logger.error("dicom_auto_push_iteration_failed", error=str(exc))
+                    logger.error(
+                        "dicom_auto_push_iteration_failed",
+                        ae_title=self.auto_push_ae,
+                        host=self.auto_push_host,
+                        port=self.auto_push_port,
+                        error=str(exc),
+                    )
         except Exception as exc:
             logger.error("dicom_auto_push_loop_error", error=str(exc))
         finally:
@@ -992,13 +1046,10 @@ class DicomScpService:
         # If host and port were left at defaults but target_ae exists in config.move_destinations:
         if resolved_host == "127.0.0.1" and resolved_port == 11113 and self.auto_push_ae in config.move_destinations:
             dest_info = config.move_destinations[self.auto_push_ae]
-            self.auto_push_host = dest_info.get("host", self.auto_push_host)
+            self.auto_push_host = str(dest_info.get("host", self.auto_push_host)).strip()
             self.auto_push_port = int(dest_info.get("port", self.auto_push_port))
 
-        config.auto_push_ae = self.auto_push_ae
-        config.auto_push_host = self.auto_push_host
-        config.auto_push_port = self.auto_push_port
-        config.auto_push_sec = self.auto_push_sec
+        self._sync_auto_push_config()
 
         if self.auto_push_sec > 0 and self.auto_push_ae:
             self.start_auto_push(
@@ -1046,19 +1097,17 @@ class DicomScpService:
         resolved_ae = targetAeTitle or target_ae_title or ae_title
         if resolved_ae is not None:
             self.auto_push_ae = resolved_ae.strip()
-            config.auto_push_ae = self.auto_push_ae
         resolved_host = targetHost or target_host
         if resolved_host is not None:
             self.auto_push_host = resolved_host.strip()
-            config.auto_push_host = self.auto_push_host
         resolved_port = targetPort if targetPort is not None else target_port
         if resolved_port is not None:
             self.auto_push_port = int(resolved_port)
-            config.auto_push_port = self.auto_push_port
         sec_val = intervalSec if intervalSec is not None else interval_sec
         if sec_val is not None:
             self.auto_push_sec = max(0.0, float(sec_val))
-            config.auto_push_sec = self.auto_push_sec
+
+        self._sync_auto_push_config()
 
         if not self.auto_push_ae or self.auto_push_sec <= 0:
             return self.get_auto_push_status()
