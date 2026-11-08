@@ -45,7 +45,7 @@ class SyntheaUtils:
     def __init__(
         self,
         synthea_output_folder: str = "../../../synthea/output/fhir",
-        patient_id_system: str = "urn:oid:2.16.840.1.113883.4.3.25",
+        patient_id_system: str | None = None,
         modalities: List[str] | None = None,
         mwl_service: Any | None = None,
     ):
@@ -59,7 +59,9 @@ class SyntheaUtils:
             mwl_service: Optional ``MwlGeneratorService`` instance to register Patient-Study-Series records into.
         """
         self.synthea_output_folder = synthea_output_folder
-        self.patient_id_system = patient_id_system
+        self.patient_id_system = patient_id_system or getattr(
+            config, "fhir_patient_id_system", "urn:oid:2.16.840.1.113883.4.3.25"
+        )
         self.mwl_service = mwl_service
         if self.mwl_service is not None:
             self.mwl_service.synthea_utils = self
@@ -870,12 +872,12 @@ class SyntheaUtils:
 
     def _build_standalone_entry_record(self, custom_mwl: dict[str, Any]) -> dict[str, Any]:
         """Build a standalone patient-study-series entry dict when no MwlGeneratorService is attached."""
-        patient_id = str(custom_mwl.get("patient_id") or f"{config.id_prefix}MOCK-PATIENT-001")
+        patient_id = str(custom_mwl.get("patient_id") or "MOCK-PATIENT-001")
         patient_name = str(custom_mwl.get("patient_name") or "UNKNOWN^PATIENT")
         dob_str = str(custom_mwl.get("dob") or "19700101")
         sex = str(custom_mwl.get("sex") or "O")
         modality = str(custom_mwl.get("modality") or "CT")
-        accession = str(custom_mwl.get("accession") or PersonGenerator.generate_random_id(8, prefix=config.id_prefix))
+        accession = str(custom_mwl.get("accession") or PersonGenerator.generate_random_id(8, prefix=""))
         study_uid = str(custom_mwl.get("study_uid") or generate_study_uid(patient_name, patient_id, accession))
         series_number = int(custom_mwl.get("series_number") or 1)
         series_uid = str(custom_mwl.get("series_uid") or generate_series_uid(study_uid, series_number))
@@ -968,7 +970,7 @@ class SyntheaUtils:
             mwl_service.synthea_utils = self
 
         patient = self.get_patient(bundle)
-        patient_id = (self.get_patient_id(patient) if patient else None) or f"{config.id_prefix}MOCK-PATIENT-001"
+        patient_id = (self.get_patient_id(patient) if patient else None) or "MOCK-PATIENT-001"
         patient_name = (self.get_patient_name(patient) if patient else None) or "UNKNOWN^PATIENT"
         dob_tuple = self.get_date_time(patient.birthDate) if (patient and patient.birthDate) else None
         patient_birth_date = dob_tuple[0] if dob_tuple and dob_tuple[0] else "19700101"
@@ -1009,7 +1011,7 @@ class SyntheaUtils:
 
             study_key = raw_study_uid or getattr(imaging, "id", None) or f"{patient_id}:study"
             if study_key not in self._study_accessions:
-                self._study_accessions[study_key] = PersonGenerator.generate_random_id(8, prefix=config.id_prefix)
+                self._study_accessions[study_key] = PersonGenerator.generate_random_id(8, prefix="")
             study_accession = self._study_accessions[study_key]
 
             study_uid = raw_study_uid or generate_study_uid(patient_name, patient_id, study_accession)

@@ -17,6 +17,8 @@ from pydicom.uid import CTImageStorage
 from dicom_py_mock_server.config import AppConfig
 from dicom_py_mock_server.config import config as global_config
 from dicom_py_mock_server.models.template import TemplateSeriesDataset
+from dicom_py_mock_server.services.fhir_imaging_client import FhirPluginClient
+from dicom_py_mock_server.services.fhir_imaging_parser import FhirImagingParser
 from dicom_py_mock_server.services.generator import get_random_study_description
 from dicom_py_mock_server.services.person_generator import PersonGenerator
 from dicom_py_mock_server.services.uid_generator import (
@@ -105,7 +107,7 @@ class _MwlEntriesList(list):
 
     def clear(self) -> None:
         super().clear()
-        self._owner._synthea_entries.clear()
+        self._owner.clear_synthea_entries()
 
 
 class MwlGeneratorService:
@@ -116,6 +118,8 @@ class MwlGeneratorService:
         app_config: AppConfig | None = None,
         patient_generator: PersonGenerator | None = None,
         synthea_utils: Any | None = None,
+        fhir_client: Any | None = None,
+        fhir_parser: Any | None = None,
     ) -> None:
         self.config = app_config or global_config
         self.patient_generator = patient_generator or PersonGenerator(
@@ -124,6 +128,11 @@ class MwlGeneratorService:
             pn_suffix=self.config.pn_suffix,
         )
         self.synthea_utils = synthea_utils
+        self.fhir_client = fhir_client or FhirPluginClient(base_url=self.config.fhir_plugin_url)
+        self.fhir_parser = fhir_parser or FhirImagingParser(mwl_service=self, app_config=self.config)
+        self._fhir_bundle_queue: list[dict[str, Any]] = []
+        self._fhir_is_exhausted: bool = False
+        self._scp_service: Any | None = None
         self.template_modalities: dict[str, dict[str, Any]] = {}
         self.dicom_templates: dict[str, list[Dataset]] = {}
         self.template_datasets_by_modality: dict[str, list[TemplateSeriesDataset]] = defaultdict(list)
@@ -151,6 +160,86 @@ class MwlGeneratorService:
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store reference to the main asyncio event loop."""
         self._loop = loop
+
+    def set_scp_service(self, scp_service: Any) -> None:
+        """Store reference to DicomScpService for auto-push propagation."""
+        self._scp_service = scp_service
+
+    async def _fetch_fhir_bundles_if_needed(self, items_needed: int = 1) -> None:
+        """Fetch more bundles from patient-imaging API if local queue has fewer than items_needed."""
+        if len(self._fhir_bundle_queue) < items_needed:
+            queue_len_before = len(self._fhir_bundle_queue)
+            modalities = self.get_template_modalities() or None
+            fetched_bundles, count = await self.fhir_client.fetch_patient_imaging(
+                count=self.config.fhir_patient_count,
+                modalities=modalities,
+            )
+            logger.info(
+                "fhir_patient_imaging_fetched",
+                items_returned=len(fetched_bundles),
+                count=count,
+                queue_depth_before=queue_len_before,
+                queue_depth_after=queue_len_before + len(fetched_bundles),
+            )
+            self._fhir_bundle_queue.extend(fetched_bundles)
+            self._fhir_is_exhausted = len(fetched_bundles) == 0 and len(self._fhir_bundle_queue) == 0
+
+    async def _generate_one_fhir_study(self) -> dict[str, Any] | None:
+        """Generate one MWL/C-FIND study entry from the local FHIR bundle queue."""
+        await self._fetch_fhir_bundles_if_needed(items_needed=1)
+
+        if not self._fhir_bundle_queue:
+            logger.warning(
+                "fhir_patient_imaging_exhausted",
+                message="No FHIR imaging studies available from patient-imaging API; generation paused.",
+            )
+            return None
+
+        bundle_data = self._fhir_bundle_queue.pop(0)
+        custom_entries = self.fhir_parser.parse_bundle_to_custom_entries(bundle_data)
+        if not custom_entries:
+            logger.warning("fhir_bundle_has_no_usable_imaging_series")
+            return None
+
+        first_record: dict[str, Any] | None = None
+        for custom_entry in custom_entries:
+            entry_record = self.add_entry(custom=custom_entry)
+            if entry_record is not None:
+                self.register_synthea_entry(entry_record)
+            else:
+                entry_record = self.register_study_series_entry(custom=custom_entry)
+
+            if entry_record:
+                if first_record is None:
+                    first_record = entry_record
+                if self._scp_service and (
+                    getattr(self._scp_service, "auto_push_ae", "")
+                    or getattr(self.config, "auto_push_ae", "")
+                    or getattr(global_config, "auto_push_ae", "")
+                ):
+                    self._scp_service.enqueue_auto_push_study(entry_record)
+
+                logger.info(
+                    "fhir_mwl_entry_activated",
+                    patient_id=entry_record.get("patient_id"),
+                    study_uid=entry_record.get("study_uid"),
+                    accession=entry_record.get("accession"),
+                    modality=entry_record.get("modality"),
+                    queue_depth_remaining=len(self._fhir_bundle_queue),
+                )
+
+        return first_record
+
+    async def seed_initial_fhir_entries(self, count: int = 1) -> list[dict[str, Any]]:
+        """Prime the MWL worklist with initial entries from the FHIR plugin at startup."""
+        seeded: list[dict[str, Any]] = []
+        for _ in range(count):
+            rec = await self._generate_one_fhir_study()
+            if rec:
+                seeded.append(rec)
+            else:
+                break
+        return seeded
 
     def _load_templates(self) -> None:
         """Load template modalities and multi-slice DICOM templates into memory from templates_path.
@@ -220,14 +309,14 @@ class MwlGeneratorService:
                             "format": "json",
                             "data": data,
                         }
-                    except Exception:
+                    except [ValueError] as _:
                         pass
                     continue
 
                 # Attempt to read as DICOM
                 try:
                     ds = pydicom.dcmread(file_path, force=True)
-                except Exception as exc:
+                except [ValueError] as exc:
                     logger.debug("skipping_non_dicom_file", path=str(file_path), error=str(exc))
                     continue
 
@@ -405,6 +494,18 @@ class MwlGeneratorService:
             datasets_per_modality={m: len(ds) for m, ds in self.template_datasets_by_modality.items()},
         )
 
+    def clear_synthea_entries(self):
+        self._synthea_entries.clear()
+
+    @staticmethod
+    def set_perf_phys(ds: Dataset, entry: dict, json_e: dict):
+        perf_phys = entry.get("performing_physician")
+        if not perf_phys and "00081050" in json_e and json_e["00081050"].get("Value"):
+            perf_raw = json_e["00081050"]["Value"][0]
+            perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
+        if perf_phys:
+            ds.PerformingPhysicianName = perf_phys
+
     def get_template_modalities(self) -> list[str]:
         """Get the list of currently loaded in-memory template modalities."""
         if self.template_datasets_by_modality:
@@ -579,7 +680,9 @@ class MwlGeneratorService:
         institution = self.config.institution_name
 
         # IDs and UIDs
-        accession = PersonGenerator.generate_random_id(8, prefix=self.config.id_prefix)
+        is_fhir = str(getattr(self.config, "generator_mode", "")).strip().lower() == "fhir"
+        id_prefix = "" if is_fhir else self.config.id_prefix
+        accession = PersonGenerator.generate_random_id(8, prefix=id_prefix)
         sps_id = PersonGenerator.generate_random_id(5)
         req_proc_id = PersonGenerator.generate_random_id(4)
 
@@ -1252,16 +1355,15 @@ class MwlGeneratorService:
         return matched
 
     @staticmethod
-    def to_patient_cfind_dataset(
+    def _populate_patient_demographics(
+        ds: Dataset,
         entry: dict[str, Any],
-        related_entries: list[dict[str, Any]] | None = None,
-    ) -> Dataset:
-        """Convert patient/study/series entry record(s) into a DICOM Patient Level C-FIND response Dataset."""
-        ds = Dataset()
-        json_e = entry.get("json_entry", {})
+        json_e: dict[str, Any] | None = None,
+    ) -> None:
+        """Populate patient demographic attributes (Name, ID, BirthDate, Sex) on a Dataset."""
+        if json_e is None:
+            json_e = entry.get("json_entry", {})
 
-        ds.SpecificCharacterSet = "ISO_IR 192"
-        ds.QueryRetrieveLevel = "PATIENT"
         ds.PatientName = entry.get("patient_name", "")
         ds.PatientID = entry.get("patient_id", "")
 
@@ -1276,6 +1378,19 @@ class MwlGeneratorService:
             sex = json_e["00100040"]["Value"][0]
         if sex is not None:
             ds.PatientSex = str(sex)
+
+    @staticmethod
+    def to_patient_cfind_dataset(
+        entry: dict[str, Any],
+        related_entries: list[dict[str, Any]] | None = None,
+    ) -> Dataset:
+        """Convert patient/study/series entry record(s) into a DICOM Patient Level C-FIND response Dataset."""
+        ds = Dataset()
+        json_e = entry.get("json_entry", {})
+
+        ds.SpecificCharacterSet = "ISO_IR 192"
+        ds.QueryRetrieveLevel = "PATIENT"
+        MwlGeneratorService._populate_patient_demographics(ds, entry, json_e)
 
         entries_for_patient = related_entries if related_entries else [entry]
         distinct_studies = {str(e.get("study_uid", "")) for e in entries_for_patient if e.get("study_uid")}
@@ -1301,19 +1416,7 @@ class MwlGeneratorService:
         json_e = entry.get("json_entry", {})
 
         ds.QueryRetrieveLevel = "STUDY"
-        ds.PatientName = entry.get("patient_name", "")
-        ds.PatientID = entry.get("patient_id", "")
-        dob = entry.get("patient_birth_date") or entry.get("dob")
-        if not dob and "00100030" in json_e and json_e["00100030"].get("Value"):
-            dob = json_e["00100030"]["Value"][0]
-        if dob is not None:
-            ds.PatientBirthDate = str(dob)
-
-        sex = entry.get("patient_sex") or entry.get("sex")
-        if not sex and "00100040" in json_e and json_e["00100040"].get("Value"):
-            sex = json_e["00100040"]["Value"][0]
-        if sex is not None:
-            ds.PatientSex = str(sex)
+        MwlGeneratorService._populate_patient_demographics(ds, entry, json_e)
 
         ds.StudyInstanceUID = entry.get("study_uid", "")
         ds.AccessionNumber = entry.get("accession", "")
@@ -1330,12 +1433,7 @@ class MwlGeneratorService:
         if ref_phys:
             ds.ReferringPhysicianName = ref_phys
 
-        perf_phys = entry.get("performing_physician")
-        if not perf_phys and "00081050" in json_e and json_e["00081050"].get("Value"):
-            perf_raw = json_e["00081050"]["Value"][0]
-            perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
-        if perf_phys:
-            ds.PerformingPhysicianName = perf_phys
+        MwlGeneratorService.set_perf_phys(ds, entry, json_e)
 
         read_phys = entry.get("reading_physician")
         if not read_phys and "00081060" in json_e and json_e["00081060"].get("Value"):
@@ -1405,12 +1503,7 @@ class MwlGeneratorService:
         if inst_name:
             ds.InstitutionName = inst_name
 
-        perf_phys = entry.get("performing_physician")
-        if not perf_phys and "00081050" in json_e and json_e["00081050"].get("Value"):
-            perf_raw = json_e["00081050"]["Value"][0]
-            perf_phys = perf_raw.get("Alphabetic", "") if isinstance(perf_raw, dict) else perf_raw
-        if perf_phys:
-            ds.PerformingPhysicianName = perf_phys
+        MwlGeneratorService.set_perf_phys(ds, entry, json_e)
 
         ds.AccessionNumber = entry.get("accession", "")
         sps_seq = json_e.get("00400100", {}).get("Value", [{}])[0]
@@ -1486,7 +1579,8 @@ class MwlGeneratorService:
         current_rate = self.get_current_rate_per_hr(now)
         is_biz_hrs = 9 <= now.hour < 17
 
-        return {
+        mode = str(getattr(self.config, "generator_mode", "internal")).strip().lower()
+        res: dict[str, Any] = {
             "active_entries_count": len(self._entries),
             "window_hr": self.config.mwl_window_hr,
             "base_rate_per_hr": float(self.config.mwl_rate_per_hr),
@@ -1494,11 +1588,24 @@ class MwlGeneratorService:
             "is_business_hours": is_biz_hrs,
             "template_modalities": self.get_template_modalities(),
             "is_auto_generating": self._is_auto_generating,
+            "generator_mode": mode,
         }
+        if mode == "fhir":
+            res["fhir_plugin_url"] = self.config.fhir_plugin_url
+            res["fhir_queue_depth"] = len(self._fhir_bundle_queue)
+            res["is_exhausted"] = self._fhir_is_exhausted
+        return res
+
+    async def trigger_generation(self) -> dict[str, Any] | None:
+        """Trigger immediate generation of a single study (FHIR or synthetic/internal)."""
+        is_fhir_mode = str(getattr(self.config, "generator_mode", "internal")).strip().lower() == "fhir"
+        if is_fhir_mode:
+            return await self._generate_one_fhir_study()
+        return self.add_entry()
 
     async def _auto_generation_loop(self) -> None:
         """Async background task that generates MWL entries according to the current rate."""
-        logger.info("mwl_auto_generation_loop_started")
+        logger.info("mwl_auto_generation_loop_started", generator_mode=self.config.generator_mode)
         try:
             while self._is_auto_generating:
                 now = datetime.now()
@@ -1506,12 +1613,27 @@ class MwlGeneratorService:
                 # Interval in seconds: 3600 / rate_per_hr
                 interval = 3600.0 / max(rate_per_hr, 0.01)
 
-                # Sleep interval seconds or wait for stop
-                await asyncio.sleep(min(interval, 60.0))
-                if not self._is_auto_generating:
-                    break
+                is_fhir_mode = str(getattr(self.config, "generator_mode", "internal")).strip().lower() == "fhir"
 
-                self.add_entry()
+                rec = None
+                if is_fhir_mode:
+                    rec = await self._generate_one_fhir_study()
+                else:
+                    rec = self.add_entry()
+
+                # If in FHIR mode and no study was generated (e.g. empty queue or ID mismatch),
+                # use a short backoff (e.g. 5 seconds) so we don't stall for hours before checking again.
+                if is_fhir_mode and rec is None:
+                    sleep_time = min(interval, 5.0)
+                else:
+                    sleep_time = interval
+
+                # Responsive interruptible sleep for sleep_time seconds
+                remaining = sleep_time
+                while remaining > 0 and self._is_auto_generating:
+                    step = min(remaining, 1.0)
+                    await asyncio.sleep(step)
+                    remaining -= step
         except asyncio.CancelledError:
             logger.info("mwl_auto_generation_loop_cancelled")
         except Exception as exc:

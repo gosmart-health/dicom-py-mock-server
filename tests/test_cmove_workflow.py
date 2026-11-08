@@ -3,10 +3,12 @@
 import time
 
 from pydicom import Dataset
-from pynetdicom import AE, StoragePresentationContexts, evt
+from pynetdicom import AE, StoragePresentationContexts, build_role, evt
 from pynetdicom.sop_class import (
     ModalityWorklistInformationFind,
+    PatientRootQueryRetrieveInformationModelGet,
     StudyRootQueryRetrieveInformationModelFind,
+    StudyRootQueryRetrieveInformationModelGet,
     StudyRootQueryRetrieveInformationModelMove,
 )
 
@@ -733,3 +735,66 @@ def test_cstore_push_jpeg_8bit_monochrome2():
             assert r_ds.pixel_array.shape == (r_ds.Rows, r_ds.Columns)
     finally:
         mock_pacs.stop()
+
+
+def test_cget_study_and_series_retrieve():
+    """Verify C-GET operation returns DICOM instances over the same association with role negotiation."""
+    from pydicom.uid import ExplicitVRLittleEndian
+
+    scp_port = 11266
+    mwl_service = MwlGeneratorService(config)
+    mwl_entry = mwl_service.add_entry(
+        custom={
+            "patientName": "CGET^TEST^PATIENT",
+            "patientId": "CGET-PAT-001",
+            "modality": "CR",
+            "accession": "ACC-CGET-001",
+        }
+    )
+    study_uid = mwl_entry["study_uid"]
+
+    scp_service = DicomScpService(ae_title="CGET_SCP", port=scp_port, mwl_service=mwl_service)
+    scp_service.start()
+
+    received_datasets: list[Dataset] = []
+
+    def handle_cget_store(event: evt.Event) -> int:
+        ds = event.dataset
+        ds.file_meta = event.file_meta
+        received_datasets.append(ds)
+        return 0x0000
+
+    try:
+        assert "C-GET" in scp_service.get_status().supported_services
+
+        scu = AE(ae_title="PACS_VIEWER")
+        scu.add_requested_context(StudyRootQueryRetrieveInformationModelGet)
+        scu.add_requested_context(PatientRootQueryRetrieveInformationModelGet)
+        for cx in StoragePresentationContexts[:60]:
+            scu.add_requested_context(cx.abstract_syntax, [ExplicitVRLittleEndian])
+        roles = [build_role(cx.abstract_syntax, scp_role=True) for cx in StoragePresentationContexts[:60]]
+
+        assoc = scu.associate(
+            "127.0.0.1",
+            scp_port,
+            ae_title="CGET_SCP",
+            ext_neg=roles,
+            evt_handlers=[(evt.EVT_C_STORE, handle_cget_store)],
+        )
+        assert assoc.is_established
+
+        get_query = Dataset()
+        get_query.QueryRetrieveLevel = "STUDY"
+        get_query.StudyInstanceUID = study_uid
+        responses = list(assoc.send_c_get(get_query, StudyRootQueryRetrieveInformationModelGet))
+        assoc.release()
+
+        statuses = [status.Status for status, _ in responses if status]
+        assert 0x0000 in statuses
+        assert len(received_datasets) >= 1
+        for ds in received_datasets:
+            assert str(ds.StudyInstanceUID) == study_uid
+            assert str(ds.PatientID) == "CGET-PAT-001"
+            assert ds.file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
+    finally:
+        scp_service.stop()

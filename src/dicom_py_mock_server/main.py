@@ -28,10 +28,15 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     scp_service.set_event_loop(loop)
     mwl_service.set_event_loop(loop)
+    mwl_service.set_scp_service(scp_service)
 
     # 1. Seed initial active mock studies across the retention window
-    seeded = mwl_service.seed_initial_entries(count=10)
-    logger.info("initial_mock_studies_seeded", count=len(seeded))
+    if str(config.generator_mode).strip().lower() == "fhir":
+        seeded = await mwl_service.seed_initial_fhir_entries(count=1)
+        logger.info("initial_fhir_studies_seeded", count=len(seeded))
+    else:
+        seeded = mwl_service.seed_initial_entries(count=10)
+        logger.info("initial_mock_studies_seeded", count=len(seeded))
 
     # 2. Start background MWL automated generation loop
     mwl_service.start_auto_generation()

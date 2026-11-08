@@ -19,8 +19,10 @@ from pynetdicom.presentation import build_context
 from pynetdicom.sop_class import (
     ModalityWorklistInformationFind,
     PatientRootQueryRetrieveInformationModelFind,
+    PatientRootQueryRetrieveInformationModelGet,
     PatientRootQueryRetrieveInformationModelMove,
     StudyRootQueryRetrieveInformationModelFind,
+    StudyRootQueryRetrieveInformationModelGet,
     StudyRootQueryRetrieveInformationModelMove,
     Verification,
 )
@@ -142,12 +144,36 @@ def adapt_dataset_for_accepted_context(ds: Any, accepted_contexts: list[Any]) ->
         if cx.abstract_syntax == sop_class and cx.transfer_syntax:
             if ds_ts and ds_ts in cx.transfer_syntax:
                 return ds
-            accepted_ts = cx.transfer_syntax[0]
-            break
+            if accepted_ts is None:
+                accepted_ts = cx.transfer_syntax[0]
 
     if accepted_ts and ds_ts != accepted_ts:
         ds = DicomGeneratorService.apply_transfer_syntax(ds, str(accepted_ts))
     return ds
+
+
+def _extract_identifier_tag(identifier: Any, tag_name: str) -> str | None:
+    """Extract a tag string or backslash-joined multi-value string from a DICOM Identifier."""
+    if identifier and tag_name in identifier:
+        val = getattr(identifier, tag_name, None)
+        if val is not None:
+            if isinstance(val, (list, tuple)):
+                joined = "\\".join(str(v).strip() for v in val if str(v).strip())
+                return joined if joined else None
+            val_str = str(val).strip()
+            if val_str:
+                return val_str
+    return None
+
+
+def _matches_uid_value(candidate: str, filter_val: str) -> bool:
+    """Check if a UID matches a single UID or backslash-separated list of UIDs."""
+    if not filter_val:
+        return True
+    parts = [p.strip() for p in str(filter_val).split("\\") if p.strip()]
+    if not parts:
+        return True
+    return str(candidate).strip() in parts
 
 
 class DicomScpService:
@@ -167,14 +193,36 @@ class DicomScpService:
         self.ae: AE | None = None
         self.server = None
         self.is_running = False
-        self.auto_push_ae: str = getattr(config, "auto_push_ae", "")
-        self.auto_push_host: str = getattr(config, "auto_push_host", "127.0.0.1")
-        self.auto_push_port: int = int(getattr(config, "auto_push_port", 11113))
-        self.auto_push_sec: float = float(getattr(config, "auto_push_sec", 0.0))
+        active_cfg = getattr(mwl_service, "config", None) or config
+        self.auto_push_ae: str = str(
+            getattr(active_cfg, "auto_push_ae", "") or getattr(config, "auto_push_ae", "")
+        ).strip()
+        self.auto_push_host: str = (
+            str(getattr(active_cfg, "auto_push_host", "") or getattr(config, "auto_push_host", "127.0.0.1")).strip()
+            or "127.0.0.1"
+        )
+        self.auto_push_port: int = int(
+            getattr(active_cfg, "auto_push_port", 0) or getattr(config, "auto_push_port", 11113) or 11113
+        )
+        self.auto_push_sec: float = float(
+            getattr(active_cfg, "auto_push_sec", 0.0) or getattr(config, "auto_push_sec", 0.0) or 0.0
+        )
         self._is_auto_pushing: bool = False
         self._auto_push_thread: threading.Thread | None = None
         self._auto_push_stop_event: threading.Event = threading.Event()
         self._auto_push_queue: list[dict[str, Any]] = []
+
+    def _sync_auto_push_config(self) -> None:
+        """Synchronize auto-push settings to global config and mwl_service.config."""
+        config.auto_push_ae = self.auto_push_ae
+        config.auto_push_host = self.auto_push_host
+        config.auto_push_port = self.auto_push_port
+        config.auto_push_sec = self.auto_push_sec
+        if self.mwl_service and hasattr(self.mwl_service, "config") and self.mwl_service.config is not None:
+            self.mwl_service.config.auto_push_ae = self.auto_push_ae
+            self.mwl_service.config.auto_push_host = self.auto_push_host
+            self.mwl_service.config.auto_push_port = self.auto_push_port
+            self.mwl_service.config.auto_push_sec = self.auto_push_sec
 
     def _handle_echo(self, event: evt.Event) -> int:
         """Handle C-ECHO request."""
@@ -225,24 +273,19 @@ class DicomScpService:
             yield (0x0000, None)
         else:
             # Study Root / Patient Root C-FIND
-            def _get_tag_str(tag_name: str) -> str | None:
-                if identifier and tag_name in identifier:
-                    val = getattr(identifier, tag_name, None)
-                    if val is not None and str(val).strip():
-                        return str(val).strip()
-                return None
-
-            study_uid = _get_tag_str("StudyInstanceUID")
-            series_uid = _get_tag_str("SeriesInstanceUID")
-            sop_uid_filter = _get_tag_str("SOPInstanceUID")
-            patient_id = _get_tag_str("PatientID")
-            patient_name = _get_tag_str("PatientName")
-            accession = _get_tag_str("AccessionNumber")
-            study_date = _get_tag_str("StudyDate")
-            modality = _get_tag_str("Modality") or _get_tag_str("ModalitiesInStudy")
-            study_description = _get_tag_str("StudyDescription")
-            series_description = _get_tag_str("SeriesDescription")
-            series_number = _get_tag_str("SeriesNumber")
+            study_uid = _extract_identifier_tag(identifier, "StudyInstanceUID")
+            series_uid = _extract_identifier_tag(identifier, "SeriesInstanceUID")
+            sop_uid_filter = _extract_identifier_tag(identifier, "SOPInstanceUID")
+            patient_id = _extract_identifier_tag(identifier, "PatientID")
+            patient_name = _extract_identifier_tag(identifier, "PatientName")
+            accession = _extract_identifier_tag(identifier, "AccessionNumber")
+            study_date = _extract_identifier_tag(identifier, "StudyDate")
+            modality = _extract_identifier_tag(identifier, "Modality") or _extract_identifier_tag(
+                identifier, "ModalitiesInStudy"
+            )
+            study_description = _extract_identifier_tag(identifier, "StudyDescription")
+            series_description = _extract_identifier_tag(identifier, "SeriesDescription")
+            series_number = _extract_identifier_tag(identifier, "SeriesNumber")
 
             qr_level = "STUDY"
             if identifier and "QueryRetrieveLevel" in identifier and identifier.QueryRetrieveLevel:
@@ -285,7 +328,10 @@ class DicomScpService:
                     image_datasets = self.mwl_service.to_image_cfind_datasets(entry)
                     for img_ds in image_datasets:
                         sop_uid = str(getattr(img_ds, "SOPInstanceUID", ""))
-                        if sop_uid_filter and not self.mwl_service._matches_filter(sop_uid, sop_uid_filter):
+                        if sop_uid_filter and not (
+                            self.mwl_service._matches_filter(sop_uid, sop_uid_filter)
+                            or _matches_uid_value(sop_uid, sop_uid_filter)
+                        ):
                             continue
                         if sop_uid and sop_uid not in seen_uids:
                             seen_uids.add(sop_uid)
@@ -350,7 +396,10 @@ class DicomScpService:
                             yield (0xFF00, out_ds)
                     elif qr_level in ("IMAGE", "INSTANCE"):
                         sop_uid = str(getattr(ds, "SOPInstanceUID", ""))
-                        if sop_uid_filter and not self.mwl_service._matches_filter(sop_uid, sop_uid_filter):
+                        if sop_uid_filter and not (
+                            self.mwl_service._matches_filter(sop_uid, sop_uid_filter)
+                            or _matches_uid_value(sop_uid, sop_uid_filter)
+                        ):
                             continue
                         if sop_uid and sop_uid not in seen_uids:
                             seen_uids.add(sop_uid)
@@ -369,6 +418,148 @@ class DicomScpService:
                             yield (0xFF00, out_ds)
 
             yield (0x0000, None)
+
+    def _resolve_retrieve_datasets(
+        self,
+        study_uid: str | None = None,
+        series_uid: str | None = None,
+        sop_uid: str | None = None,
+        patient_id: str | None = None,
+        accession: str | None = None,
+    ) -> list[Dataset]:
+        """Resolve datasets matching C-MOVE or C-GET query parameters."""
+        stow_matched: list[Dataset] = []
+        if self.dicomweb_service and hasattr(self.dicomweb_service, "_stow_datasets"):
+            for ds in self.dicomweb_service._stow_datasets.values():
+                if study_uid and not _matches_uid_value(str(getattr(ds, "StudyInstanceUID", "")), study_uid):
+                    continue
+                if series_uid and not _matches_uid_value(str(getattr(ds, "SeriesInstanceUID", "")), series_uid):
+                    continue
+                if sop_uid and not _matches_uid_value(str(getattr(ds, "SOPInstanceUID", "")), sop_uid):
+                    continue
+                if patient_id and str(getattr(ds, "PatientID", "")) != str(patient_id):
+                    continue
+                if accession and str(getattr(ds, "AccessionNumber", "")) != str(accession):
+                    continue
+                stow_matched.append(ds)
+
+        if stow_matched:
+            return stow_matched
+
+        matched_entries: list[dict[str, Any]] = []
+        if self.mwl_service:
+            matched_entries = self.mwl_service.find_study_series_entries(
+                study_uid=study_uid, series_uid=series_uid, patient_id=patient_id, accession=accession
+            )
+            if not matched_entries and (study_uid or patient_id or accession):
+                # Dynamically synthesize a mock study matching the requested query parameters
+                new_entry = self.mwl_service.add_entry(
+                    custom={
+                        "studyUid": study_uid,
+                        "patientId": patient_id,
+                        "accession": accession,
+                    }
+                )
+                matched_entries = [new_entry] if new_entry else []
+
+        if not matched_entries:
+            return []
+
+        all_datasets: list[Dataset] = []
+        for entry in matched_entries:
+            datasets = DicomGeneratorService.create_instances_from_mwl(entry)
+            for ds in datasets:
+                if sop_uid and not _matches_uid_value(str(getattr(ds, "SOPInstanceUID", "")), sop_uid):
+                    continue
+                all_datasets.append(ds)
+
+        return all_datasets
+
+    def _handle_get(self, event: evt.Event):
+        """Handle C-GET request and return DICOM image instances over the same association."""
+        requestor_ae = getattr(event.assoc.requestor, "ae_title", "UNKNOWN") if event.assoc else "UNKNOWN"
+        requestor_address = getattr(event.assoc.requestor, "address", "127.0.0.1") if event.assoc else "127.0.0.1"
+        sop_class = str(getattr(event.request, "AffectedSOPClassUID", ""))
+
+        identifier = getattr(event, "identifier", None)
+        study_uid = _extract_identifier_tag(identifier, "StudyInstanceUID")
+        series_uid = _extract_identifier_tag(identifier, "SeriesInstanceUID")
+        sop_uid = _extract_identifier_tag(identifier, "SOPInstanceUID")
+        patient_id = _extract_identifier_tag(identifier, "PatientID")
+        accession = _extract_identifier_tag(identifier, "AccessionNumber")
+
+        logger.info(
+            "dicom_c_get_received",
+            requestor_ae=requestor_ae,
+            requestor_address=requestor_address,
+            sop_class=sop_class,
+            study_uid=study_uid,
+            series_uid=series_uid,
+            sop_uid=sop_uid,
+            patient_id=patient_id,
+        )
+
+        all_datasets = self._resolve_retrieve_datasets(
+            study_uid=study_uid,
+            series_uid=series_uid,
+            sop_uid=sop_uid,
+            patient_id=patient_id,
+            accession=accession,
+        )
+
+        if not all_datasets:
+            logger.warning("dicom_c_get_no_matching_studies", study_uid=study_uid, patient_id=patient_id)
+            yield 0
+            return
+
+        total_instances = len(all_datasets)
+        # 1st yield: total sub-operations count
+        yield total_instances
+
+        accepted_contexts = getattr(event.assoc, "accepted_contexts", []) if event.assoc else []
+        if accepted_contexts:
+            dataset_sops = {
+                str(getattr(ds, "SOPClassUID", "")) for ds in all_datasets if getattr(ds, "SOPClassUID", None)
+            }
+            for cx in accepted_contexts:
+                if str(cx.abstract_syntax) in dataset_sops and not getattr(cx, "as_scu", False):
+                    cx._as_scu = True
+
+        # 2nd+ yields: (status, dataset) pairs sent over the existing association
+        for idx, ds in enumerate(all_datasets, 1):
+            if event.is_cancelled:
+                logger.warning("dicom_c_get_cancelled")
+                yield (0xFE00, None)
+                return
+
+            if accepted_contexts:
+                ds = adapt_dataset_for_accepted_context(ds, accepted_contexts)
+
+            patient_name = str(getattr(ds, "PatientName", ""))
+            patient_id_val = str(getattr(ds, "PatientID", ""))
+            study_inst_uid = str(getattr(ds, "StudyInstanceUID", ""))
+            series_inst_uid = str(getattr(ds, "SeriesInstanceUID", ""))
+            sop_inst_uid = str(getattr(ds, "SOPInstanceUID", ""))
+            instance_num = int(getattr(ds, "InstanceNumber", idx))
+
+            ts_uid = getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None)
+            ts_name = getattr(ts_uid, "name", str(ts_uid)) if ts_uid else "Unknown"
+
+            logger.info(
+                "dicom_c_get_instance_sent",
+                patient_name=patient_name,
+                patient_id=patient_id_val,
+                study_instance_uid=study_inst_uid,
+                series_instance_uid=series_inst_uid,
+                sop_instance_uid=sop_inst_uid,
+                instance_number=f"{instance_num}/{total_instances}",
+                transfer_syntax=ts_name,
+                transfer_syntax_uid=str(ts_uid) if ts_uid else None,
+                requestor_ae=requestor_ae,
+                requestor_address=requestor_address,
+            )
+
+            yield (0xFF00, ds)
 
     def _handle_move(self, event: evt.Event):
         """Handle C-MOVE request and push DICOM image instances to move destination."""
@@ -398,70 +589,26 @@ class DicomScpService:
             return
 
         identifier = getattr(event, "identifier", None)
-        study_uid = (
-            str(identifier.get("StudyInstanceUID", ""))
-            if identifier and "StudyInstanceUID" in identifier and identifier.StudyInstanceUID
-            else None
-        )
-        series_uid = (
-            str(identifier.get("SeriesInstanceUID", ""))
-            if identifier and "SeriesInstanceUID" in identifier and identifier.SeriesInstanceUID
-            else None
-        )
-        patient_id = (
-            str(identifier.get("PatientID", ""))
-            if identifier and "PatientID" in identifier and identifier.PatientID
-            else None
-        )
-        accession = (
-            str(identifier.get("AccessionNumber", ""))
-            if identifier and "AccessionNumber" in identifier and identifier.AccessionNumber
-            else None
+        study_uid = _extract_identifier_tag(identifier, "StudyInstanceUID")
+        series_uid = _extract_identifier_tag(identifier, "SeriesInstanceUID")
+        sop_uid = _extract_identifier_tag(identifier, "SOPInstanceUID")
+        patient_id = _extract_identifier_tag(identifier, "PatientID")
+        accession = _extract_identifier_tag(identifier, "AccessionNumber")
+
+        all_datasets = self._resolve_retrieve_datasets(
+            study_uid=study_uid,
+            series_uid=series_uid,
+            sop_uid=sop_uid,
+            patient_id=patient_id,
+            accession=accession,
         )
 
-        stow_matched: list[Dataset] = []
-        if self.dicomweb_service and hasattr(self.dicomweb_service, "_stow_datasets"):
-            for ds in self.dicomweb_service._stow_datasets.values():
-                if study_uid and str(getattr(ds, "StudyInstanceUID", "")) != str(study_uid):
-                    continue
-                if series_uid and str(getattr(ds, "SeriesInstanceUID", "")) != str(series_uid):
-                    continue
-                if patient_id and str(getattr(ds, "PatientID", "")) != str(patient_id):
-                    continue
-                if accession and str(getattr(ds, "AccessionNumber", "")) != str(accession):
-                    continue
-                stow_matched.append(ds)
-
-        if stow_matched:
-            all_datasets = stow_matched
-        else:
-            matched_entries = []
-            if self.mwl_service:
-                matched_entries = self.mwl_service.find_study_series_entries(
-                    study_uid=study_uid, series_uid=series_uid, patient_id=patient_id, accession=accession
-                )
-                if not matched_entries and (study_uid or patient_id or accession):
-                    # Dynamically synthesize a mock study matching the requested query parameters
-                    new_entry = self.mwl_service.add_entry(
-                        custom={
-                            "studyUid": study_uid,
-                            "patientId": patient_id,
-                            "accession": accession,
-                        }
-                    )
-                    matched_entries = [new_entry] if new_entry else []
-
-            if not matched_entries:
-                logger.warning("dicom_c_move_no_matching_studies", study_uid=study_uid, patient_id=patient_id)
-                storage_contexts = build_storage_contexts_for_datasets()
-                yield (addr, port, {"contexts": storage_contexts})
-                yield 0
-                return
-
-            all_datasets = []
-            for entry in matched_entries:
-                datasets = DicomGeneratorService.create_instances_from_mwl(entry)
-                all_datasets.extend(datasets)
+        if not all_datasets:
+            logger.warning("dicom_c_move_no_matching_studies", study_uid=study_uid, patient_id=patient_id)
+            storage_contexts = build_storage_contexts_for_datasets()
+            yield (addr, port, {"contexts": storage_contexts})
+            yield 0
+            return
 
         # 1st yield: (addr, port, kwargs) including Storage presentation contexts matching the datasets' transfer syntax
         storage_contexts = build_storage_contexts_for_datasets(all_datasets)
@@ -539,15 +686,37 @@ class DicomScpService:
         self.ae.add_supported_context(StudyRootQueryRetrieveInformationModelFind)
         self.ae.add_supported_context(PatientRootQueryRetrieveInformationModelMove)
         self.ae.add_supported_context(StudyRootQueryRetrieveInformationModelMove)
+        self.ae.add_supported_context(PatientRootQueryRetrieveInformationModelGet)
+        self.ae.add_supported_context(StudyRootQueryRetrieveInformationModelGet)
         self.ae.add_supported_context(ModalityWorklistInformationFind)
         target_syntax = get_prioritized_transfer_syntaxes(config.transfer_syntax)[0]
+        seen_sops: set[str] = set()
         for cx in StoragePresentationContexts:
-            self.ae.add_supported_context(cx.abstract_syntax, SUPPORTED_TRANSFER_SYNTAXES)
+            seen_sops.add(str(cx.abstract_syntax))
+            self.ae.add_supported_context(
+                cx.abstract_syntax,
+                SUPPORTED_TRANSFER_SYNTAXES,
+                scp_role=True,
+                scu_role=True,
+            )
             self.ae.add_requested_context(cx.abstract_syntax, [target_syntax])
+
+        if self.mwl_service and hasattr(self.mwl_service, "template_modalities"):
+            for mod_info in self.mwl_service.template_modalities.values():
+                sop_uid = mod_info.get("sop_class_uid") if isinstance(mod_info, dict) else None
+                if sop_uid and str(sop_uid) not in seen_sops:
+                    seen_sops.add(str(sop_uid))
+                    self.ae.add_supported_context(
+                        str(sop_uid),
+                        SUPPORTED_TRANSFER_SYNTAXES,
+                        scp_role=True,
+                        scu_role=True,
+                    )
 
         handlers = [
             (evt.EVT_C_ECHO, self._handle_echo),
             (evt.EVT_C_FIND, self._handle_find),
+            (evt.EVT_C_GET, self._handle_get),
             (evt.EVT_C_MOVE, self._handle_move),
             (evt.EVT_C_STORE, self._handle_store),
         ]
@@ -581,7 +750,7 @@ class DicomScpService:
             ae_title=self.ae_title,
             port=self.port,
             is_running=self.is_running,
-            supported_services=["C-ECHO", "C-FIND", "C-MOVE", "C-STORE", "MWL-FIND"],
+            supported_services=["C-ECHO", "C-FIND", "C-GET", "C-MOVE", "C-STORE", "MWL-FIND"],
             auto_push_ae=self.auto_push_ae,
             auto_push_host=self.auto_push_host,
             auto_push_port=self.auto_push_port,
@@ -598,9 +767,13 @@ class DicomScpService:
         preferred_syntax: str | None = None,
     ) -> dict[str, Any]:
         """Send a list of DICOM datasets to target Storage SCP via C-STORE association."""
+        target_ae_title = str(target_ae_title or "").strip()
+        target_host = str(target_host or "127.0.0.1").strip()
+        target_port = int(target_port or 11113)
+
         dest_info = config.move_destinations.get(target_ae_title)
         if dest_info:
-            target_host = dest_info.get("host", target_host)
+            target_host = str(dest_info.get("host", target_host)).strip()
             target_port = int(dest_info.get("port", target_port))
 
         if not datasets:
@@ -617,7 +790,26 @@ class DicomScpService:
         ae = AE(ae_title=self.ae_title)
         ae.requested_contexts = build_storage_contexts_for_datasets(datasets, preferred_syntax=preferred_syntax)
 
-        assoc = ae.associate(target_host, target_port, ae_title=target_ae_title)
+        try:
+            assoc = ae.associate(target_host, target_port, ae_title=target_ae_title)
+        except OSError as exc:
+            err_msg = f"Failed to connect to target AE '{target_ae_title}' at {target_host}:{target_port}: {exc}"
+            logger.error(
+                "dicom_move_push_association_failed",
+                target_ae=target_ae_title,
+                host=target_host,
+                port=target_port,
+                error=str(exc),
+            )
+            return {
+                "success": False,
+                "message": err_msg,
+                "instances_sent": 0,
+                "target_ae_title": target_ae_title,
+                "target_host": target_host,
+                "target_port": target_port,
+            }
+
         if not assoc.is_established:
             err_msg = (
                 f"Failed to establish association with target AE '{target_ae_title}' at {target_host}:{target_port}"
@@ -750,11 +942,16 @@ class DicomScpService:
 
     def _push_one_auto_study(self) -> dict[str, Any] | None:
         """Generate a study (series and images) and push to the auto_push_ae destination."""
-        if not self.auto_push_ae:
+        target_ae = str(self.auto_push_ae or getattr(config, "auto_push_ae", "")).strip()
+        if not target_ae:
             return None
 
         entry = self._auto_push_queue.pop(0) if self._auto_push_queue else None
         if entry is None and self.mwl_service:
+            gen_mode = str(getattr(self.mwl_service.config, "generator_mode", "internal")).strip().lower()
+            if gen_mode == "fhir":
+                logger.debug("dicom_auto_push_fhir_queue_empty_idling")
+                return None
             entry = self.mwl_service.add_entry()
 
         if not entry:
@@ -764,12 +961,12 @@ class DicomScpService:
         datasets = DicomGeneratorService.create_instances_from_mwl(entry)
         preferred_syntax = entry.get("transfer_syntax")
 
-        target_host = self.auto_push_host or "127.0.0.1"
-        target_port = self.auto_push_port or 11113
+        target_host = str(self.auto_push_host or getattr(config, "auto_push_host", "127.0.0.1")).strip() or "127.0.0.1"
+        target_port = int(self.auto_push_port or getattr(config, "auto_push_port", 11113) or 11113)
 
         res = self.push_datasets_to_destination(
             datasets=datasets,
-            target_ae_title=self.auto_push_ae,
+            target_ae_title=target_ae,
             target_host=target_host,
             target_port=target_port,
             preferred_syntax=preferred_syntax,
@@ -778,7 +975,7 @@ class DicomScpService:
             "dicom_auto_push_study_sent",
             success=res.get("success"),
             instances_sent=res.get("instances_sent"),
-            target_ae_title=self.auto_push_ae,
+            target_ae_title=target_ae,
             target_host=target_host,
             target_port=target_port,
             patient_id=entry.get("patient_id"),
@@ -806,7 +1003,13 @@ class DicomScpService:
                 try:
                     self._push_one_auto_study()
                 except Exception as exc:
-                    logger.error("dicom_auto_push_iteration_failed", error=str(exc))
+                    logger.error(
+                        "dicom_auto_push_iteration_failed",
+                        ae_title=self.auto_push_ae,
+                        host=self.auto_push_host,
+                        port=self.auto_push_port,
+                        error=str(exc),
+                    )
         except Exception as exc:
             logger.error("dicom_auto_push_loop_error", error=str(exc))
         finally:
@@ -843,13 +1046,10 @@ class DicomScpService:
         # If host and port were left at defaults but target_ae exists in config.move_destinations:
         if resolved_host == "127.0.0.1" and resolved_port == 11113 and self.auto_push_ae in config.move_destinations:
             dest_info = config.move_destinations[self.auto_push_ae]
-            self.auto_push_host = dest_info.get("host", self.auto_push_host)
+            self.auto_push_host = str(dest_info.get("host", self.auto_push_host)).strip()
             self.auto_push_port = int(dest_info.get("port", self.auto_push_port))
 
-        config.auto_push_ae = self.auto_push_ae
-        config.auto_push_host = self.auto_push_host
-        config.auto_push_port = self.auto_push_port
-        config.auto_push_sec = self.auto_push_sec
+        self._sync_auto_push_config()
 
         if self.auto_push_sec > 0 and self.auto_push_ae:
             self.start_auto_push(
@@ -897,19 +1097,17 @@ class DicomScpService:
         resolved_ae = targetAeTitle or target_ae_title or ae_title
         if resolved_ae is not None:
             self.auto_push_ae = resolved_ae.strip()
-            config.auto_push_ae = self.auto_push_ae
         resolved_host = targetHost or target_host
         if resolved_host is not None:
             self.auto_push_host = resolved_host.strip()
-            config.auto_push_host = self.auto_push_host
         resolved_port = targetPort if targetPort is not None else target_port
         if resolved_port is not None:
             self.auto_push_port = int(resolved_port)
-            config.auto_push_port = self.auto_push_port
         sec_val = intervalSec if intervalSec is not None else interval_sec
         if sec_val is not None:
             self.auto_push_sec = max(0.0, float(sec_val))
-            config.auto_push_sec = self.auto_push_sec
+
+        self._sync_auto_push_config()
 
         if not self.auto_push_ae or self.auto_push_sec <= 0:
             return self.get_auto_push_status()

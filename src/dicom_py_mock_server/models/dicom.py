@@ -266,6 +266,13 @@ class MwlStatusResponse(BaseModel):
     is_business_hours: bool
     template_modalities: list[str]
     is_auto_generating: bool
+    generator_mode: str = "internal"
+    fhir_plugin_url: str | None = None
+    fhir_queue_depth: int | None = None
+    is_exhausted: bool | None = None
+
+
+MwlRemoveRequest = RemoveAccessionRequest
 
 
 class MwlEntrySummary(BaseModel):

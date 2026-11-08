@@ -223,6 +223,39 @@ class AppConfig(BaseSettings):
         validation_alias=AliasChoices("GOSMART_MS_FHIR_ENABLED", "FHIR_ENABLED"),
         description="Enable FHIR ServiceRequest / Bundle REST endpoints",
     )
+    fhir_plugin_url: str = Field(
+        default="http://localhost:8088",
+        validation_alias=AliasChoices("GOSMART_MS_FHIR_PLUGIN_URL", "FHIR_PLUGIN_URL"),
+        description="FHIR Plugin Module URL. Always local.",
+    )
+    generator_mode: str = Field(
+        default="internal",
+        validation_alias=AliasChoices(
+            "GOSMART_MS_WML_GENERATOR_MODE",
+            "GOSMART_MS_MWL_GENERATOR_MODE",
+            "GENERATOR_MODE",
+            "WML_GENERATOR_MODE",
+            "MWL_GENERATOR_MODE",
+        ),
+        description="Study generator mode 'internal', 'fhir', or empty, 'internal' as default",
+    )
+    fhir_patient_count: int = Field(
+        default=200,
+        validation_alias=AliasChoices(
+            "GOSMART_MS_FHIR_PATIENT_COUNT",
+            "GOSMART_FHIR_PATIENT_COUNT",
+            "FHIR_PATIENT_COUNT",
+        ),
+        description="Patient imaging records to request per FHIR query",
+    )
+    fhir_patient_id_system: str = Field(
+        default="urn:oid:2.16.840.1.113883.4.3.25",
+        validation_alias=AliasChoices(
+            "GOSMART_MS_FHIR_PATIENT_ID_SYSTEM",
+            "FHIR_PATIENT_ID_SYSTEM",
+        ),
+        description="FHIR Patient identifier.system URI used to locate the primary patient ID (default Mass DL)",
+    )
 
     @property
     def ae_title(self) -> str:

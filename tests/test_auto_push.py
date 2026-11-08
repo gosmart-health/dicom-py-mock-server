@@ -189,3 +189,31 @@ async def test_auto_push_invoked_from_thread():
         assert scp_service._is_auto_pushing is False
     finally:
         scp_service.stop()
+
+
+@pytest.mark.anyio
+async def test_auto_push_unresolvable_host_handled_gracefully(monkeypatch):
+    """Verify that an unresolvable host (OSError / socket.gaierror) returns a structured failure without crashing."""
+    mwl_service = MwlGeneratorService(config)
+    scp_service = DicomScpService(ae_title="ERR_TEST_SCP", port=11150, mwl_service=mwl_service)
+    test_entry = mwl_service.add_entry(custom={"num_instances": 1, "modality": "CT"})
+    assert test_entry is not None
+    scp_service.enqueue_auto_push_study(test_entry)
+
+    scp_service.auto_push_ae = "BAD_DEST_AE"
+    scp_service.auto_push_host = "unresolvable.invalid.host.local"
+    scp_service.auto_push_port = 11112
+
+    def mock_associate(*args, **kwargs):
+        raise OSError(8, "nodename nor servname provided, or not known")
+
+    monkeypatch.setattr("pynetdicom.ae.ApplicationEntity.associate", mock_associate)
+
+    res = scp_service._push_one_auto_study()
+    assert res is not None
+    assert res["success"] is False
+    assert res["instances_sent"] == 0
+    assert res["target_ae_title"] == "BAD_DEST_AE"
+    assert res["target_host"] == "unresolvable.invalid.host.local"
+    assert res["target_port"] == 11112
+    assert "nodename nor servname" in res["message"]
