@@ -217,3 +217,130 @@ async def test_auto_push_unresolvable_host_handled_gracefully(monkeypatch):
     assert res["target_host"] == "unresolvable.invalid.host.local"
     assert res["target_port"] == 11112
     assert "nodename nor servname" in res["message"]
+    assert len(scp_service._auto_push_queue) == 1
+    assert scp_service._auto_push_queue[0] is test_entry
+
+
+@pytest.mark.anyio
+async def test_auto_push_retries_indefinitely_without_dropping_or_skipping(monkeypatch):
+    """Verify failed pushes retain the head item in _auto_push_queue and retry in strict FIFO order."""
+    mwl_service = MwlGeneratorService(config)
+    scp_service = DicomScpService(ae_title="RETRY_TEST_SCP", port=11151, mwl_service=mwl_service)
+
+    entry1 = mwl_service.add_entry(custom={"num_instances": 1, "modality": "CT", "accession": "ACC-RETRY-1"})
+    entry2 = mwl_service.add_entry(custom={"num_instances": 1, "modality": "CT", "accession": "ACC-RETRY-2"})
+    entry3 = mwl_service.add_entry(custom={"num_instances": 1, "modality": "CT", "accession": "ACC-RETRY-3"})
+    assert entry1 and entry2 and entry3
+
+    scp_service.enqueue_auto_push_study(entry1)
+    scp_service.enqueue_auto_push_study(entry2)
+
+    scp_service.auto_push_ae = "DEST_SCP"
+    scp_service.auto_push_host = "127.0.0.1"
+    scp_service.auto_push_port = 11152
+
+    server_up = False
+    pushed_accessions: list[str] = []
+
+    def fake_push_datasets(datasets, target_ae_title, target_host="127.0.0.1", target_port=11113, preferred_syntax=None):
+        acc = str(getattr(datasets[0], "AccessionNumber", ""))
+        if not server_up:
+            return {
+                "success": False,
+                "message": "Connection refused",
+                "instances_sent": 0,
+                "target_ae_title": target_ae_title,
+                "target_host": target_host,
+                "target_port": target_port,
+            }
+        pushed_accessions.append(acc)
+        return {
+            "success": True,
+            "message": "OK",
+            "instances_sent": len(datasets),
+            "accession": acc,
+            "target_ae_title": target_ae_title,
+            "target_host": target_host,
+            "target_port": target_port,
+        }
+
+    monkeypatch.setattr(scp_service, "push_datasets_to_destination", fake_push_datasets)
+
+    # Attempt 1 & 2 while target SCP is down: must keep entry1 at head and never skip to entry2
+    res1 = scp_service._push_one_auto_study()
+    assert res1 is not None and res1["success"] is False
+    assert [e["accession"] for e in scp_service._auto_push_queue] == ["ACC-RETRY-1", "ACC-RETRY-2"]
+
+    # Enqueue entry3 while target SCP is still down
+    scp_service.enqueue_auto_push_study(entry3)
+
+    res2 = scp_service._push_one_auto_study()
+    assert res2 is not None and res2["success"] is False
+    assert [e["accession"] for e in scp_service._auto_push_queue] == [
+        "ACC-RETRY-1",
+        "ACC-RETRY-2",
+        "ACC-RETRY-3",
+    ]
+    assert pushed_accessions == []
+
+    # Target SCP comes back online: items must be pushed in strict FIFO order without any dropped items
+    server_up = True
+
+    res3 = scp_service._push_one_auto_study()
+    assert res3 is not None and res3["success"] is True
+    assert pushed_accessions == ["ACC-RETRY-1"]
+    assert [e["accession"] for e in scp_service._auto_push_queue] == ["ACC-RETRY-2", "ACC-RETRY-3"]
+
+    res4 = scp_service._push_one_auto_study()
+    assert res4 is not None and res4["success"] is True
+    assert pushed_accessions == ["ACC-RETRY-1", "ACC-RETRY-2"]
+    assert [e["accession"] for e in scp_service._auto_push_queue] == ["ACC-RETRY-3"]
+
+    res5 = scp_service._push_one_auto_study()
+    assert res5 is not None and res5["success"] is True
+    assert pushed_accessions == ["ACC-RETRY-1", "ACC-RETRY-2", "ACC-RETRY-3"]
+    assert len(scp_service._auto_push_queue) == 0
+
+
+@pytest.mark.anyio
+async def test_auto_push_worker_recovers_after_target_scp_downtime():
+    """Integration test: target SCP is stopped initially, then started; queued studies are retried and delivered in order."""
+    test_port = 11153
+    scp_port = 11154
+
+    mwl_service = MwlGeneratorService(config)
+    scp_service = DicomScpService(ae_title="RETRY_WORKER_SCP", port=scp_port, mwl_service=mwl_service)
+
+    entry1 = mwl_service.add_entry(custom={"num_instances": 1, "modality": "CT", "accession": "ACC-DOWN-1"})
+    entry2 = mwl_service.add_entry(custom={"num_instances": 1, "modality": "CT", "accession": "ACC-DOWN-2"})
+    assert entry1 and entry2
+    scp_service.enqueue_auto_push_study(entry1)
+    scp_service.enqueue_auto_push_study(entry2)
+
+    target_scp = MockStorageScp(ae_title="DOWN_DEST_SCP", port=test_port)
+    config.move_destinations["DOWN_DEST_SCP"] = {"host": "127.0.0.1", "port": test_port}
+
+    try:
+        # Start auto-push while target_scp is NOT running
+        scp_service.configure_auto_push(
+            target_ae_title="DOWN_DEST_SCP",
+            interval_sec=0.15,
+            target_host="127.0.0.1",
+            target_port=test_port,
+        )
+        # Allow multiple failed retry cycles while destination is down
+        await asyncio.sleep(0.45)
+        assert [e["accession"] for e in scp_service._auto_push_queue] == ["ACC-DOWN-1", "ACC-DOWN-2"]
+
+        # Now start the target SCP and verify both queued studies arrive in order
+        target_scp.start()
+        start_wait = time.time()
+        while len(target_scp.received_datasets) < 2 and time.time() - start_wait < 10.0:
+            await asyncio.sleep(0.1)
+
+        scp_service.stop_auto_push()
+        received_accs = [str(ds.AccessionNumber) for ds in target_scp.received_datasets[:2]]
+        assert received_accs == ["ACC-DOWN-1", "ACC-DOWN-2"]
+    finally:
+        scp_service.stop()
+        target_scp.stop()

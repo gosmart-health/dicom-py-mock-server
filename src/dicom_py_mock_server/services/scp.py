@@ -211,6 +211,7 @@ class DicomScpService:
         self._auto_push_thread: threading.Thread | None = None
         self._auto_push_stop_event: threading.Event = threading.Event()
         self._auto_push_queue: list[dict[str, Any]] = []
+        self._auto_push_lock: threading.Lock = threading.Lock()
 
     def _sync_auto_push_config(self) -> None:
         """Synchronize auto-push settings to global config and mwl_service.config."""
@@ -792,7 +793,7 @@ class DicomScpService:
 
         try:
             assoc = ae.associate(target_host, target_port, ae_title=target_ae_title)
-        except OSError as exc:
+        except Exception as exc:
             err_msg = f"Failed to connect to target AE '{target_ae_title}' at {target_host}:{target_port}: {exc}"
             logger.error(
                 "dicom_move_push_association_failed",
@@ -830,6 +831,7 @@ class DicomScpService:
             }
 
         sent_count = 0
+        store_error: str | None = None
         try:
             for ds in datasets:
                 ds = adapt_dataset_for_accepted_context(ds, assoc.accepted_contexts)
@@ -837,9 +839,45 @@ class DicomScpService:
                 if status and status.Status in (0x0000, 0xB000, 0xB006, 0xB007):
                     sent_count += 1
                 else:
-                    logger.warning("dicom_c_store_push_failed", status=hex(status.Status) if status else "None")
+                    status_str = hex(status.Status) if status and hasattr(status, "Status") else "None"
+                    store_error = f"C-STORE failed with status {status_str}"
+                    logger.warning("dicom_c_store_push_failed", status=status_str)
+        except Exception as exc:
+            store_error = str(exc)
+            logger.error(
+                "dicom_c_store_push_exception",
+                target_ae=target_ae_title,
+                host=target_host,
+                port=target_port,
+                error=store_error,
+            )
         finally:
-            assoc.release()
+            try:
+                if assoc.is_established:
+                    assoc.release()
+            except Exception:
+                pass
+
+        all_sent = sent_count == len(datasets) and sent_count > 0
+        if not all_sent:
+            fail_msg = (
+                f"Failed to push all instances ({sent_count}/{len(datasets)} sent) "
+                f"to {target_ae_title} ({target_host}:{target_port})"
+            )
+            if store_error:
+                fail_msg = f"{fail_msg}: {store_error}"
+            return {
+                "success": False,
+                "message": fail_msg,
+                "instances_sent": sent_count,
+                "patient_id": getattr(first_ds, "PatientID", None),
+                "patient_name": str(getattr(first_ds, "PatientName", "")) if hasattr(first_ds, "PatientName") else None,
+                "accession": getattr(first_ds, "AccessionNumber", None),
+                "study_instance_uid": getattr(first_ds, "StudyInstanceUID", None),
+                "target_ae_title": target_ae_title,
+                "target_host": target_host,
+                "target_port": target_port,
+            }
 
         return {
             "success": True,
@@ -938,21 +976,33 @@ class DicomScpService:
 
     def enqueue_auto_push_study(self, entry: dict[str, Any]) -> None:
         """Enqueue an MWL record/study to be pushed during auto-push."""
-        self._auto_push_queue.append(entry)
+        with self._auto_push_lock:
+            self._auto_push_queue.append(entry)
 
     def _push_one_auto_study(self) -> dict[str, Any] | None:
-        """Generate a study (series and images) and push to the auto_push_ae destination."""
+        """Generate a study (series and images) and push to the auto_push_ae destination.
+
+        The head item of _auto_push_queue is only removed after a successful push.
+        If the push fails, the study remains at the front of the queue to be retried
+        indefinitely on subsequent auto-push intervals without dropping or skipping items.
+        """
         target_ae = str(self.auto_push_ae or getattr(config, "auto_push_ae", "")).strip()
         if not target_ae:
             return None
 
-        entry = self._auto_push_queue.pop(0) if self._auto_push_queue else None
+        with self._auto_push_lock:
+            entry = self._auto_push_queue[0] if self._auto_push_queue else None
+
         if entry is None and self.mwl_service:
             gen_mode = str(getattr(self.mwl_service.config, "generator_mode", "internal")).strip().lower()
             if gen_mode == "fhir":
                 logger.debug("dicom_auto_push_fhir_queue_empty_idling")
                 return None
-            entry = self.mwl_service.add_entry()
+            new_entry = self.mwl_service.add_entry()
+            if new_entry:
+                with self._auto_push_lock:
+                    self._auto_push_queue.insert(0, new_entry)
+                    entry = self._auto_push_queue[0]
 
         if not entry:
             logger.warning("dicom_auto_push_no_study_available")
@@ -971,21 +1021,50 @@ class DicomScpService:
             target_port=target_port,
             preferred_syntax=preferred_syntax,
         )
-        logger.info(
-            "dicom_auto_push_study_sent",
-            success=res.get("success"),
-            instances_sent=res.get("instances_sent"),
-            target_ae_title=target_ae,
-            target_host=target_host,
-            target_port=target_port,
-            patient_id=entry.get("patient_id"),
-            accession=entry.get("accession"),
-            study_uid=entry.get("study_uid"),
-        )
+        if res.get("success"):
+            with self._auto_push_lock:
+                if self._auto_push_queue and self._auto_push_queue[0] is entry:
+                    self._auto_push_queue.pop(0)
+                elif entry in self._auto_push_queue:
+                    self._auto_push_queue.remove(entry)
+                queue_remaining = len(self._auto_push_queue)
+            logger.info(
+                "dicom_auto_push_study_sent",
+                success=True,
+                instances_sent=res.get("instances_sent"),
+                target_ae_title=target_ae,
+                target_host=target_host,
+                target_port=target_port,
+                patient_id=entry.get("patient_id"),
+                accession=entry.get("accession"),
+                study_uid=entry.get("study_uid"),
+                queue_remaining=queue_remaining,
+            )
+        else:
+            with self._auto_push_lock:
+                if not self._auto_push_queue:
+                    self._auto_push_queue.insert(0, entry)
+                elif self._auto_push_queue[0] is not entry and entry not in self._auto_push_queue:
+                    self._auto_push_queue.insert(0, entry)
+                queue_remaining = len(self._auto_push_queue)
+            logger.warning(
+                "dicom_auto_push_study_retry_queued",
+                success=False,
+                instances_sent=res.get("instances_sent"),
+                target_ae_title=target_ae,
+                target_host=target_host,
+                target_port=target_port,
+                patient_id=entry.get("patient_id"),
+                accession=entry.get("accession"),
+                study_uid=entry.get("study_uid"),
+                queue_remaining=queue_remaining,
+                retry_interval_sec=self.auto_push_sec,
+            )
         return res
 
-    def _auto_push_worker(self) -> None:
+    def _auto_push_worker(self, stop_event: threading.Event | None = None) -> None:
         """Background thread worker pushing generated studies to configured destination every interval_sec."""
+        active_stop_event = stop_event or self._auto_push_stop_event
         logger.info(
             "dicom_auto_push_loop_started",
             ae_title=self.auto_push_ae,
@@ -994,10 +1073,10 @@ class DicomScpService:
             interval_sec=self.auto_push_sec,
         )
         try:
-            while not self._auto_push_stop_event.is_set() and self.auto_push_ae and self.auto_push_sec > 0:
-                if self._auto_push_stop_event.wait(timeout=self.auto_push_sec):
+            while not active_stop_event.is_set() and self.auto_push_ae and self.auto_push_sec > 0:
+                if active_stop_event.wait(timeout=self.auto_push_sec):
                     break
-                if not self.auto_push_ae or self.auto_push_sec <= 0 or self._auto_push_stop_event.is_set():
+                if not self.auto_push_ae or self.auto_push_sec <= 0 or active_stop_event.is_set():
                     break
 
                 try:
@@ -1013,7 +1092,8 @@ class DicomScpService:
         except Exception as exc:
             logger.error("dicom_auto_push_loop_error", error=str(exc))
         finally:
-            self._is_auto_pushing = False
+            if active_stop_event is self._auto_push_stop_event:
+                self._is_auto_pushing = False
             logger.info("dicom_auto_push_loop_stopped")
 
     _auto_push_loop = _auto_push_worker
@@ -1113,10 +1193,11 @@ class DicomScpService:
             return self.get_auto_push_status()
 
         self.stop_auto_push()
-        self._auto_push_stop_event.clear()
+        self._auto_push_stop_event = threading.Event()
         self._is_auto_pushing = True
         self._auto_push_thread = threading.Thread(
             target=self._auto_push_worker,
+            args=(self._auto_push_stop_event,),
             name="dicom-auto-push-worker",
             daemon=True,
         )
