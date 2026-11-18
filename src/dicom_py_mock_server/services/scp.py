@@ -181,8 +181,8 @@ class DicomScpService:
 
     def __init__(
         self,
-        ae_title: str = "MOCK_SCP",
-        port: int = 11112,
+        ae_title: str = "GOSMART_MOCK",
+        port: int = 11114,
         mwl_service=None,
         dicomweb_service=None,
     ) -> None:
