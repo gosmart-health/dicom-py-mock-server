@@ -114,8 +114,8 @@ All configuration settings can be defined in a `.env` file in the root workspace
 | :--- | :--- | :--- | :--- |
 | `GOSMART_MS_HOST` | `HOST` | `127.0.0.1` | REST API & MCP server HTTP host interface. |
 | `GOSMART_MS_PORT` | `PORT` | `8000` | REST API & MCP server HTTP port. |
-| `GOSMART_MS_SCP_AE_TITLE` | `GOSMART_MS_AE_TITLE`, `SCP_AE_TITLE`, `AE_TITLE` | `GOSMART_SCP` | Application Entity (AE) Title for the DICOM SCP listener. |
-| `GOSMART_MS_SCP_PORT` | `SCP_PORT` | `11112` | DICOM SCP listening port (C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE, MWL). |
+| `GOSMART_MS_SCP_AE_TITLE` | `GOSMART_MS_AE_TITLE`, `SCP_AE_TITLE`, `AE_TITLE` | `GOSMART_MOCK` | Application Entity (AE) Title for the DICOM SCP listener. |
+| `GOSMART_MS_SCP_PORT` | `SCP_PORT` | `11114` | DICOM SCP listening port (C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE, MWL). |
 | `GOSMART_MS_STORAGE_DIR` | `STORAGE_DIR` | `./data/dicom_storage` | Local directory path to store generated DICOM files. |
 | `GOSMART_MS_RECEIVED_DIR` | `RECEIVED_DIR` | `./received` | Local directory path to store received STOW-RS Part-10 DICOM files. |
 | `GOSMART_MS_STOW_DUPLICATE_HANDLING` | `STOW_DUPLICATE_HANDLING` | `accept` | Policy for STOW-RS duplicate SOP instances: `accept` (overwrite), `warn` (overwrite with WarningReason 0xB000), or `reject` (reject with FailureReason 0x0111). |

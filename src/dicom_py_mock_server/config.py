@@ -28,12 +28,12 @@ class AppConfig(BaseSettings):
         description="HTTP port",
     )
     scp_ae_title: str = Field(
-        default="GOSMART_SCP",
+        default="GOSMART_MOCK",
         validation_alias=AliasChoices("GOSMART_MS_SCP_AE_TITLE", "GOSMART_MS_AE_TITLE", "SCP_AE_TITLE", "AE_TITLE"),
         description="Application Entity Title",
     )
     scp_port: int = Field(
-        default=11112,
+        default=11114,
         validation_alias=AliasChoices("GOSMART_MS_SCP_PORT", "SCP_PORT"),
         description="DICOM SCP port",
     )
