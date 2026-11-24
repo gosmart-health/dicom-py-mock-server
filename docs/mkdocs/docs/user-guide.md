@@ -1,0 +1,755 @@
+# dicom-py-mock-server
+
+Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and expose capabilities via Model Context Protocol (MCP) Server-Sent Events (SSE).
+
+## Documentation site
+
+Zensical is a development dependency. From the project root, preview or build the documentation with:
+
+```bash
+uv run zensical serve -f docs/mkdocs/mkdocs.yml
+uv run zensical build -f docs/mkdocs/mkdocs.yml
+```
+
+The generated site is written to `docs/mkdocs/site/` and is configured for deployment at https://gosmart.health/docs/dicom-py-mock-server/.
+
+> [!WARNING]
+> **SECURITY WARNING: NO AUTHENTICATION / AUTHORIZATION**
+> 
+> This service functions strictly as an **unauthenticated plain access point** for synthetic DICOM object generation, MWL testing, and DICOM SCP network simulation.
+> - The REST API and MCP SSE endpoints do **NOT** support authentication (`authn`) or authorization (`authz`).
+> - **DO NOT** deploy this mock server in a production environment or expose its endpoints to public networks or untrusted internet interfaces.
+
+> [!CAUTION]
+> **TEMPLATE DICOM DE-IDENTIFICATION NOTICE**
+> 
+> - The generator **does NOT perform de-identification** on template DICOM files.
+> - Patient Name, Patient ID, Patient Sex, Study Date/Time, all DICOM UIDs, and pixel data are generated or replaced.
+> - **All other DICOM elements pass through "as is"**, including pre-existing private data elements, vendor attributes, and secondary metadata. Users must ensure templates contain no sensitive PHI prior to loading.
+> - A standards-compliant DICOM de-identification process is available via [GoSmart.Health DICOM RS Transformer](https://github.com/gosmart-health/dicom-rs-transformer).
+> - When the term `coherent` is used, it _does not mean _clinical diagnosable coherency_ of images. It delivers modality images 
+    consistent with the requested modality type. Images are either generated or repeated from template images.
+---
+
+## Capabilities & Features
+
+1. **Synthetic DICOM Generation**: Generate customizable DICOM Part-10 objects with configurable Patient, Study, Series, and instance metadata.
+2. **Deterministic UID Generation (ITU-T X.667 / ISO/IEC 9834-8)**: Generates reproducible, standards-compliant `2.25.<u128>` UIDs using SHA-1 (UUIDv5) or MD5 (UUIDv3) over a persistent namespace.
+3. **DICOM DIMSE Network Services**: Built-in C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE, and Modality Worklist (MWL) SCP listeners with association audit CSV logging.
+4. **DICOMweb RESTful Services (PS3.18)**: Full support for QIDO-RS (search), WADO-RS (retrieve objects, metadata, rendered frames), WADO-URI, and STOW-RS (store instances) with dynamic transfer syntax transcoding.
+5. **Modality Worklist (MWL) Engine**: Automated scheduled MWL entry generation, active retention window management, and ad-hoc query support.
+6. **Multi-Slice Template Datasets & Synthetic Mode**: Load multi-slice template datasets by modality folder (`templates/sample_ct/`, `templates/sample_mr/`). Supports exact template slice delivery (non-synthetic) or cyclic slice volume expansion with burned-in annotations (synthetic).
+7. **High-Throughput Stress Mode**: Caches compressed frames and reuses payloads across instances to maximize retrieval benchmark throughput.
+8. **Zero-Dependency HL7 v2 MLLP Socket Listener**: Ingests raw `ORM^O01` order messages on TCP port `2575` via MLLP framing, maps demographics into MWL entries, handles order cancellations, and returns `ACK^O01` responses.
+9. **FHIR ServiceRequest & Bundle Ingestion**: REST endpoints for FHIR R4/R5 imaging order bundles (`Bundle`, `ServiceRequest`) that map demographics directly into MWL entries and handle order revocations.
+10. **Synthea FHIR R4 Bundle Ingestion & Resource Queries**: Load Synthea-generated hospital (`hospitalInformation*.json`), practitioner (`practitionerInformation*.json`), and patient FHIR R4 bundles directly from raw JSON arrays (`POST /api/v1/synthea/load`) into additive memory-resident caches, register _modality-wise_ coherent MWL entries, generate DICOM files, return parsed `FhirBundle` JSON arrays, and query memory-resident practitioners, hospitals, and patient bundles via REST `GET` endpoints.
+11. **FHIR-Driven Modality Worklist (MWL) & C-FIND Generation**: When configured with `GOSMART_MS_WML_GENERATOR_MODE=fhir`, stream imaging study bundles on demand from the peer `gosmart-fhir-py-plugin` service (`/api/v1/fhir/patient-imaging`). Features an in-memory bundle queue with configurable batch count (`count` via `GOSMART_MS_FHIR_PATIENT_COUNT`), strict hourly rate pacing (`GOSMART_MS_MWL_RATE_PER_HR`), and data exhaustion safety (pauses cleanly without synthesizing fake patients).
+12. **Model Context Protocol (MCP) Integration**: Exposes server inspection, MWL controls, DICOM generation, and study move tools to AI agents (AGY, Claude Desktop, Cursor) over Server-Sent Events (SSE).
+13. **Automated Study Push (Auto-Push)**: Periodically generate and push DICOM studies (associated series and images) to a configured destination AE at a configured interval in seconds via C-STORE.
+14. **Interactive Jupyter Notebooks**: Pre-configured tutorials in `notebooks/` demonstrating REST API, DICOMweb (QIDO-RS / WADO-RS), and DIMSE (C-ECHO) client workflows.
+
+---
+
+## MCP SSE Integrations
+
+**IMPORTANT**: Start the Mock Server first. The MCP integration uses SSE over HTTP (e.g., `./start.sh`)
+
+The MCP SSE server transport provides two endpoints:
+- **SSE Stream Endpoint**: `GET /sse` or `GET /api/v1/sse`
+- **JSON-RPC Message Endpoint**: `POST /sse/messages` or `POST /api/v1/sse/messages`
+
+### MCP Tools Exposed
+
+| MCP Tool Name | Description |
+| :--- | :--- |
+| `health_check` | Check service health status and application metadata. |
+| `get_config` | Inspect current server configuration settings and retrieve specific config parameters. |
+| `update_config` | Dynamically update server configuration settings (e.g. log levels, retention windows, auto-push destinations) at runtime. |
+| `generate_mock_dicom` | Generate synthetic DICOM P10 objects with custom metadata and save to disk. |
+| `get_scp_status` | Get DICOM SCP (C-FIND, C-MOVE, C-GET, MWL) listener status. |
+| `start_scp` | Start the DICOM SCP listener service. |
+| `stop_scp` | Stop the DICOM SCP listener service. |
+| `get_mwl_status` | Get Modality Worklist (MWL) generator status and active entry counts. |
+| `get_worklist` / `list_mwl_entries` | List currently active Modality Worklist (MWL) entries within retention window. |
+| `generate_scanning_order` | Schedule a clinical scanning order into the active Modality Worklist with patient, exam, and physician details. |
+| `generate_mwl_entry` | Manually generate a new MWL entry with optional custom fields. |
+| `remove_accession_number` | Remove/cancel an active Modality Worklist order by accession number. |
+| `start_mwl_auto_generation` | Start background MWL automated entry generation loop. |
+| `stop_mwl_auto_generation` | Stop background MWL automated entry generation loop. |
+| `move_study` | Move/push DICOM study instances matching Patient ID, Accession Number, or Study UID to a destination DICOM SCP (AE Title, Host, Port). |
+| `auto_push` | Configure auto push of generated studies (associated series and images) to a destination AE at a configured interval in seconds. Permit "auto push to {AE Title} every {interval} seconds" with optional targetHost and targetPort (intervalSec 0 disables). |
+
+---
+
+## AI Agent Integration (AGY, Claude Desktop, Cursor)
+
+
+
+To connect an MCP-compatible AI agent to the server via SSE, add the following entry to your MCP configuration:
+
+### AntiGravity / AGY (`~/.gemini/config/mcp_config.json` or `mcp_config.json`)
+
+AntiGravity uses the `serverUrl` field for remote SSE MCP servers:
+
+```json
+{
+  "mcpServers": {
+    "dicom-py-mock-server": {
+      "serverUrl": "http://127.0.0.1:8000/sse"
+    }
+  }
+}
+```
+
+### Claude Desktop / Cursor (`claude_desktop_config.json`)
+
+Other clients such as Claude Desktop or Cursor use the `url` field:
+
+```json
+{
+  "mcpServers": {
+    "dicom-py-mock-server": {
+      "url": "http://127.0.0.1:8000/sse"
+    }
+  }
+}
+```
+
+---
+
+## Environment Variables & Configuration
+
+All configuration settings can be defined in a `.env` file in the root workspace or passed as environment variables. Environment variables prefixed with `GOSMART_MS_` (or their supported aliases) are automatically parsed at startup.
+
+| Environment Variable | Supported Aliases | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `GOSMART_MS_HOST` | `HOST` | `127.0.0.1` | REST API & MCP server HTTP host interface. |
+| `GOSMART_MS_PORT` | `PORT` | `8000` | REST API & MCP server HTTP port. |
+| `GOSMART_MS_SCP_AE_TITLE` | `GOSMART_MS_AE_TITLE`, `SCP_AE_TITLE`, `AE_TITLE` | `GOSMART_MOCK` | Application Entity (AE) Title for the DICOM SCP listener. |
+| `GOSMART_MS_SCP_PORT` | `SCP_PORT` | `11114` | DICOM SCP listening port (C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE, MWL). |
+| `GOSMART_MS_STORAGE_DIR` | `STORAGE_DIR` | `./data/dicom_storage` | Local directory path to store generated DICOM files. |
+| `GOSMART_MS_RECEIVED_DIR` | `RECEIVED_DIR` | `./received` | Local directory path to store received STOW-RS Part-10 DICOM files. |
+| `GOSMART_MS_STOW_DUPLICATE_HANDLING` | `STOW_DUPLICATE_HANDLING` | `accept` | Policy for STOW-RS duplicate SOP instances: `accept` (overwrite), `warn` (overwrite with WarningReason 0xB000), or `reject` (reject with FailureReason 0x0111). |
+| `GORMART_MS_CSV_PATH` | `GOSMART_MS_CSV_PATH`, `CSV_PATH` | `./csv` | Local directory path to store C-STORE association audit CSV files (`yyyymmddhhmmss_<AE_Title>.csv`). |
+| `GOSMART_TEMPLATES_PATH` | `GOSMART_MS_TEMPLATES_PATH`, `TEMPLATES_PATH` | `./templates` | Directory containing modality subfolders with multi-slice DICOM (`.dcm`, `.dicom`) templates. |
+| `GOSMART_MS_LOG_LEVEL` | `LOG_LEVEL` | `INFO` | Logging verbosity level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). |
+| `GOSMART_MS_LOG_PATH` | `GOSMART_MS_LOG_FILE`, `LOG_PATH`, `LOG_FILE` | `./logs` | Directory or file path for rotated log files (`dicom_mock_server.log`). |
+| `GOSMART_MS_LOG_ROTATION_DAYS` | `LOG_ROTATION_DAYS` | `7` | Log file auto-rotation interval in days (`TimedRotatingFileHandler`). |
+| `GOSMART_MS_LOG_BACKUP_COUNT` | `LOG_BACKUP_COUNT` | `4` | Number of rotated backup log files to retain on disk. |
+| `GOSMART_MS_LOG_JSON_FORMAT` | `LOG_JSON_FORMAT` | `true` | Format log file entries as structured JSON Lines. |
+| `GOSMART_MS_MWL_WINDOW_HR` | `MWL_WINDOW_HR` | `24` | Retention window in hours for active Modality Worklist (MWL) entries. |
+| `GOSMART_MS_MWL_RATE_PER_HR` | `MWL_RATE_PER_HR` | `12.0` | Base MWL creation rate per hour during business hours (9 AM - 5 PM local; 5% rate off-hours). |
+| `GOSMART_MS_WML_GENERATOR_MODE` | `GOSMART_MS_MWL_GENERATOR_MODE`, `GENERATOR_MODE`, `WML_GENERATOR_MODE` | `internal` | Modality Worklist (MWL) generator mode: `internal` (uses built-in Synthea/synthetic generation) or `fhir` (streams imaging studies from external FHIR imaging plugin). |
+| `GOSMART_MS_FHIR_PLUGIN_URL` | `FHIR_PLUGIN_URL` | `http://localhost:8088` | Base URL of the peer `gosmart-fhir-py-plugin` service serving `/api/v1/fhir/patient-imaging`. |
+| `GOSMART_MS_FHIR_PATIENT_COUNT` | `GOSMART_FHIR_PATIENT_COUNT`, `FHIR_PATIENT_COUNT` | `200` | Batch size (`count`, 1–1000) for patient imaging bundles requested per query from the FHIR imaging plugin. |
+| `GOSMART_MS_FHIR_PATIENT_ID_SYSTEM` | `FHIR_PATIENT_ID_SYSTEM` | `urn:oid:2.16.840.1.113883.4.3.25` | Target `patient.identifier.system` URI used to select primary Patient ID in FHIR mode (`GOSMART_MS_WML_GENERATOR_MODE=fhir`). Studies are skipped with a warning if matching identifier is absent. |
+| `GOSMART_MS_MCP_ENABLED` | `MCP_ENABLED` | `true` | Enable Model Context Protocol (MCP) SSE integration endpoints. |
+| `GOSMART_MS_MCP_SSE_PATH` | `MCP_SSE_PATH` | `/sse` | Base HTTP endpoint path for MCP SSE streams. |
+| `GOSMART_MS_SYNTHETIC_MODE` | `SYNTHETIC_MODE` | `false` | Enable synthetic slice volume generation (slice range bounds and cyclic rotation) instead of non-synthetic mode (exact template slice counts). |
+| `GOSMART_MS_MIN_SLICES` | `MIN_SLICES` | `8` | Minimum slice count for synthetic series generation (used when `SYNTHETIC_MODE=true`). |
+| `GOSMART_MS_MAX_SLICES` | `MAX_SLICES` | `24` | Maximum slice count for synthetic series volume generation (used when `SYNTHETIC_MODE=true`). |
+| `GOSMART_MS_TRANSFER_SYNTAX` | `TRANSFER_SYNTAX` | `JPEG2000_LOSSLESS` | Default DICOM Transfer Syntax (`RAW`, `JPEG`, `JPEG2000`, `JPEG2000_LOSSLESS`, `RLE`). |
+| `GOSMART_MS_STRESS` | `STRESS` | `false` | Enable high-throughput stress mode (single compressed frame computation, demographics burned in, slice number overlay omitted, negotiated transfer syntax reuse). |
+| `GOSMART_MS_MOVE_DESTINATIONS` | `MOVE_DESTINATIONS` | `{}` | JSON string mapping C-MOVE destination AE Titles to target host/port objects. |
+| `GOSMART_MS_AUTO_PUSH_AE` | `AUTO_PUSH_AE` | `""` | Destination Application Entity (AE) title to push to (default empty string, disabled). |
+| `GOSMART_MS_AUTO_PUSH_HOST` | `AUTO_PUSH_HOST` | `127.0.0.1` | Destination host / IP address for auto-push C-STORE delivery. |
+| `GOSMART_MS_AUTO_PUSH_PORT` | `AUTO_PUSH_PORT` | `11113` | Destination TCP port for auto-push C-STORE delivery. |
+| `GOSMART_MS_AUTO_PUSH_SEC` | `AUTO_PUSH_SEC` | `0` | Number of seconds interval between auto-pushes (default 0, disabled). |
+| `GOSMART_MS_PATIENT_SUFFIX` | `PATIENT_SUFFIX` | `_GSH` | Suffix appended to synthetic patient last name to avoid PACS collisions (empty strings permitted). |
+| `GOSMART_MS_PN_SUFFIX` | `PN_SUFFIX` | `_GSH` | Suffix appended to generated physician names (Referring, Performing, Reading) to avoid PACS collisions (empty strings permitted). |
+| `GOSMART_MS_INSTITUTION_NAME` | `GOSMART_MS_INSTITUTION_NAME`, `INSTITUTION_NAME` | `GO SMART CLINIC` | Default Institution Name attribute for synthesized studies and MWL entries. |
+| `GOSMART_MS_ID_PREFIX` | `ID_PREFIX` | `GSH-` | Prefix prepended to synthetic Patient ID and Accession number to avoid PACS collisions (empty strings permitted). |
+| `GOSMART_MS_NAMESPACE_UUID` | `GOSMART_MS_DICOM_NAMESPACE_UUID`, `NAMESPACE_UUID` | `6ba7b810-9dad-11d1-80b4-00c04fd430c8` | Persistent UUID namespace used for deterministic ITU-T X.667 DICOM UID generation. |
+| `GOSMART_MS_UID_VERSION` | `GOSMART_MS_DICOM_UID_VERSION`, `UID_VERSION` | `5` | UUID version for deterministic DICOM UID generation (`5` for SHA-1, `3` for MD5). |
+| `GOSMART_MS_HL7_ENABLED` | `HL7_ENABLED` | `true` | Enable HL7 v2 MLLP TCP socket listener. |
+| `GOSMART_MS_HL7_HOST` | `HL7_HOST` | `0.0.0.0` | HL7 v2 MLLP listener host address. |
+| `GOSMART_MS_HL7_PORT` | `HL7_PORT` | `2575` | HL7 v2 MLLP listener TCP port. |
+| `GOSMART_MS_HL7_APP_NAME` | `HL7_APP_NAME` | `GOSMART_MWL` | Receiving Application name for HL7 MSH and ACK segments. |
+| `GOSMART_MS_HL7_FACILITY` | `HL7_FACILITY` | `GOSMART_HOSP` | Receiving Facility name for HL7 MSH and ACK segments. |
+| `GOSMART_MS_FHIR_ENABLED` | `FHIR_ENABLED` | `true` | Enable FHIR ServiceRequest / Bundle REST endpoints. |
+| `GOSMART_MS_APP_NAME` | `APP_NAME` | `DICOM Mock Server` | Application display name. |
+| `GOSMART_MS_APP_VERSION` | `APP_VERSION` | `0.3.3` | Application version string. |
+
+---
+
+## Deterministic ITU-T X.667 / ISO/IEC 9834-8 DICOM UID Generation
+
+All synthetic DICOM UIDs are generated under the standard OSI OID root `2.25.` (`2.25.<u128>`) adhering to ITU-T X.667 / ISO/IEC 9834-8 and DICOM PS 3.5 Annex B.2.
+
+- **StudyInstanceUID**: Deterministically computed using UUIDv5 (SHA-1) over combined seed `study:<PatientName>:<PatientID>:<AccessionNumber>`.
+- **SeriesInstanceUID**: Deterministically computed from `series:<StudyUID>:<SeriesNumber>`.
+- **SOPInstanceUID**: Deterministically computed from `instance:<SeriesUID>:<InstanceNumber>`.
+
+This ensures consistent, reproducible UIDs across test runs without leaking raw patient identifiers or PHI into UID strings while maintaining strict compliance with DICOM VR UI length limits (<= 64 chars) and standard bitfield constraints.
+
+---
+
+## C-STORE Association CSV Audit Logging
+
+When a DICOM C-STORE transfer ends per association (C-MOVE push, SCU direct move/push, or incoming Storage SCP association), an audit CSV file is automatically written to local storage (`GORMART_MS_CSV_PATH`, default `./csv`).
+
+- **File Naming**: `<yyyymmddhhmmss>_<AE_Title>.csv` in UTC timestamps at the start of the C-STORE association.
+- **Columns**: `Date,Time,Destination AE,Status,Patient Name,Patient ID,Accession Number,Study UID,Series UID,Instance UID,Transfer Rate kb/s`
+- **Date and Time**: UTC timestamps (`YYYYMMDD` date and `HHMMSS` time).
+- **Status Values**: `Accepted`, `Rejected`, `No Connection`, `Dropped`.
+- **Transfer Rate**: Calculated in `kb/s` (kilobits per second) for each transferred instance.
+
+---
+
+## DICOMweb RESTful Services (PS3.18)
+
+The server exposes standard DICOMweb REST services mounted at `/dicomweb/...` (and aliased at `/api/v1/dicomweb/...` and direct root `/studies`):
+
+### 1. QIDO-RS (Query / Search DICOM Objects)
+
+| Endpoint | Description | Response Type |
+| :--- | :--- | :--- |
+| `GET /dicomweb/studies` | Search for studies with query filters (`PatientID`, `PatientName`, `AccessionNumber`, `StudyDate`, `ModalitiesInStudy`, `limit`, `offset`) | `application/dicom+json` |
+| `GET /dicomweb/studies/{studyUID}/series` | Search for series within a study (supports `includefield` and PR tags) | `application/dicom+json` |
+| `GET /dicomweb/series` | Search for series across all studies (supports `includefield` and PR tags) | `application/dicom+json` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances` | Search for instances within a series | `application/dicom+json` |
+| `GET /dicomweb/instances` | Search for instances across all studies | `application/dicom+json` |
+
+#### Example QIDO-RS Request
+```bash
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies?PatientID=GSH*&limit=10" \
+     -H "Accept: application/dicom+json"
+
+# Search series with PR tags requested
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345/series?includefield=00700082,00700083" \
+     -H "Accept: application/dicom+json"
+```
+
+---
+
+### 2. WADO-RS (Retrieve DICOM Objects, Metadata & Rendered Previews)
+
+| Endpoint | Description | Response Type |
+| :--- | :--- | :--- |
+| `GET /dicomweb/studies/{studyUID}` | Retrieve all DICOM instances in a study | `multipart/related; type="application/dicom"` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}` | Retrieve all DICOM instances in a series | `multipart/related; type="application/dicom"` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}` | Retrieve a single DICOM instance | `multipart/related; type="application/dicom"` or `application/dicom` |
+| `GET /dicomweb/studies/{studyUID}/metadata` | Retrieve study metadata (omitting pixel data) | `application/dicom+json` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}/rendered` | Render instance pixel array to image | `image/jpeg` or `image/png` |
+| `GET /dicomweb/studies/{studyUID}/series/{seriesUID}/instances/{instanceUID}/frames/{frameList}` | Retrieve raw pixel data for specific frames | `multipart/related; type="application/octet-stream"` |
+
+#### Transfer Syntax Negotiation & Transcoding
+WADO-RS endpoints automatically transcode instances on-the-fly to the requested transfer syntax specified via `Accept` header (`transfer-syntax="..."`), request header (`transfer-syntax`), or query parameter (`transferSyntax`). Supported values include friendly aliases (`JPEG2000`, `JPEG2000_LOSSLESS`, `RLE`, `RAW`, `JPEG`) and standard DICOM Transfer Syntax UIDs:
+
+```bash
+# Retrieve via Accept header (alias or UID)
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345" \
+     -H 'Accept: multipart/related; type="application/dicom"; transfer-syntax="JPEG2000_LOSSLESS"'
+
+# Retrieve via query parameter (e.g. RLE, RAW, JPEG)
+curl -X GET "http://127.0.0.1:8000/dicomweb/studies/2.25.12345?transferSyntax=RLE"
+```
+
+
+---
+
+### 3. STOW-RS (Store Instances)
+
+| Endpoint | Description | Request Type | Response Type |
+| :--- | :--- | :--- | :--- |
+| `POST /dicomweb/studies` | Store instances across studies | `multipart/related; type="application/dicom"` or `application/dicom` | `application/dicom+json` |
+| `POST /dicomweb/studies/{studyUID}` | Store instances to a specific study | `multipart/related; type="application/dicom"` or `application/dicom` | `application/dicom+json` |
+
+- **Storage Destination**: Composes valid Part-10 `.dcm` files into `./received/{StudyInstanceUID}/{SeriesInstanceUID}/{SOPInstanceUID}.dcm`.
+- **In-Memory Retention**: Stored instances are indexed in memory immediately, enabling instant discovery and retrieval via QIDO-RS, WADO-RS, and DIMSE C-FIND/C-MOVE.
+- **Duplicate Policy**: Configurable via `GOSMART_MS_STOW_DUPLICATE_HANDLING`:
+  - `accept` (default): Overwrites existing instances and returns `200 OK` with `ReferencedSOPSequence`.
+  - `warn`: Overwrites existing instances and returns `200 OK` with `WarningReason = 0xB000`.
+  - `reject`: Rejects duplicate instances and returns `409 Conflict` with `FailureReason = 0x0111`.
+
+#### Example STOW-RS Requests
+
+```bash
+# Upload a single DICOM file directly
+curl -X POST "http://127.0.0.1:8000/dicomweb/studies" \
+     -H "Content-Type: application/dicom" \
+     --data-binary "@image.dcm"
+
+# Upload multipart/related DICOM batch
+curl -X POST "http://127.0.0.1:8000/dicomweb/studies" \
+     -H 'Content-Type: multipart/related; type="application/dicom"; boundary="myboundary"' \
+     --data-binary "@stow_batch.mime"
+```
+
+---
+
+### 4. WADO-URI (Legacy Single-Object Retrieval)
+
+```bash
+curl -X GET "http://127.0.0.1:8000/dicomweb/wado?requestType=WADO&studyUID=2.25.123&seriesUID=2.25.456&objectUID=2.25.789&contentType=application/dicom" \
+     -o instance.dcm
+```
+
+---
+
+## Multi-Slice Templates & Synthetic Mode
+
+The server supports loading multi-slice DICOM image datasets from dedicated subfolders under `templates/`:
+
+```
+templates/
+├── sample_cr/                 # Computed Radiography (CR) template (Explicit VR Little Endian)
+│   └── cr.dcm
+├── sample_ct/                 # Multi-slice CT series folder (Explicit VR Little Endian)
+│   ├── 1.2.392.200036...dcm
+│   └── ... (10 slices)
+├── sample_mr/                 # Multi-slice MR series folder (Explicit VR Little Endian)
+│   ├── IM_0001
+│   └── ... (10 slices)
+└── sample_us/                 # Multi-frame Ultrasound (US) template (JPEG Baseline Process 1)
+    └── us.dcm
+```
+
+### 1. Template Subfolder Rules & Modality Purity
+- **No Standalone Root Files**: Standalone DICOM files placed directly in the `templates/` root directory are strictly prohibited and will raise a `ValueError` on startup. All template images must be housed within a subfolder.
+- **Dynamic Modality Discovery**: The server dynamically detects the modality from the DICOM `Modality` tag `(0008, 0060)` within the datasets rather than parsing folder names.
+- **Folder Modality Purity**: All DICOM instances within a subfolder must share the same modality. Mixing different modalities (e.g. CT and MR in the same folder) raises a `ValueError`.
+- **Non-Image Object Exclusion**: Objects without pixel data, Presentation States (`PR`), Structured Reports (`SR`), and proprietary non-image objects (e.g., Philips private `XX_*` objects) are automatically filtered out.
+- **Series Grouping & Slice Ordering**: Slices are grouped by `SeriesInstanceUID` and sorted deterministically by `(InstanceNumber, SliceLocation, ImagePositionPatient[2])`.
+
+### 2. Non-Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE=false`, Default)
+- **Exact Slice Delivery**: The server delivers the complete DICOM series for the exact slice count present in the selected template series.
+- **Round-Robin Modality & Template Selection**: Available modalities (`CR`, `CT`, `MR`, `US`, etc.) are selected in round-robin order so every loaded modality is deterministically included in the Modality Worklist. When multiple template series exist for a modality (e.g. two CT series or multiple MR series), the server sequentially cycles through them in round-robin order for subsequent MWL entries.
+- **US Modality Gender Sensitivity (`PatientSex == 'F'`)**: Specific to the `US` modality, when the loaded US template dataset has `PatientSex (0010,0040)` set to `'F'` (e.g., OB ultrasound in `templates/sample_us/us.dcm`), an MWL entry is only generated if the MWL patient gender is `'F'`; if the MWL patient gender is not `'F'`, the MWL entry is skipped (`None`).
+- **Pixel Data & Native Transfer Syntax Preservation (No Trans-Conversion)**: Original pixel data, geometry, and native `TransferSyntaxUID` from each template slice are preserved untouched without burned-in annotations or trans-conversion. Outgoing DIMSE `C-MOVE` and `C-STORE` associations negotiate Presentation Contexts using the template's originally encoded `TransferSyntaxUID` (e.g., `Explicit VR Little Endian` for `CR`/`CT`/`MR` and `JPEG Baseline (Process 1)` for `US`), unless an explicit `transfer_syntax` override is requested.
+
+### 3. Synthetic Mode (`GOSMART_MS_SYNTHETIC_MODE=true`)
+- **Configurable Slice Ranges**: Honors `GOSMART_MS_MIN_SLICES` and `GOSMART_MS_MAX_SLICES` (or custom per-request slice counts).
+- **Cyclic Slice Rotation**: When the requested slice count differs from the template slice count, slices cycle sequentially (`slice_index = (i - 1) % M`).
+- **Burn-In Metadata Annotations**: Patient demographics and slice indicators are burned into the image pixels.
+- **Stress Mode Compatibility**: When combined with `GOSMART_MS_STRESS=true`, the first slice is computed and compressed once, and the precomputed compressed payload is reused across all remaining instances in the series.
+
+---
+
+## High-Throughput Stress Mode (`GOSMART_MS_STRESS`)
+
+For load testing, high-frequency retrieval, or stress testing PACS/viewers, enable **Stress Mode** with `GOSMART_MS_STRESS=true`:
+* **Single Frame Compression**: The compressed pixel frame is computed once per study/series rather than re-encoding per slice/instance.
+* **Selective Demographics Overlay**: Burns patient and study demographics (`Patient Name`, `Patient ID`, `Study Date Study Time`) into the background image matrix, but omits the per-slice overlay line (`Image: <number>`).
+* **Transfer Syntax Selection**:
+  - **DIMSE Associations**: The single frame is compressed once directly in the association's negotiated transfer syntax.
+  - **WADO-RS**: The transfer syntax of the first image/series/study request establishes the transfer syntax used to deliver the study or series.
+* **Standards Compliance**: While pixel data is efficiently reused, each instance retains a unique `SOPInstanceUID` and sequential `InstanceNumber`.
+
+---
+
+## HL7 v2 MLLP Socket Listener (`hl7_*`)
+
+The server runs a built-in, zero-dependency `asyncio` TCP socket listener running the Minimal Lower Layer Protocol (MLLP) on port `2575` (configurable via `GOSMART_MS_HL7_PORT`).
+
+### Features & Workflow
+- **Protocol**: Standard MLLP framing with `<SB>` (`0x0B`) and `<EB><CR>` (`0x1C 0x0D`).
+- **Demographic Integrity**: Ingests `ORM^O01` messages and transfers patient demographics (`PatientName`, `PatientID`, `PatientBirthDate`, `PatientSex`, `AccessionNumber`, `Modality`, `Physicians`) directly into active MWL entries without altering or anonymizing values.
+- **Modality Validation**: Checks requested modality against available template images (`templates/sample_ct`, `templates/sample_mr`). Orders requesting unsupported modalities are rejected with an MLLP `ACK^O01` containing `MSA|AE|<MsgID>|Rejected: No template images available for modality '<MOD>'`.
+- **Order Cancellation**: Messages with `ORC-1` set to `CA`, `OC`, or `DC` automatically locate and remove matching MWL entries.
+- **Downstream Retrieval**: Once an order is ingested into MWL, requesting the study via DICOM C-MOVE (`movescu`), C-GET (`getscu`), or DICOMweb WADO-RS dynamically synthesizes instances carrying the order's exact demographics.
+
+### HL7 Message Pusher CLI Utility (`push_hl7`)
+
+To test the HL7 listener and generate ad-hoc Modality Worklist (MWL) entries, a lightweight, zero-dependency command line utility `push_hl7` and sample `ORM^O01` message file (`util/orm.txt`) are provided:
+
+```bash
+# Push sample util/orm.txt to default port 2575
+python util/push_hl7.py
+
+# Or via package script
+uv run push-hl7
+```
+
+Options:
+```bash
+uv run push-hl7 [-h] [-H HOST] [-p PORT] [-t TIMEOUT] [-v] [file]
+
+# Examples:
+uv run push-hl7 -v util/orm.txt                    # Verbose mode showing raw ACK
+uv run push-hl7 -H 127.0.0.1 -p 2575 custom.txt    # Custom host and port
+```
+
+---
+
+## FHIR ServiceRequest & Bundle Ingestion (`fhir_*`)
+
+The server provides REST endpoints powered by open-source `fhir.resources` (HL7 FHIR R4B) to ingest imaging order bundles:
+- `POST /api/v1/fhir_service_request`
+- `POST /api/v1/fhir/Bundle`
+- `POST /api/v1/fhir/ServiceRequest`
+
+### Example FHIR Bundle Ingest
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/fhir_service_request" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "resourceType": "Bundle",
+       "type": "collection",
+       "entry": [
+         {
+           "resource": {
+             "resourceType": "Patient",
+             "id": "pat-01",
+             "identifier": [{"value": "MRN-FHIR-7788"}],
+             "name": [{"family": "SMITH", "given": ["ALICE"]}],
+             "gender": "female",
+             "birthDate": "1992-04-10"
+           }
+         },
+         {
+           "resource": {
+             "resourceType": "ServiceRequest",
+             "id": "sr-01",
+             "status": "active",
+             "intent": "order",
+             "identifier": [{"value": "ACC-FHIR-001"}],
+             "code": {"text": "CT Abdomen Pelvis with Contrast"},
+             "subject": {"reference": "Patient/pat-01"},
+             "occurrenceDateTime": "2026-09-07T14:00:00Z"
+           }
+         }
+       ]
+     }'
+```
+Orders with `status` set to `revoked` or `entered-in-error` automatically remove the matching MWL item.
+
+### Identifier Parsing Behavior & Enterprise Hospital Note
+> [!NOTE]
+> **Identifier Extraction Strategy**:
+> - **Standard Order Ingestion Endpoints** (`/api/v1/fhir_service_request`, `/api/v1/fhir/Bundle`, `/api/v1/fhir/ServiceRequest`): The parser extracts the first available identifier (`patient.identifier[0].value` for Patient ID/MRN and `serviceRequest.identifier[0].value` for Accession Number, falling back to resource `.id` if omitted) without requiring specific hospital `system` URIs.
+> - **FHIR-Driven MWL Generator Mode** (`GOSMART_MS_WML_GENERATOR_MODE=fhir`): The parser strictly filters patient identifiers by `GOSMART_MS_FHIR_PATIENT_ID_SYSTEM` (default: `urn:oid:2.16.840.1.113883.4.3.25`), safely skipping studies if the target system identifier is missing, and preserves raw demographic values without `GSH-` prefixes or `_GSH` suffixes.
+>
+> In enterprise environments with multiple identifiers (e.g., Epic, Cerner), customize `FhirParserService` in `src/dicom_py_mock_server/services/fhir_parser.py` or configure `GOSMART_MS_FHIR_PATIENT_ID_SYSTEM` to match specific `system` URIs or HL7 v2 Table 0203 type codes (`MR`, `ACSN`).
+
+### FHIR Order Bundle Pusher Shell Script (`push_fhir.sh`)
+
+A developer utility script and sample bundle are included in the `util/` folder:
+
+```bash
+# Push the sample bundle (util/fhir_order_bundle.json) to the default local endpoint
+./util/push_fhir.sh
+
+# Or specify a custom bundle JSON and endpoint URL:
+./util/push_fhir.sh path/to/order_bundle.json http://127.0.0.1:8000/api/v1/fhir_service_request
+```
+
+---
+
+## Synthea FHIR R4 Bundle Ingestion & Resource Queries (`/api/v1/synthea/*`)
+
+The server supports loading Synthea-generated FHIR R4 hospital (`hospitalInformation*.json`), practitioner (`practitionerInformation*.json`), and patient bundles from raw JSON arrays pushed directly to the API, keeping them memory-resident and additive across the lifecycle of the application. When patient bundles containing supported `ImagingStudy` modalities (`CT`, `US`, `CR`) are loaded, `SyntheaUtils` extracts and maintains correlated lists of DICOM `PatientModel`, `StudyModel`, and `SeriesModel` objects alongside Modality Worklist (MWL) entries and on-disk DICOM instances so that all patients, studies, series, and instances are immediately discoverable and retrievable via:
+- **DICOM DIMSE C-FIND** (`PatientRootQueryRetrieveInformationModelFind` and `StudyRootQueryRetrieveInformationModelFind` at `PATIENT`, `STUDY`, `SERIES`, and `IMAGE` levels), **C-MOVE**, and **C-GET**
+- **DICOMweb QIDO-RS & WADO-RS** (`/dicomweb/studies`, `/dicomweb/series`, `/dicomweb/instances`, `/dicomweb/studies/{uid}/metadata`, `/dicomweb/studies/{uid}`)
+- **Synthea REST Query Endpoints** (`/api/v1/synthea/patients`, `/api/v1/synthea/studies`, `/api/v1/synthea/series`)
+
+### Lifecycle & Prerequisite Rules
+1. **Raw JSON Array Ingestion**: The API accepts raw JSON arrays containing parsed FHIR R4 Bundle objects (or single bundle objects).
+2. **Additive In-Memory Residency**: Hospital, practitioner, and patient bundles (plus derived Patient, Study, and Series records) are cached additively in `SyntheaUtils` with deduplication across incremental `POST /api/v1/synthea/load` calls.
+3. **Hospital & Practitioner Prerequisite**: Hospital resources and practitioner resources must exist in the application lifecycle before patient bundles can be processed. If a patient bundle is sent without hospital resources loaded, it returns HTTP `400` with `"Hospital resources must be sent first."`. If practitioner resources are missing, it returns HTTP `400` with `"Practitioner resources must be sent first."`.
+4. **Non-Imaging Patient Bundles**: Valid patient bundles that do not contain an `ImagingStudy` matching the configured modalities log a warning (`synthea_bundle_no_supported_imaging_study`) and continue processing without failing the request.
+
+### Endpoints
+
+| Method & Endpoint | Supported Aliases | Description |
+| :--- | :--- | :--- |
+| `POST /api/v1/synthea/load` | `POST /api/v1/syntha/load` | Ingest an array of raw Synthea FHIR R4 JSON bundles (`[ { ... }, ... ]`), register Patient/Study/Series records and MWL entries, generate DICOM files, and return an array of parsed `FhirBundle` JSON objects. |
+| `GET /api/v1/synthea/patients` | - | List memory-resident DICOM `PatientModel` records extracted from Synthea bundles (optional `?patient-id=` or `?patient-name=` filter). |
+| `GET /api/v1/synthea/studies` | - | List memory-resident DICOM `StudyModel` records extracted from Synthea bundles (optional `?patient-id=`, `?study-uid=`, or `?accession=` filter). |
+| `GET /api/v1/synthea/series` | - | List memory-resident DICOM `SeriesModel` records extracted from Synthea bundles (optional `?study-uid=`, `?series-uid=`, or `?modality=` filter). |
+| `GET /api/v1/synthea/practitioner` | `GET /api/v1/synthea/practitioners` | List memory-resident `Practitioner` resources (optional `?reference=<id_or_npi>` filter). |
+| `GET /api/v1/synthea/hospitals` | `GET /api/vi/hospitals`, `GET /api/v1/hospitals` | List memory-resident `Organization` (hospital) resources (optional `?reference=<id>` filter). |
+| `GET /api/v1/synthea/patient-bundle` | `GET /api/v1/syntha/patient-bundle` | Retrieve a memory-resident patient `Bundle` by `?patient-id=<value>` (returns HTTP `404` if not found). |
+
+### Example Synthea Workflow
+```bash
+# 1. Load hospital and practitioner FHIR R4 bundles first
+curl -X POST "http://127.0.0.1:8000/api/v1/synthea/load" \
+     -H "Content-Type: application/json" \
+     -d "[ $(cat path/to/hospitalInformation.json), $(cat path/to/practitionerInformation.json) ]"
+
+# 2. Ingest patient bundle JSON
+curl -X POST "http://127.0.0.1:8000/api/v1/synthea/load" \
+     -H "Content-Type: application/json" \
+     -d "[ $(cat path/to/patientBundle.json) ]"
+
+# 3. Query memory-resident patients, studies, series, practitioners, and hospitals
+curl "http://127.0.0.1:8000/api/v1/synthea/patients"
+curl "http://127.0.0.1:8000/api/v1/synthea/studies?patient-id=S99916806"
+curl "http://127.0.0.1:8000/api/v1/synthea/series?modality=US"
+curl "http://127.0.0.1:8000/api/v1/synthea/practitioner"
+curl "http://127.0.0.1:8000/api/v1/synthea/hospitals"
+
+# 4. Retrieve a loaded patient FHIR Bundle by patient-id
+curl "http://127.0.0.1:8000/api/v1/synthea/patient-bundle?patient-id=S99916806"
+```
+
+### Synthea FHIR Loader CLI Utility (`synthea_loader.py`)
+
+A developer utility is provided in `util/synthea_loader.py` (with shell wrappers `synthea_loader.sh` and `hapi_fhir_loader.sh`) to scan a directory of Synthea-generated FHIR JSON bundles and ingest them into either the DICOM mock server or a standard HAPI FHIR server:
+
+```bash
+# Ingest Synthea bundles into the running mock server (falls back to in-process app if live server is unreachable):
+./synthea_loader.sh
+# Or specify a custom folder and server URL:
+./synthea_loader.sh ../synthea/output/fhir --url http://127.0.0.1:8000 --chunk-size 25
+
+# Bulk load Synthea bundles into a HAPI FHIR server (e.g., http://10.200.0.103:8087/fhir):
+./hapi_fhir_loader.sh
+# Or pass custom folder and target HAPI FHIR endpoint:
+./hapi_fhir_loader.sh ../synthea/output/fhir --url http://10.200.0.103:8087/fhir
+
+# Or invoke directly via python:
+python util/synthea_loader.py --folder ../synthea/output/fhir --hapi-fhir --url http://10.200.0.103:8087/fhir
+```
+
+Prerequisite resource bundles (`hospitalInformation*.json`, `practitionerInformation*.json`) are automatically ingested first, followed by patient transaction bundles. When targetting HAPI FHIR (`--hapi-fhir`), bundles are submitted individually with `Content-Type: application/fhir+json`.
+
+---
+
+## FHIR-Driven Modality Worklist (MWL) & C-FIND Generation (`GOSMART_MS_WML_GENERATOR_MODE=fhir`)
+
+When configured with `GOSMART_MS_WML_GENERATOR_MODE=fhir` (or alias `GOSMART_MS_MWL_GENERATOR_MODE=fhir`), the mock server streams imaging study bundles on demand from the peer `gosmart-fhir-py-plugin` service (defaulting to `http://localhost:8088/api/v1/fhir/patient-imaging`) rather than generating synthetic patients locally.
+
+### Operational Characteristics & Lifecycle Rules
+
+1. **Strict Rate Pacing**:
+   MWL and C-FIND entries are generated strictly according to `GOSMART_MS_MWL_RATE_PER_HR` (scaled to 100% during business hours 9:00 AM – 5:00 PM local, and 5% during off-hours). The sleep interval between generated studies is calculated as:
+   $$\text{interval} = \frac{3600.0}{\max(\text{rate\_per\_hr}, 0.01)}$$
+   The background generation loop uses a responsive 1-second interruptible sleep loop to terminate promptly on shutdown.
+
+2. **In-Memory Buffer Queue & Batch Pagination**:
+   The generator maintains an in-memory queue (`_fhir_bundle_queue`). On each generation cycle (or during startup seeding), if the queue is empty or has fewer items than needed, it requests the next batch from the FHIR imaging plugin with `count` (configured by `GOSMART_MS_FHIR_PATIENT_COUNT`, default 200) for loaded template modalities (`CR`, `CT`, `MR`, `US`).
+
+3. **Data Exhaustion Safety (No Synthetic Fallback)**:
+   When the FHIR plugin endpoint returns 0 studies and the local queue is empty, the generator logs a warning (`fhir_patient_imaging_exhausted`), marks `is_exhausted = True`, and cleanly idles. **It does NOT fall back to synthetic or random patient generation.**
+
+4. **Safe Auto-Push Idling**:
+   When auto-push is active alongside `generator_mode=fhir`, the auto-push worker pushes from queued FHIR studies. If the study queue is empty, auto-push idles safely rather than synthesizing ad-hoc patients.
+
+5. **MWL Status Inspection (`GET /api/v1/mwl/status`)**:
+   In `fhir` mode, the MWL status endpoint reports detailed tracking metadata:
+   ```json
+   {
+     "active_entries_count": 0,
+     "window_hr": 24,
+     "base_rate_per_hr": 12.0,
+     "current_rate_per_hr": 0.6,
+     "is_business_hours": false,
+     "template_modalities": ["CR", "CT", "MR", "US"],
+     "is_auto_generating": false,
+     "generator_mode": "fhir",
+     "fhir_plugin_url": "http://localhost:8088",
+     "fhir_queue_depth": 0,
+     "is_exhausted": true
+   }
+   ```
+
+6. **Patient Identifier System & Raw Demographics Preservation**:
+   - **Target Identifier System**: Configured via `GOSMART_MS_FHIR_PATIENT_ID_SYSTEM` (alias `FHIR_PATIENT_ID_SYSTEM`, default: `urn:oid:2.16.840.1.113883.4.3.25`, corresponding to the standard Massachusetts driver's license OID in Synthea bundles).
+   - **System Matching & Warning**: `FhirImagingParser` inspects `patient.identifier[]` and selects the value where `identifier.system == fhir_patient_id_system`. If the patient resource does not contain an identifier matching the configured system, a warning is logged:
+     `FHIR Patient Resource {id} does not contain the identifier matching GOSMART_MS_FHIR_PATIENT_ID_SYSTEM={target_system}`
+     and the study generation cycle safely skips the record without synthesizing invalid or unlinked MWL entries.
+   - **Demographic Preservation (No GSH Prefixes or Suffixes)**: In `fhir` mode, raw demographic values are preserved directly: `patient_id` and `accession_number` (extracted with priority from `ImagingStudy.identifier` with type `ACSN` or `serviceRequest.identifier[0].value`) are **not** prefixed with `GSH-`, and `patient_name` is **not** suffixed with `_GSH`.
+   - **On-Demand Generation Trigger (`trigger_generation`)**: Supports programmatic triggering via `await mwl_service.trigger_generation()` to immediately fetch, parse, and generate the next queued FHIR study without waiting for the timed pacing sleep loop.
+
+### Quickstart via `start-fhir.sh`
+
+A dedicated startup script `start-fhir.sh` is provided to launch the mock server pre-configured in `fhir` mode:
+
+```bash
+# Start mock server in FHIR MWL generation mode
+./start-fhir.sh
+
+# Or with custom FHIR plugin URL, batch count, and patient identifier system
+GOSMART_MS_FHIR_PLUGIN_URL=http://localhost:8088 \
+GOSMART_MS_FHIR_PATIENT_COUNT=100 \
+GOSMART_MS_FHIR_PATIENT_ID_SYSTEM=urn:oid:2.16.840.1.113883.4.3.25 \
+./start-fhir.sh
+```
+
+---
+
+## Automated Study Push (`/api/v1/scp/auto-push`)
+
+The mock server can automatically generate and push DICOM studies (including associated series and image instances) to a configured destination AE at a specified interval in seconds via C-STORE.
+
+### REST Endpoint
+
+`POST /api/v1/scp/auto-push`
+
+Request payload (Target AE Schema):
+```json
+{
+  "intervalSec": 30,
+  "targetAeTitle": "VIEWER_SCP",
+  "targetHost": "127.0.0.1",
+  "targetPort": 11113
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "Auto push configured to 'VIEWER_SCP' (127.0.0.1:11113) every 30.0 seconds.",
+  "targetAeTitle": "VIEWER_SCP",
+  "targetHost": "127.0.0.1",
+  "targetPort": 11113,
+  "intervalSec": 30.0,
+  "is_auto_pushing": true
+}
+```
+
+To disable auto-push, set `intervalSec` to `0` or `targetAeTitle` to empty string:
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/scp/auto-push" \
+     -H "Content-Type: application/json" \
+     -d '{"intervalSec": 0, "targetAeTitle": "VIEWER_SCP", "targetHost": "127.0.0.1", "targetPort": 11113}'
+```
+
+Query current auto-push status:
+```bash
+curl "http://127.0.0.1:8000/api/v1/scp/auto-push"
+```
+
+### Configuration & Environment Variables
+
+- `GOSMART_MS_AUTO_PUSH_AE` (`AUTO_PUSH_AE`): The destination AE title to push to (default: `""`, disabled).
+- `GOSMART_MS_AUTO_PUSH_HOST` (`AUTO_PUSH_HOST`): The destination host / IP address to push to (default: `"127.0.0.1"`).
+- `GOSMART_MS_AUTO_PUSH_PORT` (`AUTO_PUSH_PORT`): The destination port to push to (default: `11113`).
+- `GOSMART_MS_AUTO_PUSH_SEC` (`AUTO_PUSH_SEC`): Number of seconds between study pushes (default: `0`, disabled).
+
+---
+
+## Running the Server
+
+### Local Execution via `start.sh`, `start-fhir.sh`, or `uv`
+
+Start the FastAPI application and DICOM mock services using the default startup script:
+
+```bash
+./start.sh
+```
+
+Or start with FHIR-driven MWL generation mode enabled:
+
+```bash
+./start-fhir.sh
+```
+
+Or run directly via `uv` or Python module:
+
+```bash
+uv run dicom-py-mock-server
+# or: python -m dicom_py_mock_server.main
+```
+
+### Running with Docker
+
+Build and run the containerized service:
+
+```bash
+# Build Docker image
+docker build -t dicom-py-mock-server:latest .
+
+# Run container exposing Port 8000 (HTTP / DICOMweb / MCP SSE), Port 11112 (DICOM SCP), and Port 2575 (HL7 MLLP)
+docker run -d \
+  --name dicom-py-mock-server \
+  -p 8000:8000 \
+  -p 11112:11112 \
+  -p 2575:2575 \
+  -v $(pwd)/data/dicom_storage:/app/data/dicom_storage \
+  -v $(pwd)/received:/app/received \
+  -v $(pwd)/logs:/app/logs \
+  imanabu/dicom-py-mock-server:latest
+```
+
+### Running with Docker Compose
+
+Start the service with `docker-compose.yaml` (configured with Ports 8000, 11112, and 2575):
+
+```bash
+# Start container in detached mode
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop container
+docker compose down
+```
+
+### Pushing Docker Image to Registry
+
+Use the push utility script to tag and push updates to the registry:
+
+```bash
+# Push to Docker Hub repository (defaults to imanabu/dicom-py-mock-server)
+./util/push_docker.sh
+```
+
+A Docker Hub repository overview page document is maintained in `DOCKER_HUB.md` in the repository root.
+
+---
+
+## Interactive Jupyter Notebooks (`notebooks/`)
+
+Interactive guides and tutorials are provided in the `notebooks/` directory to explore mock DICOM workflows (REST, DICOMweb, DIMSE, MWL).
+
+Launch Jupyter Lab or Notebook on-demand using Astral `uv`:
+```bash
+# Launch JupyterLab pointing to the notebooks directory
+uv run --with jupyterlab jupyter lab notebooks/
+
+# Or launch classic Jupyter Notebook
+uv run --with notebook jupyter notebook notebooks/
+```
+
+- `notebooks/01_dicom_mock_server_quickstart.ipynb`: End-to-end quickstart testing server health, scheduling MWL orders, performing DICOMweb QIDO/WADO searches, and sending C-ECHO verification requests.
+- See `notebooks/README.md` for detailed prerequisites and instructions.
+
+---
+
+## Running Tests & Quality Checks
+
+### Run Unit Tests
+```bash
+uv run pytest
+```
+
+### Run Linting & Formatting Checks
+```bash
+uv run ruff check .
+uv run ruff format --check .
+```
+
+### Run Package Security Audit
+Scan dependencies against known vulnerability databases (PyPI Advisory Database / OSV):
+```bash
+uv run pip-audit
+```
+
+### Generate Software Bill of Materials (SBOM)
+Generate and validate a standard CycloneDX 1.6 SBOM JSON file:
+```bash
+uv run cyclonedx-py environment --pyproject pyproject.toml .venv -o sbom.json --validate
+```
+
+---
+
+## Standards Conformance & Technical Documentation
+
+- **[DICOM Conformance Statement](dicom-conformance.md)**: Full NEMA PS 3.2 Conformance Statement specifying supported DIMSE services, transfer syntaxes, DICOMweb services, and order ingestion pipelines.
+- **Design Controls Documentation**: See `docs/design/README.md` in the repository for architecture specifications, Hazard Analysis (ISO 14971), V&V Plan, and Requirements Traceability Matrix.
+
+---
+
+## Release & Changelog
+
+Releases are distributed strictly as source-code releases. For details on version history, changes, and upgrades, see `CHANGELOG.md` in the repository root.
+
+## Contacting the Developer Community
+
+* Join [Discussions](https://github.com/gosmart-health/dicom-py-mock-server/discussions)
+* Add or Inspect [Issues](https://github.com/gosmart-health/dicom-py-mock-server/issues)

@@ -1,0 +1,19 @@
+site_name: DICOM Python Mock Server
+site_url: https://gosmart.health/docs/dicom-py-mock-server/
+theme:
+  palette:
+    - scheme: default
+      toggle:
+        icon: lucide/sun
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: lucide/moon
+        name: Switch to light mode
+nav:
+  - Home: index.md
+  - User guide: user-guide.md
+  - EHR integration:
+      - FHIR to MWL: ehr/FHIR_to_MWL.md
+      - HL7 to MWL: ehr/HL7_to_MWL.md
+  - DICOM conformance: dicom-conformance.md

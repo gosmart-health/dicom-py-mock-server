@@ -40,6 +40,7 @@ dev = [
     "pip-audit>=2.7.0",
     "pytest>=8.0.0",
     "ruff>=0.3.0",
+    "zensical>=0.0.24",
 ]
 
 [tool.ruff]
