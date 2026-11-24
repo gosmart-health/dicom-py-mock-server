@@ -4,11 +4,11 @@ Auto generate mock DICOM objects, serve via C-FIND, C-MOVE/GET, MWL SCP, and exp
 
 ## Documentation site
 
-Zensical is a development dependency. From the project root, preview or build the documentation with:
+Zensical is in the `docs` dependency group. From the project root, preview or build the documentation with:
 
 ```bash
-uv run zensical serve -f docs/mkdocs/mkdocs.yml
-uv run zensical build -f docs/mkdocs/mkdocs.yml
+uv run --group docs zensical serve -f docs/mkdocs/mkdocs.yml
+uv run --group docs zensical build --strict --clean -f docs/mkdocs/mkdocs.yml
 ```
 
 The generated site is written to `docs/mkdocs/site/` and is configured for deployment at https://gosmart.health/docs/dicom-py-mock-server/.

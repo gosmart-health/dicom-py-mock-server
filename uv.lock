@@ -503,6 +503,8 @@ dev = [
     { name = "pip-audit" },
     { name = "pytest" },
     { name = "ruff" },
+]
+docs = [
     { name = "zensical" },
 ]
 
@@ -533,8 +535,8 @@ dev = [
     { name = "pip-audit", specifier = ">=2.7.0" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "ruff", specifier = ">=0.3.0" },
-    { name = "zensical", specifier = ">=0.0.24" },
 ]
+docs = [{ name = "zensical", specifier = ">=0.0.24" }]
 
 [[package]]
 name = "executing"

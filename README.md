@@ -24,8 +24,8 @@ For FHIR-driven worklists, use `./start-fhir.sh`. See the [user guide](docs/mkdo
 The documentation site is configured for [gosmart.health/docs/dicom-py-mock-server](https://gosmart.health/docs/dicom-py-mock-server/). Preview or build it with Zensical from the project root:
 
 ```bash
-uv run zensical serve -f docs/mkdocs/mkdocs.yml
-uv run zensical build -f docs/mkdocs/mkdocs.yml
+uv run --group docs zensical serve -f docs/mkdocs/mkdocs.yml
+uv run --group docs zensical build --strict --clean -f docs/mkdocs/mkdocs.yml
 ```
 
 The generated site is written to `docs/mkdocs/site/`. See [CHANGELOG.md](CHANGELOG.md) for releases and [GitHub issues](https://github.com/gosmart-health/dicom-py-mock-server/issues) for support.
