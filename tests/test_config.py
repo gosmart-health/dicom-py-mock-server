@@ -6,9 +6,9 @@ from dicom_py_mock_server.config import AppConfig
 def test_default_config_values():
     """Test default values when no environment variables are set."""
     cfg = AppConfig(_env_file=None)
-    assert cfg.scp_ae_title == "GOSMART_SCP"
-    assert cfg.ae_title == "GOSMART_SCP"
-    assert cfg.scp_port == 11112
+    assert cfg.scp_ae_title == "GOSMART_MOCK"
+    assert cfg.ae_title == "GOSMART_MOCK"
+    assert cfg.scp_port == 11114
     assert cfg.log_path == "./logs"
     assert cfg.log_file.endswith("dicom_mock_server.log")
     assert cfg.log_rotation_days == 7

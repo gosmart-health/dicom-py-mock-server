@@ -98,8 +98,8 @@ docker run -d \
 | :--- | :--- | :--- |
 | `GOSMART_MS_HOST` | `0.0.0.0` | HTTP listen host inside container |
 | `GOSMART_MS_PORT` | `8000` | HTTP listen port inside container |
-| `GOSMART_MS_SCP_PORT` | `11112` | DICOM SCP listen port |
-| `GOSMART_MS_SCP_AE_TITLE` | `GOSMART_SCP` | DICOM Application Entity Title |
+| `GOSMART_MS_SCP_PORT` | `11114` | DICOM SCP listen port |
+| `GOSMART_MS_SCP_AE_TITLE` | `GOSMART_MOCK` | DICOM Application Entity Title |
 | `GOSMART_MS_TRANSFER_SYNTAX` | `JPEG2000_LOSSLESS` | Target transfer syntax (`RAW`, `JPEG`, `JPEG2000_LOSSLESS`, `RLE`) |
 | `GOSMART_MS_MIN_SLICES` | `8` | Minimum slices for volume generation |
 | `GOSMART_MS_MAX_SLICES` | `24` | Maximum slices for volume generation |

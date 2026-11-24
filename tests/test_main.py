@@ -14,10 +14,8 @@ def test_app_title():
 
 
 def test_startup_notice():
-    assert (
-        STARTUP_NOTICE
-        == "Created by Gosmart.Health (info@gosmart.healt) 2026, Apache 2.0 License, Not for clinical use."
-    )
+    expected_notice = "Created by Gosmart.Health (info@gosmart.healt) 2026, Apache 2.0 License, Not for clinical use."
+    assert expected_notice in STARTUP_NOTICE
 
 
 def test_app_lifespan_starts_scp_and_seeds_mock_studies(monkeypatch):

@@ -242,7 +242,9 @@ async def test_auto_push_retries_indefinitely_without_dropping_or_skipping(monke
     server_up = False
     pushed_accessions: list[str] = []
 
-    def fake_push_datasets(datasets, target_ae_title, target_host="127.0.0.1", target_port=11113, preferred_syntax=None):
+    def fake_push_datasets(
+        datasets, target_ae_title, target_host="127.0.0.1", target_port=11113, preferred_syntax=None
+    ):
         acc = str(getattr(datasets[0], "AccessionNumber", ""))
         if not server_up:
             return {
@@ -304,7 +306,9 @@ async def test_auto_push_retries_indefinitely_without_dropping_or_skipping(monke
 
 @pytest.mark.anyio
 async def test_auto_push_worker_recovers_after_target_scp_downtime():
-    """Integration test: target SCP is stopped initially, then started; queued studies are retried and delivered in order."""
+    """Integration test: target SCP is stopped initially, then started;
+    queued studies are retried and delivered in order.
+    """
     test_port = 11153
     scp_port = 11154
 

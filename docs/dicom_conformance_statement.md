@@ -482,8 +482,8 @@ All parameters are configurable via environment variables (with `GOSMART_MS_` pr
 
 | Parameter | Environment Variable | Default Value | Description |
 | :--- | :--- | :--- | :--- |
-| **SCP AE Title** | `GOSMART_MS_SCP_AE_TITLE`<br>`GOSMART_MS_AE_TITLE` | `GOSMART_SCP` | Local DICOM Application Entity Title |
-| **SCP Port** | `GOSMART_MS_SCP_PORT`<br>`SCP_PORT` | `11112` | DICOM Upper Layer TCP listen port (C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE, MWL) |
+| **SCP AE Title** | `GOSMART_MS_SCP_AE_TITLE`<br>`GOSMART_MS_AE_TITLE` | `GOSMART_MOCK` | Local DICOM Application Entity Title |
+| **SCP Port** | `GOSMART_MS_SCP_PORT`<br>`SCP_PORT` | `11114` | DICOM Upper Layer TCP listen port (C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE, MWL) |
 | **HTTP Host** | `GOSMART_MS_HOST`<br>`HOST` | `127.0.0.1` | HTTP API & DICOMweb listen host |
 | **HTTP Port** | `GOSMART_MS_PORT`<br>`PORT` | `8000` | HTTP API & DICOMweb listen port |
 | **HL7 MLLP Host** | `GOSMART_MS_HL7_HOST` | `0.0.0.0` | HL7 v2 MLLP listen host |
